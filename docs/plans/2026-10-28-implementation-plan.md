@@ -129,6 +129,34 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Required tests:** runtime user cannot `UPDATE`/`DELETE`/`TRUNCATE`/`DROP` `audit_events` or disable its trigger; `accessflow` users cannot connect to `mocktools` and vice versa; audit event and state change roll back together; config defaults; SPA fallback does not shadow `/api/v1/*`. `go test -race` runs in a Debian-based Go image (cgo).
 - **UI slice:** placeholder only (no design yet).
 
+### C1 — Continuous integration (added 2026-10-28, before M2)
+
+- **Objective:** every pull request to `main` and every push to `main` runs the same checks as the local Docker workflow, so each PR shows a real pass/fail result before merge approval.
+- **Dependencies:** M1 merged.
+- **Approach:** one GitHub Actions workflow that runs the existing Docker commands rather than a second toolchain setup, so CI and local runs cannot drift:
+  1. `docker compose build`: both images, including `tsc --noEmit` + `vite build` and the Go release build.
+  2. `docker compose --profile test run --rm tests`: `gofmt`, `go vet`, `go test -race` against `postgres-test`, created by the same `deploy/postgres/init.sh`.
+- **Tasks:**
+  1. `.github/workflows/ci.yml`:
+     - one job, `checks`, on `ubuntu-24.04`
+     - triggers: `pull_request` to `main` and `push` to `main`
+     - `permissions: contents: read`; `actions/checkout` pinned to the commit SHA of v7.0.1
+     - `timeout-minutes: 20`
+     - the two steps above; no cleanup step, since hosted runners are discarded after each job
+     - no secrets
+  2. README: a short CI section (what runs, where to see it).
+- **Acceptance criteria:**
+  - the workflow runs on its own PR and passes
+  - its logs show the gofmt/vet/race-test results and the frontend type check and build
+  - a failing check fails the job: proved on the C1 PR with a temporary formatting failure, then fixed; the failing change never reaches `main` (squash merge)
+  - no secrets or tokens are used
+- **Required tests:** no new Go tests; this is configuration, verified by running it. Locally: `docker compose --profile test run --rm tests` exits non-zero when a check fails (verified with a gofmt failure; vet and test failures exit through the same `set -e` script).
+- **Not included:**
+  - Go module and Docker layer caching, matrix builds, extra linters, coverage, and Node set up directly on the runner
+  - Required status checks: branch protection needs GitHub Pro or a public repository, so CI is advisory.
+- **Merge rule — [APPROVED 2026-10-28]:** no PR is proposed for Squash and Merge unless CI is green on its latest commit; CI results are reported with every merge request.
+- **UI slice:** none.
+
 ### M2 — Authentication
 
 - **Objective:** secure login, logout, password change and Super Admin bootstrap.
@@ -314,6 +342,7 @@ Each milestone is still approved, implemented, reviewed and committed separately
 |---|---|---|---|
 | — | `main` | M0 | `chore: initialize AccessFlow project …` |
 | 1 | `feat/foundation` | M1 | `feat: walking skeleton with compose, migrations and append-only audit` |
+| 1b | `chore/ci` | C1 | `chore: run checks and builds in GitHub Actions CI` |
 | 2 | `feat/identity` | M2, M3 | `feat: authentication, employees and roles` |
 | 3 | `feat/catalog-requests` | M4, M5 | `feat: tool catalog, mock tool service, requests and approvals` |
 | 4 | `feat/fulfillment` | M6, M7 | `feat: API, manual and vendor fulfillment with exceptions` |
@@ -354,7 +383,7 @@ If a PR becomes large to review, it is split at a milestone boundary (with appro
 | A1–A3 architecture, compose, libraries | M1 |
 | A4 authentication · A5 identity history | M2 · M3, M9, M10 |
 | A6 runner and sweeps · A7 frontend · A8 layout | M6, M8 · U1 and slices · all |
-| A9 integrity · A10 testing | all (indexes in M5, M6; evidence in M6, M7) · all |
+| A9 integrity · A10 testing | all (indexes in M5, M6; evidence in M6, M7) · all, run in CI from C1 |
 
 ## Simplicity review
 
