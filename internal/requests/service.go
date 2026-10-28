@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
@@ -67,21 +68,31 @@ type Step struct {
 
 // Item is one requested level with its steps.
 type Item struct {
-	ID            uuid.UUID  `json:"id"`
-	RequestID     uuid.UUID  `json:"requestId"`
-	Beneficiary   Person     `json:"beneficiary"`
-	SubmittedBy   Person     `json:"submittedBy"`
-	ToolID        uuid.UUID  `json:"toolId"`
-	Tool          string     `json:"tool"`
-	AccessLevelID uuid.UUID  `json:"accessLevelId"`
-	Level         string     `json:"level"`
-	Justification string     `json:"justification"`
-	Duration      Duration   `json:"duration"`
-	Status        string     `json:"status"`
-	Version       int        `json:"version"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	ClosedAt      *time.Time `json:"closedAt"`
-	Steps         []Step     `json:"steps"`
+	ID            uuid.UUID    `json:"id"`
+	RequestID     uuid.UUID    `json:"requestId"`
+	Beneficiary   Person       `json:"beneficiary"`
+	SubmittedBy   Person       `json:"submittedBy"`
+	ToolID        uuid.UUID    `json:"toolId"`
+	Tool          string       `json:"tool"`
+	AccessLevelID uuid.UUID    `json:"accessLevelId"`
+	Level         string       `json:"level"`
+	Justification string       `json:"justification"`
+	Duration      Duration     `json:"duration"`
+	Status        string       `json:"status"`
+	Version       int          `json:"version"`
+	CreatedAt     time.Time    `json:"createdAt"`
+	ClosedAt      *time.Time   `json:"closedAt"`
+	ClosedReason  *string      `json:"closedReason"`
+	Steps         []Step       `json:"steps"`
+	Fulfillment   *Fulfillment `json:"fulfillment"` // once approved; approval is not access
+}
+
+// Fulfillment is the grant of an approved item, with its display status (Fulfillment methods).
+type Fulfillment struct {
+	GrantID      uuid.UUID `json:"grantId"`
+	Status       string    `json:"status"`
+	Evidence     *string   `json:"evidence"`
+	ClosedReason *string   `json:"closedReason"` // e.g. "access level retired"
 }
 
 // Request is one submission.
@@ -124,8 +135,9 @@ func loadSteps(ctx context.Context, q querier, itemIDs []uuid.UUID) (map[uuid.UU
 func loadItems(ctx context.Context, q querier, where string, args ...any) ([]Item, error) {
 	rows, err := q.Query(ctx, `
 		SELECT i.id, i.request_id, b.id, b.full_name, s.id, s.full_name, t.id, t.name, l.id, l.name, i.justification,
-		       i.duration_type, to_char(i.expires_on, 'YYYY-MM-DD'), i.status, i.version, i.created_at, i.closed_at
-		FROM request_items i JOIN requests r ON r.id = i.request_id
+		       i.duration_type, to_char(i.expires_on, 'YYYY-MM-DD'), i.status, i.version, i.created_at, i.closed_at,
+		       i.closed_reason, g.id, g.method, g.status, g.activation_evidence, g.closed_reason
+		FROM request_items i JOIN requests r ON r.id = i.request_id LEFT JOIN grants g ON g.request_item_id = i.id
 		JOIN employees b ON b.id = r.beneficiary_id JOIN employees s ON s.id = r.submitted_by
 		JOIN tools t ON t.id = i.tool_id JOIN access_levels l ON l.id = i.access_level_id
 		WHERE `+where+` ORDER BY r.id DESC, i.id`, args...)
@@ -134,9 +146,14 @@ func loadItems(ctx context.Context, q querier, where string, args ...any) ([]Ite
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
 		var it Item
+		var grant *uuid.UUID
+		var method, status, evidence, reason *string
 		err := row.Scan(&it.ID, &it.RequestID, &it.Beneficiary.ID, &it.Beneficiary.FullName, &it.SubmittedBy.ID, &it.SubmittedBy.FullName,
 			&it.ToolID, &it.Tool, &it.AccessLevelID, &it.Level, &it.Justification, &it.Duration.Type, &it.Duration.ExpiresOn,
-			&it.Status, &it.Version, &it.CreatedAt, &it.ClosedAt)
+			&it.Status, &it.Version, &it.CreatedAt, &it.ClosedAt, &it.ClosedReason, &grant, &method, &status, &evidence, &reason)
+		if grant != nil {
+			it.Fulfillment = &Fulfillment{GrantID: *grant, Status: access.DisplayStatus(*method, *status), Evidence: evidence, ClosedReason: reason}
+		}
 		return it, err
 	})
 	if err != nil || len(items) == 0 {
@@ -424,10 +441,13 @@ func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID) 
 	if err := tx.QueryRow(ctx, "SELECT name, status FROM tools WHERE id = $1 FOR SHARE", c.toolID).Scan(&c.tool, &toolStatus); err != nil {
 		return c, err
 	}
-	var owner, infosec, open bool
+	// One statement, after the beneficiary's lock: an approval turns the open item into an
+	// open grant in one transaction, so this sees one or the other (D4, A9).
+	var owner, infosec, open, held bool
 	if err := tx.QueryRow(ctx, `SELECT name, status, requires_tool_owner, requires_infosec,
-		EXISTS (SELECT 1 FROM request_items WHERE beneficiary_id = $2 AND tool_id = $3 AND status = 'PENDING_APPROVAL')
-		FROM access_levels WHERE id = $1`, levelID, beneficiary, c.toolID).Scan(&c.level, &levelStatus, &owner, &infosec, &open); err != nil {
+		EXISTS (SELECT 1 FROM request_items WHERE beneficiary_id = $2 AND tool_id = $3 AND status = 'PENDING_APPROVAL'),
+		EXISTS (SELECT 1 FROM grants WHERE employee_id = $2 AND tool_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED'))
+		FROM access_levels WHERE id = $1`, levelID, beneficiary, c.toolID).Scan(&c.level, &levelStatus, &owner, &infosec, &open, &held); err != nil {
 		return c, err
 	}
 	if toolStatus != "ACTIVE" || levelStatus != "ACTIVE" {
@@ -435,6 +455,9 @@ func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID) 
 	}
 	if open {
 		return c, &platform.Error{Status: http.StatusConflict, Code: "open_request_exists", Field: "accessLevelId"}
+	}
+	if held {
+		return c, &platform.Error{Status: http.StatusConflict, Code: "access_exists", Field: "accessLevelId"}
 	}
 	c.steps = catalog.Steps(owner, infosec)
 	return c, nil

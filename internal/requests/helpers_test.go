@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
@@ -56,6 +57,7 @@ func newWorld(t *testing.T) *world {
 		r.Group(func(r chi.Router) {
 			r.Use(authSvc.RequireSession)
 			svc.Register(r)
+			access.NewService(db.App).Register(r)
 			notify.Register(r, db.App)
 		})
 	})

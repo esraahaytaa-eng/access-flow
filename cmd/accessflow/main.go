@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/devfixture"
@@ -86,6 +88,13 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// One runner (A2: one instance); it stops with ctx and finishes before the pool closes.
+	runner := access.NewRunner(pool, access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second))
+	var wg sync.WaitGroup
+	wg.Go(func() { runner.Run(ctx) })
+	defer wg.Wait()
+	defer stop() // runs first: a server that fails to start must stop the runner too
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           newRouter(pool, svc, loc, webui.Dist()),
@@ -106,6 +115,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist f
 	peopleSvc := people.NewService(pool, svc)
 	catalogSvc := catalog.NewService(pool)
 	requestsSvc := requests.NewService(pool, loc)
+	accessSvc := access.NewService(pool)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
@@ -125,6 +135,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist f
 				peopleSvc.Register(r)
 				catalogSvc.Register(r)
 				requestsSvc.Register(r)
+				accessSvc.Register(r)
 				notify.Register(r, pool)
 			})
 		})

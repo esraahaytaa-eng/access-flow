@@ -2,6 +2,7 @@ package requests
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -167,8 +168,10 @@ func TestTransitions(t *testing.T) {
 	}{
 		{itemMoves, "PENDING_APPROVAL", "APPROVED", true},
 		{itemMoves, "PENDING_APPROVAL", "WITHDRAWN", true},
-		{itemMoves, "REJECTED", "APPROVED", false},  // a rejection is final (O5)
-		{itemMoves, "APPROVED", "WITHDRAWN", false}, // M6 adds withdrawal before provisioning
+		{itemMoves, "REJECTED", "APPROVED", false},         // a rejection is final (O5)
+		{itemMoves, "APPROVED", "WITHDRAWN", false},        // Manual/Vendor withdrawal before fulfillment is M7 (O5)
+		{itemMoves, "PENDING_APPROVAL", "CANCELLED", true}, // retired before provisioning
+		{itemMoves, "APPROVED", "CANCELLED", false},
 		{stepMoves, "WAITING", "PENDING", true},
 		{stepMoves, "WAITING", "APPROVED", false}, // steps are decided in order
 		{stepMoves, "PENDING", "SUPER_ADMIN_OVERRIDE", true},
@@ -178,6 +181,32 @@ func TestTransitions(t *testing.T) {
 	for _, tc := range cases {
 		if got := canMove(tc.moves, tc.from, tc.to); got != tc.ok {
 			t.Errorf("%s → %s = %v; want %v", tc.from, tc.to, got, tc.ok)
+		}
+	}
+}
+
+func TestPolicySteps(t *testing.T) {
+	have := func(types ...string) []Step {
+		var out []Step
+		for _, typ := range types {
+			out = append(out, Step{Type: typ})
+		}
+		return out
+	}
+	cases := []struct {
+		name     string
+		required []string
+		have     []Step
+		want     []string
+	}{
+		{"nothing new", []string{"MANAGER", "TOOL_OWNER"}, have("MANAGER", "TOOL_OWNER"), nil},
+		{"a step was removed: kept", []string{"MANAGER"}, have("MANAGER", "TOOL_OWNER"), nil},
+		{"InfoSec added", []string{"MANAGER", "INFOSEC"}, have("MANAGER"), []string{"INFOSEC"}},
+		{"both added, in order", []string{"MANAGER", "TOOL_OWNER", "INFOSEC"}, have("MANAGER"), []string{"TOOL_OWNER", "INFOSEC"}},
+	}
+	for _, tc := range cases {
+		if got := policySteps(tc.required, tc.have); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: policySteps = %v; want %v", tc.name, got, tc.want)
 		}
 	}
 }

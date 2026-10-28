@@ -9,8 +9,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
@@ -121,7 +123,7 @@ func advance(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.U
 		}
 	}
 	if next == nil {
-		return closeItem(ctx, tx, now, actor, it, "APPROVED", "")
+		return finish(ctx, tx, now, actor, it)
 	}
 	var route Route
 	switch next.Type {
@@ -158,13 +160,62 @@ func advance(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.U
 	return err
 }
 
-// closeItem moves the item to a final status and cancels its undecided steps.
+// finish runs when every step is decided. A retired level or tool is cancelled first,
+// without reaching the tool or asking anyone else; then steps the level now requires are
+// added and routed (F2: stricter wins); otherwise the item is approved and its grant
+// created in this transaction.
+func finish(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, it itemState) error {
+	// The beneficiary first, as Submit does (A9); CreateGrant's lock is then a re-lock.
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", it.beneficiary); err != nil {
+		return err
+	}
+	var toolID uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT tool_id FROM request_items WHERE id = $1", it.id).Scan(&toolID); err != nil {
+		return err
+	}
+	// Catalog changes lock the tool: lock first, then read the current flags and statuses.
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM tools WHERE id = $1 FOR SHARE", toolID); err != nil {
+		return err
+	}
+	var toolStatus, levelStatus string
+	var owner, infosec bool
+	if err := tx.QueryRow(ctx, `SELECT t.status, l.status, l.requires_tool_owner, l.requires_infosec
+		FROM request_items i JOIN tools t ON t.id = i.tool_id JOIN access_levels l ON l.id = i.access_level_id
+		WHERE i.id = $1`, it.id).Scan(&toolStatus, &levelStatus, &owner, &infosec); err != nil {
+		return err
+	}
+	if reason := access.RetiredReason(toolStatus, levelStatus); reason != "" {
+		return closeItem(ctx, tx, now, actor, it, "CANCELLED", reason)
+	}
+	if added := policySteps(catalog.Steps(owner, infosec), it.steps); len(added) > 0 {
+		for i, typ := range added {
+			var stepID uuid.UUID
+			if err := tx.QueryRow(ctx, "INSERT INTO approval_steps (item_id, position, type) VALUES ($1, $2, $3) RETURNING id",
+				it.id, len(it.steps)+i+1, typ).Scan(&stepID); err != nil {
+				return err
+			}
+			if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor, Action: "STEP_ADDED_BY_POLICY", Entity: "approval_step",
+				EntityID: &stepID, SubjectID: &it.beneficiary, Details: map[string]any{"itemId": it.id, "type": typ}}); err != nil {
+				return err
+			}
+		}
+		return advance(ctx, tx, now, actor, it.id)
+	}
+	if err := closeItem(ctx, tx, now, actor, it, "APPROVED", ""); err != nil {
+		return err
+	}
+	_, err := access.CreateGrant(ctx, tx, now, actor, it.id)
+	return err
+}
+
+// closeItem moves the item to a final status and cancels its undecided steps. A system
+// cancellation keeps its reason on the item for the requester.
 func closeItem(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, it itemState, to, reason string) error {
 	if !canMove(itemMoves, it.status, to) {
 		return errItemNotPending
 	}
-	if _, err := tx.Exec(ctx, "UPDATE request_items SET status = $2, closed_at = $3, version = version + 1 WHERE id = $1",
-		it.id, to, now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE request_items SET status = $2, closed_at = $3, version = version + 1,
+		closed_reason = CASE WHEN $2 = 'CANCELLED' THEN $4 END WHERE id = $1`, it.id, to, now, reason); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE approval_steps SET status = 'CANCELLED', version = version + 1
@@ -488,6 +539,25 @@ func (s *Service) approvals(ctx context.Context, where string, args ...any) ([]A
 func (s *Service) Inbox(ctx context.Context, actor auth.Principal) ([]Approval, error) {
 	return s.approvals(ctx, "st.assignee_id = $1 OR (st.pool = 'INFOSEC' AND "+fmt.Sprintf(eligibleInfoSec, "e.id = $1")+")",
 		actor.EmployeeID)
+}
+
+// Exceptions are what needs a person (O3, F2): FAILED operations and pool steps nobody may
+// decide. Read-only for Auditors (O7).
+type Exceptions struct {
+	FailedOperations []access.Operation `json:"failedOperations"`
+	UnroutableSteps  []Approval         `json:"unroutableSteps"`
+}
+
+func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Exceptions, error) {
+	if !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("AUDITOR") {
+		return Exceptions{}, platform.ErrForbidden
+	}
+	ops, err := access.FailedOperations(ctx, s.pool)
+	if err != nil {
+		return Exceptions{}, err
+	}
+	steps, err := s.approvals(ctx, "st.pool IS NOT NULL AND NOT "+fmt.Sprintf(eligibleInfoSec, "true"))
+	return Exceptions{FailedOperations: ops, UnroutableSteps: steps}, err
 }
 
 // Open lists every open step, unroutable ones marked, for InfoSec and Super Admins, who

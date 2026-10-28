@@ -24,6 +24,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/approvals/{id}/reassign", s.handleReassign)
 	r.Post("/approvals/{id}/override", s.handleOverride)
 	r.Get("/email-outbox", s.handleOutbox)
+	r.Get("/exceptions", s.handleExceptions)
 }
 
 func actor(r *http.Request) auth.Principal {
@@ -94,6 +95,11 @@ func (s *Service) handleInbox(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleOpen(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Open(r.Context(), actor(r))
 	platform.Respond(w, r, http.StatusOK, map[string]any{"approvals": list}, err)
+}
+
+func (s *Service) handleExceptions(w http.ResponseWriter, r *http.Request) {
+	ex, err := s.Exceptions(r.Context(), actor(r))
+	platform.Respond(w, r, http.StatusOK, ex, err)
 }
 
 func (s *Service) handleOutbox(w http.ResponseWriter, r *http.Request) {

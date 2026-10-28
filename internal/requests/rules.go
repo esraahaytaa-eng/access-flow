@@ -129,12 +129,24 @@ func ParseDuration(d Duration, now time.Time, loc *time.Location) (*time.Time, e
 
 // Allowed status changes (A9). Anything else is a conflict.
 var (
-	itemMoves = map[string][]string{"PENDING_APPROVAL": {"APPROVED", "REJECTED", "WITHDRAWN"}}
+	itemMoves = map[string][]string{"PENDING_APPROVAL": {"APPROVED", "REJECTED", "WITHDRAWN", "CANCELLED"}}
 	stepMoves = map[string][]string{
 		"WAITING": {"PENDING", "APPROVED_BY_SUBMISSION", "CANCELLED"},
 		"PENDING": {"APPROVED", "REJECTED", "SUPER_ADMIN_OVERRIDE", "CANCELLED"},
 	}
 )
+
+// policySteps returns the step types the level now requires that the item lacks, in the
+// fixed order (F2: stricter wins). A step the level no longer requires is kept.
+func policySteps(required []string, have []Step) []string {
+	var missing []string
+	for _, typ := range required {
+		if !slices.ContainsFunc(have, func(s Step) bool { return s.Type == typ }) {
+			missing = append(missing, typ)
+		}
+	}
+	return missing
+}
 
 func canMove(moves map[string][]string, from, to string) bool {
 	return slices.Contains(moves[from], to)
