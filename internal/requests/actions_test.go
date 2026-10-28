@@ -49,10 +49,9 @@ func TestWithdrawBeforeDecision(t *testing.T) {
 	}
 }
 
-func TestCannotWithdrawADecidedItem(t *testing.T) {
+// An approved item can be withdrawn until work starts on its grant (tasks_test.go).
+func TestCannotWithdrawARejectedItem(t *testing.T) {
 	w := newWorld(t)
-	approved := w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0]))
-	testutil.RequireStatus(t, withdraw(w.dev.c, approved, "x"), http.StatusConflict, "item_not_pending")
 	r := decide(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.github))))[0]), "reject", map[string]any{"reason": "no"})
 	testutil.RequireStatus(t, withdraw(w.dev.c, r.Body, "x"), http.StatusConflict, "item_not_pending")
 }

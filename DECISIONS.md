@@ -214,6 +214,29 @@ When the beneficiary's **current direct manager** submits a request for them, th
 
 Revocation, suspension and resume follow the same pattern and labels (see O1, D7).
 
+- *Refinement — [APPROVED 2026-10-28]:* **retired before provisioning.** An approved item whose access level or tool was retired is never sent to a tool. It is checked at final approval (together with stricter wins, F2) and again when the runner claims the grant operation. The item, or its grant and operation, become `CANCELLED` with the reason ("access level retired" or "tool retired"), recorded in the audit history and shown to the requester, who may request another level.
+- *Refinement — [APPROVED 2026-10-28]:* **grant lifecycle.**
+  - An approved item gets one grant and its grant operation in the same transaction as the final approval.
+  - Grant statuses: `PROVISIONING`, `PENDING_FULFILLMENT` (Manual/Vendor), `ACTIVE`, `FAILED`, `REVOCATION_REQUESTED`, `REVOCATION_FAILED`, `REVOKED`, `CANCELLED`.
+  - A grant is open until it is `REVOKED` or `CANCELLED`. A `FAILED` grant stays open, because the tool stores permissions per level and revoking an old failed grant would remove a newer one's access. While a grant for a tool is open, a new request for that tool is rejected (D4).
+  - Removal of a grant that was queued and never attempted cancels it without a tool call. Otherwise a revoke operation runs after any grant operation in flight.
+  - A failed operation is retried manually by a Super Admin or a member of the tool's administration group, never by the grant's own employee. A retry starts a new round of the O3 attempts with the same operation ID.
+  - Exceptions are readable by InfoSec, Super Admins and Auditors.
+- *Refinement — [APPROVED 2026-10-28, found during M6 implementation]:* **safe fulfillment.** These tighten the two refinements above:
+  - **Order at final approval:** the retired check runs first. A retired level or tool cancels the item before any stricter-policy step is added (F2), so nobody is asked to approve an item that must be cancelled.
+  - **"Never sent to the tool"** means the operation has never been claimed, recorded as its first attempt time, not "0 attempts". A manual retry resets the attempt count, and an earlier attempt may have reached the tool even though its answer was lost.
+  - **Once a grant operation may have reached the tool, retirement no longer cancels it.** It is completed and verified, so no permission is left in the tool unrecorded; removing it is a normal revocation. The runner's retired check therefore applies only to grant operations never sent.
+  - **A grant attempt that fails after removal was requested is cancelled, not retried.** The verified removal takes over, so a retried grant can never re-apply access after the removal.
+  - **One lock order** for every fulfillment change: employee, then operations, then grant (approval, revoke, retry and the runner), so they cannot deadlock.
+- *Refinement — [APPROVED 2026-10-28, M7 plan]:* **Manual and Vendor tasks.**
+  - A task is the Manual or Vendor operation itself, in the responsible admin group's queue. **Only active members of the tool's admin group** claim and work it (record the vendor ticket, confirm, report failure); never the grant's employee (F2), and never the initiator of a direct grant or direct revoke (D1). A Super Admin who is not a member cannot work a task; retrying a `FAILED` task stays open to Super Admins and group members.
+  - A task whose claimer is no longer an active member of the group can be taken over by another member. There is no separate release action.
+  - Claiming a grant task never sent checks retirement, as the runner does: a retired level or tool cancels the grant (retired before provisioning).
+  - A retry returns the task to the queue unclaimed and without a ticket reference; the earlier reference stays in the audit history.
+  - `WAITING_VENDOR` is a display status (a Vendor grant task with a recorded ticket), not a stored grant status; the grant status list above is unchanged.
+  - Suspend and resume tasks come with suspension (D7, M9).
+- *Refinement — [APPROVED 2026-10-28, M7 plan]:* **direct-grant notifications (D1).** A direct grant notifies all active InfoSec members, the beneficiary's manager and, when the level requires a Tool Owner step, the tool owner (the bypassed approver). A direct revoke is audited only.
+
 ## Operational rules — [DEFAULT] unless noted
 - **O1. Effective access.** Access is effective from verified activation (API) or confirmed activation (manual/vendor, labelled self-reported) until verified or confirmed removal. This is the basis of point-in-time queries, which show each held grant in one of these states:
   - **Active**

@@ -3,7 +3,7 @@
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
 
-> Status: identity, catalog, requests and approvals API (milestones M2–M5). Sign-in, sessions, password change, the initial Super Admin, employees, roles, admin groups, the tool catalog with approval steps, starter packages, in-app notifications, access requests and their approvals (routing, decisions, withdrawal, reassignment, Super Admin override, the Mock Email Outbox) work through the API, and the Mock Tool Service applies per-level operations. There are no screens yet (they arrive with the design). An approved item ends `APPROVED`; provisioning arrives with M6.
+> Status: identity, catalog, requests, approvals, API fulfillment and Manual / Vendor fulfillment with direct grants (milestones M2–M7). Sign-in, sessions, password change, the initial Super Admin, employees, roles, admin groups, the tool catalog with approval steps, starter packages, in-app notifications, access requests and their approvals (routing, decisions, withdrawal, reassignment, Super Admin override, the Mock Email Outbox), API-tool provisioning through the Mock Tool Service with verification, removal, My Access, Team Access and Exceptions with manual retry, Fulfillment Tasks for Manual and Vendor tools, withdrawal of an approved item before work starts, and Super Admin direct grants and revokes work through the API. There are no screens yet (they arrive with the design).
 
 ## Run
 
@@ -35,6 +35,7 @@ All optional:
 | `BOOTSTRAP_FILE` | `/var/lib/accessflow/bootstrap-admin.txt` | where its one-time password is kept (the `appdata` volume) |
 | `SEED_PASSWORD` | `accessflow-local-demo` (set in `compose.yaml`) | shared password of the development fixture users; local only |
 | `COMPANY_TIMEZONE` | `Europe/Istanbul` | the zone request expiry dates are in; an unknown zone stops startup |
+| `MOCK_TOOLS_URL` | `http://mocktools:8081` (set in `compose.yaml`) | the Mock Tool Service the operation runner calls |
 
 ### Development fixture
 
@@ -82,13 +83,21 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `GET /api/v1/notifications` · `POST …/{id}/read` | the signed-in employee's newest 100 notifications; mark one read |
 | `POST /api/v1/requests` | `{submissionId, beneficiaryId?, items: [{accessLevelId, justification, duration}]}`, 1–20 items; `duration` is `{"type": "UNTIL_REVOKED"}` or `{"type": "TEMPORARY", "expiresOn": "YYYY-MM-DD"}` (after today in the company timezone). → `201 {request}`; the same `submissionId` again returns the original (`200`), only to its submitter (`409 submission_id_reused` for anyone else). One invalid item rejects the whole submission (`field` names it, e.g. `items[1].duration`); `409 open_request_exists` when the beneficiary already has an open item for the tool |
 | `GET /api/v1/requests` · `GET …/{id}` | requests the signed-in employee is the beneficiary or submitter of, with items and steps; anyone else's is `404` |
-| `POST /api/v1/request-items/{id}/withdraw` | beneficiary or submitter: `{version, reason}` while the item is pending approval |
+| `POST /api/v1/request-items/{id}/withdraw` | beneficiary or submitter: `{version, reason}` while the item is pending approval, or once approved until work starts on its grant (its task is claimed or the runner sends it): the grant is then `CANCELLED`; afterwards `409 fulfillment_started` (give the access up with revoke) |
 | `GET /api/v1/approvals` | the Approval Inbox: open steps assigned to me, or in the InfoSec pool when I am eligible; each with its item (beneficiary, tool, level, justification, duration, every step) and `openedAt` (waiting since) |
 | `GET /api/v1/approvals/open` | InfoSec, Super Admin: every open step; `unroutable: true` when nobody may decide it |
 | `POST /api/v1/approvals/{id}/approve` · `…/reject` | the assignee or an eligible InfoSec member: `{version}`, reject also `{reason}`. The first decision wins; a late or unauthorized attempt is `409`/`403` and recorded as `APPROVAL_ATTEMPT_REJECTED` |
 | `POST /api/v1/approvals/{id}/reassign` | InfoSec, Super Admin: `{version, assigneeId, reason}`; never to yourself, and never on an item you are the beneficiary, submitter or an earlier approver of; the new assignee must be active, not excluded by separation of duties and, for an InfoSec step, an InfoSec member |
 | `POST /api/v1/approvals/{id}/override` | Super Admin: `{version, reason}`; recorded as `SUPER_ADMIN_OVERRIDE`; notifies InfoSec, the beneficiary's manager and the bypassed assignee |
 | `GET /api/v1/email-outbox` | InfoSec, Super Admin, Auditor: the Mock Email Outbox, newest 100 |
+| `GET /api/v1/access` | My Access: my grants, open and past, with `status`, `displayStatus` (e.g. `ACTIVE / VERIFIED`), method, `effectiveFrom`/`effectiveTo` and expiry |
+| `GET /api/v1/access/team` | the grants of my direct reports |
+| `POST /api/v1/grants/{id}/revoke` | the grant's employee, their current direct manager or, directly, a Super Admin (reason `DIRECT`): `{version, reason}`. A grant never sent to the tool is `CANCELLED` at once; otherwise `REVOCATION_REQUESTED` and a removal is queued (a verified call for API tools, a removal task for Manual and Vendor). A repeat returns the current state; anyone else gets `404` |
+| `POST /api/v1/direct-grants` | Super Admin: `{submissionId, beneficiaryId, accessLevelId, justification, expiresOn}` → a `DIRECT_GRANT` request whose item is `APPROVED` at once with no steps, fulfilled by the tool's method. Never for yourself (`403 separation_of_duties`); `expiresOn` is required (`expires_required`), after today (`expires_in_past`) and at most 90 days away (`duration_too_long`), in the company timezone; Submit's checks apply (`level_not_requestable`, `open_request_exists`, `access_exists`, `beneficiary_not_active`). Notifies InfoSec, the beneficiary's manager and, when the level requires one, the tool owner. A repeated `submissionId` returns the original (`200`) |
+| `GET /api/v1/fulfillment-tasks` | the open Manual and Vendor tasks of my admin groups, oldest first: type (`GRANT`/`REVOKE`), status, method, group, tool, level, employee, request and item, ticket, claimer, `createdAt`; `canAct: false` on my own grant or a direct action I started. A removal is listed once the grant's own task has ended |
+| `POST /api/v1/fulfillment-tasks/{id}/claim` · `…/ticket` · `…/confirm` · `…/fail` | an active member of the tool's admin group, never the grant's employee or a direct action's initiator (`403 separation_of_duties`); a Super Admin who is not a member cannot work a task. `{version}`; ticket also `{ticketRef}` (Vendor only, ≤ 100 characters), fail also `{reason}`. Claim takes a queued task (`409 task_claimed` if another member holds it) or takes over one whose claimer left the group; claiming a grant task whose level or tool was retired cancels it (`409 level_retired`). Only the claimer records the ticket, confirms or fails (`403 not_claimer`). Confirm gives `ACTIVE / SELF_REPORTED` (or `REVOKED / SELF_REPORTED`); a Vendor task needs its ticket (`409 ticket_required`), and with a ticket the grant shows `WAITING_VENDOR`. Fail sends the task to Exceptions. A repeat returns the current state; a stale version is `409 version_conflict` |
+| `GET /api/v1/exceptions` | InfoSec, Super Admin, Auditor: `FAILED` operations (tool, level, employee, attempts, last error, `failedAt`) and unroutable approval steps |
+| `POST /api/v1/operations/{id}/retry` | Super Admin or a member of the tool's admin group, never on their own grant (`403 separation_of_duties`): `{version}` on a `FAILED` operation starts a new round of 5 attempts with the same operation ID; a Manual or Vendor task returns to the queue unclaimed and without its ticket (the old reference stays in the audit log) |
 
 Only active employees receive roles, group memberships or password resets. Removing a role or membership closes it; nothing is deleted. Every change is in the audit log. In this milestone a department or manager change is only recorded; the transfer workflow (DECISIONS.md D5) comes later. Catalog changes are audited the same way; approval-policy changes (a level's steps) also notify every active InfoSec member in the app (DECISIONS.md F2, O2).
 
@@ -98,7 +107,14 @@ Only active employees receive roles, group memberships or password resets. Remov
 - Separation of duties: the beneficiary, the submitter and anyone who already decided a step on the item never decide another step on it. When the beneficiary's direct manager submits, the Manager step is `APPROVED_BY_SUBMISSION`.
 - A rejection is final for that item; other items of the submission continue. A pool step with no eligible member is listed as unroutable and is resolved by reassignment or a Super Admin override.
 - One email in the Mock Email Outbox per submission whose Manager step went to a person; none when the manager submitted, none to InfoSec. Nothing is ever approved by email.
-- One open item per person and tool, whatever the level.
+- One open item per person and tool, whatever the level, and no new request while the person holds an open grant for the tool (`409 access_exists`; open is anything but `REVOKED` and `CANCELLED`, including `FAILED`).
+
+**Fulfillment rules** (DECISIONS.md Fulfillment methods, A6, A9, O1, O3, O6, D5):
+- At final approval a level or tool retired by then cancels the item first (`CANCELLED`, `closedReason`), with no grant and no further approval. Then the level's current steps are checked again: a step it now requires is added and routed (stricter wins). Otherwise the item is `APPROVED` and its grant and `GRANT` operation are created in the same transaction.
+- API grants are `PROVISIONING` until the runner's call succeeds **and** the status lookup shows the level; then `ACTIVE / VERIFIED` with `effectiveFrom`. A `GRANT` never sent whose level or tool was retired in the meantime is `CANCELLED` without a call.
+- A failed attempt retries after 30 s, 1 min, 2 min and 4 min; after the 5th, or at once on a `409` from the tool, the operation is `FAILED` and appears in Exceptions. Every attempt is audited.
+- Removal is verified the same way (`REVOKED / VERIFIED`, `effectiveTo`); requested or failed removals still count as held access. A removal waits while the grant's own provisioning call may be in flight, and cancels a queued or failed provisioning so it cannot re-apply access.
+- Removals run before grants; within a priority, oldest first.
 
 Sessions last 30 minutes, are renewed while in use, and end after at most 12 hours. Role, status and logout changes apply on the next request.
 
@@ -106,7 +122,7 @@ Sessions last 30 minutes, are renewed while in use, and end after at most 12 hou
 
 | Service | Role | Exposed |
 |---|---|---|
-| `app` | Go server: JSON API under `/api/v1` and the embedded React build (background jobs arrive in later milestones) | port 8080 |
+| `app` | Go server: JSON API under `/api/v1`, the embedded React build, and the operation runner (one goroutine; the `operations` table is its queue) | port 8080 |
 | `mocktools` | Mock Tool Service, own database, reached by `app` only over HTTP | internal only |
 | `postgres` | PostgreSQL 18 with the `accessflow` and `mocktools` databases | internal only |
 
@@ -117,7 +133,7 @@ The Mock Tool Service keeps accounts and permissions per (tool, account, level) 
 | `POST /v1/operations` | `{operationId, type, tool, account, level}` with `type` `GRANT`, `REVOKE`, `SUSPEND` or `RESUME` → `{…, result}` with `APPLIED` or `NO_CHANGE`. A repeated operation ID returns its stored result without acting again; the same ID with other content is `409 operation_id_reused`. Only successful operations are stored: a rejected one (`409`) can be retried with the same ID and is evaluated again. Revoking one level keeps other levels and the account. `SUSPEND`/`RESUME` of a level not held is `409 not_granted`; `GRANT` of a suspended level is `409 level_suspended` |
 | `GET /v1/tools/{tool}/accounts/{account}` | the account's actual state: `{exists, levels: [{level, status}]}`; an unknown account is `exists: false`, never 404 |
 
-AccessFlow identifies tools and levels by their AccessFlow IDs and accounts by the employee's email. Its client (`internal/access`) treats any answer other than a well-formed `200` echoing the request (an error status, a timeout, a malformed body) as a failure. The operation runner that uses it arrives with API fulfillment.
+AccessFlow identifies tools and levels by their AccessFlow IDs and accounts by the employee's email. Its client (`internal/access`) treats any answer other than a well-formed `200` echoing the request (an error status, a timeout, a malformed body) as a failure. The operation runner calls it outside any database transaction, with a 5-second timeout and a 30-second lease per claim.
 
 `app` runs migrations at startup as `accessflow_owner` and then serves as `accessflow_app`, which has no DDL rights, may only insert into and read `audit_events`, and can never delete rows; a trigger also blocks `UPDATE`, `DELETE` and `TRUNCATE` and sets each event's time to the real transaction time.
 
@@ -162,5 +178,8 @@ deploy/postgres     database and user setup, run on first start
 - There is no login rate limiting beyond the lockout (DECISIONS.md A4): 5 wrong passwords lock an account for 15 minutes, so anyone who knows an email can keep that account locked. Every attempt is audited.
 - One `app` instance is assumed (A2). Initial Super Admin creation is safe across processes (advisory lock), but running several instances is not tested.
 - `app` keeps the migration (owner) connection string in its environment for its whole lifetime, although it uses it only at startup. Separating it would need a one-shot migration service; with fixed local credentials it adds no protection here.
-- Pending steps are not re-routed when their assignee is later suspended or terminated (that comes with the leaver workflow, M9); until then InfoSec reassigns them. An approved item is not yet provisioned (M6), and a second request for a tool whose item is approved but not yet provisioned is not blocked until grants exist (M6).
+- Pending steps are not re-routed when their assignee is later suspended or terminated (that comes with the leaver workflow, M9); until then InfoSec reassigns them. A grant whose level or tool is retired after it reached the tool stays active until removed (retirement does not revoke held access).
+- Manual and Vendor evidence is self-reported: AccessFlow records who confirmed and when (and the vendor ticket), but cannot check the tool. A task claimed once (or retried after a claim) is finished even if its level is retired meanwhile (safe fulfillment). Suspend and resume tasks come with suspension (M9).
+- Someone who holds two recipient roles (for example a manager who is also InfoSec) gets one notification per role for a direct grant or a Super Admin override.
+- Withdrawing an approved item sets its `closed_at` to the withdrawal time; the approval time stays in its steps and the audit log.
 - The Mock Tool Service has no authentication: it is reachable only on the internal Docker network (DECISIONS.md A2). It is a stand-in for real tools, not a model of their security.

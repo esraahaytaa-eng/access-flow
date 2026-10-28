@@ -176,7 +176,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** bootstrap Super Admin logs in with the file password, must change it, file is removed; all A4 rules hold; logins, failures, lockouts and password changes are audited; CI green.
 - **Required tests:** non-HS256 token rejected; expired token rejected; re-issue keeps login time and respects 12 h; logout invalidates a copied token; suspended/terminated user denied with valid token; temporary-password session allows only password change, logout and `me`; employee temporary password expires after 72 h, the bootstrap one does not; 5 failures → 15-minute lock, concurrent failures counted correctly; CSRF missing/mismatched and cross-origin requests rejected; identical response for unknown email, wrong password, locked and inactive accounts; bootstrap password never appears in logs; runtime user cannot delete employees, credentials or roles.
 - **UI slice:** login, forced password change, logout (in U1, English and Turkish).
-- **Status:** implemented 2026-10-28 on `feat/identity`, commit `21da9c8` (shares a PR with M3).
+- **Status:** merged 2026-10-28 with M3 as PR #3 (`fd5001c`).
 - **Review follow-ups (2026-10-28), assigned:**
   - M3 (done 2026-10-28): employee email validation, one rule shared by Go and PostgreSQL (ASCII only, at most 254 characters, trimmed and lowercased identically); `BOOTSTRAP_ADMIN_EMAIL` is checked with the same rule at startup. Today Go's `TrimSpace`/`ToLower` and PostgreSQL's `btrim`/`lower` differ on tabs and some non-ASCII letters (Turkish İ), so such an email fails the CHECK.
   - M3 (done 2026-10-28): an employee temporary password that expires during a session: password change answers a distinct `temporary_password_expired` code and does not count toward lockout (today: `invalid_current_password`, counted).
@@ -210,7 +210,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 ### M4 — Catalog and Mock Tool Service
 
 - **Detailed plan:** [`2026-10-28-m4-catalog-mocktools.md`](2026-10-28-m4-catalog-mocktools.md), approved 2026-10-28 (with its listed implementation calls).
-- **Status:** implemented 2026-10-28 on `feat/catalog-requests`, pending commit approval.
+- **Status:** merged 2026-10-28 with M5 as PR #4 (`0b55c41`).
 - **Review follow-ups (2026-10-28), assigned:**
   - M6: the Mock Tool Service stores only successful operations. A rejected one (`409 not_granted`, `level_suspended`) rolls back, so a retry with the same operation ID is evaluated again. The runner must treat a `409` as a non-retryable failure of that attempt (an exception), not as final per ID, and must not expect it to be replayed.
   - M9: the Tool Owner check (`catalog.checkOwner`) holds `FOR SHARE` on the owner while a tool is created or edited; what happens to tools whose owner is later terminated or suspended is part of M9 (as for managers).
@@ -241,7 +241,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** Jira Viewer needs only Manager; AWS Admin needs Manager → Tool Owner → InfoSec by three different people; fallback routing is visible; exactly one email per qualifying submission, none for on-behalf by manager.
 - **Required tests:** routing table (manager terminated → manager's manager → InfoSec pool; Tool Owner is beneficiary → InfoSec; nobody eligible → unroutable); beneficiary cannot approve; one person cannot decide two steps; concurrent approvals (`-race`); repeated submission ID returns original; override cannot reverse a rejection; reassignment respects SoD; employee cannot read another's requests.
 - **UI slice:** request form (batch, duration, on-behalf), My Requests, Approval Inbox (approve, reject, override, reassign).
-- **Status:** committed on `feat/catalog-requests` (2026-10-28), not yet pushed; detailed plan `2026-10-28-m5-requests-approvals.md`. Follow-ups are listed under M6 and M9.
+- **Status:** merged as PR #4 (`0b55c41`), together with M4; detailed plan `2026-10-28-m5-requests-approvals.md`. Follow-ups are listed under M6 and M9.
 
 ### M6 — API fulfillment end to end, Exceptions
 
@@ -258,8 +258,10 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Follow-ups from M5 (2026-10-28), assigned:**
   - **Duplicate requests after approval, before provisioning:** M5 blocks a second open request per (person, tool) only while an item is `PENDING_APPROVAL`. An `APPROVED` item that is not yet provisioned does not block a new request for the same tool. M6's held-grant check (the grant is created at final approval) must also reject a new request while such a grant or approved item exists, with a test.
   - Withdrawal of an `APPROVED` item before provisioning starts (O5) is added with provisioning.
-- **Required tests:** full API scenario; backoff schedule; lease expiry re-claims; success response with wrong state is not success; termination-priority ordering; revoke while grant queued / in flight / failed; stricter-wins adds a step before provisioning.
+- **Requirement from the PR #4 review (2026-10-28):** an approved request never provisions a retired tool or access level. Retiring a level or tool does not cancel items already pending for it (M4/M5), so the check runs immediately before provisioning: at final approval, with the stricter-wins check, and again when the runner claims a `GRANT` operation (a retirement can land in between). Required regression test: an item approved after its level, or its tool, was retired creates no Mock Tool Service call and no active grant; the same for a retirement between grant creation and the runner's claim. Decided 2026-10-28: such items, or their grants and operations, are `CANCELLED` with the reason and an audit event (DECISIONS.md, Fulfillment methods).
+- **Required tests:** retired tool or level never provisioned (see above); full API scenario; backoff schedule; lease expiry re-claims; success response with wrong state is not success; termination-priority ordering; revoke while grant queued / in flight / failed; stricter-wins adds a step before provisioning.
 - **UI slice:** My Access (status, expiry, give up access), manager's team access with revoke, Exceptions (failed ops, retry).
+- **Status:** committed on `feat/fulfillment` 2026-10-28 (push and PR pending, shared with M7); detailed plan `2026-10-28-m6-api-fulfillment.md`. The O5 follow-up for API items is covered by revoke: a grant never sent to the tool is cancelled without a call; Manual/Vendor withdrawal before the task is claimed remains M7.
 
 ### M7 — Manual and Vendor fulfillment, direct grants
 
@@ -267,11 +269,20 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Dependencies:** M6.
 - **Tasks:**
   1. Fulfillment Tasks per admin group (status, group, related request, time pending — O4).
-  2. Record vendor ticket (`WAITING_VENDOR`), confirm (`ACTIVE / SELF_REPORTED`, confirming admin), report failure (`FAILED`), retry; same for revoke / suspend / resume tasks.
+  2. Record vendor ticket (`WAITING_VENDOR`), confirm (`ACTIVE / SELF_REPORTED`, confirming admin), report failure (`FAILED`), retry; the same for revoke tasks. Suspend and resume tasks moved to M9 (decided 2026-10-28). Detailed plan: `2026-10-28-m7-manual-vendor-fulfillment.md`.
   3. `DIRECT_GRANT` (temporary ≤ 90 days) and direct revoke with justification; initiator cannot complete own task; notifications to InfoSec, manager, bypassed approver (D1).
 - **Acceptance criteria:** Manual and Vendor rows of the fulfillment table behave exactly as specified; no Manual/Vendor result is `VERIFIED`.
 - **Required tests:** non-member cannot act; beneficiary cannot fulfil own task; Vendor confirm without ticket rejected; direct grant > 90 days or for self rejected; initiator cannot confirm own direct task; repeated confirm idempotent.
 - **UI slice:** Fulfillment Tasks; direct grant / revoke in Administration.
+- **Status:** implemented on `feat/fulfillment` 2026-10-28, awaiting commit approval (one PR with M6); detailed plan `2026-10-28-m7-manual-vendor-fulfillment.md`. Approved items can be withdrawn until work starts, for API items too (O5).
+- **Follow-ups from the M7 reviews (2026-10-28), not in M7:**
+  - Task membership is checked before the task's locks; a membership removal committed during an action does not stop it (narrow race; closing it needs membership changes to lock the group's open tasks).
+  - Direct-grant and override notifications are not deduplicated: a person holding two recipient roles gets two.
+  - Withdrawing an approved item overwrites its `closed_at`; the approval time remains in the steps and the audit log.
+  - `canAct` is true for a member viewing a task another member holds (they can act only through takeover); for the UI slice.
+  - No router case for `POST /api/v1/direct-grants` (the router table is GET-only); no concurrent confirm-vs-revoke or runner-vs-withdraw race test (both rely on the employee and operation locks).
+  - Policy questions for decision: a Super Admin who is the employee's manager revokes as `MANAGER`, not `DIRECT`, so may confirm that removal task; a submitter or approver who is a group member may confirm the item's task; after a takeover the new claimer confirms with the previous claimer's ticket.
+- **Follow-up from M6 (2026-10-28), resolved in M7:** reproduced under load (`Client.Timeout exceeded while awaiting headers` in the happy-path tests); fixed by giving only the timeout case the 300 ms client; 40 of 40 runs passed beside two parallel full suites. Original note: `TestApplyAndLookup` (`internal/access/toolclient_test.go`, M4) failed once during an M6 mutation run, inside a loaded full test run; it passed 5 repeated runs and every full suite since. Suspected cause: its client uses the 300 ms timeout meant for the fault cases, which a loaded machine can exceed (the same cause fixed in the M6 runner tests). Reproduce under load (e.g. `-count=20` with the whole suite), confirm the root cause, then fix it (a longer timeout for the non-fault tests), before the M6 + M7 PR.
 
 ### M8 — Sweeps, expiry, extensions and level changes
 
@@ -291,7 +302,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Objective:** HR suspends, reactivates and terminates (immediate or scheduled); access removal is prioritized and visible until confirmed — the "14 leavers" problem.
 - **Dependencies:** M8.
 - **Tasks:**
-  1. Suspension (D7): login blocked, token invalidated, `SUSPEND` operations, pending requests cancelled, steps / tasks / reviews released or reassigned; reactivation with re-evaluation and `RESUME`.
+  1. Suspension (D7): login blocked, token invalidated, `SUSPEND` operations, pending requests cancelled, steps / tasks / reviews released or reassigned; reactivation with re-evaluation and `RESUME`. Includes the Manual / Vendor suspend and resume tasks (moved from M7, decided 2026-10-28).
   2. Termination immediate and scheduled (sweep), cancel / reschedule; overrides pending provisioning and resume; security-revocation exception.
 - **Acceptance criteria:** all D7 effects happen in one transaction per action; terminated employees' removals run first and stay in Exceptions until confirmed.
 - **Follow-up from M5 (2026-10-28), assigned:** re-route pending approval steps whose assignee is suspended or terminated (F2 fallback); until then InfoSec reassigns them (D9).

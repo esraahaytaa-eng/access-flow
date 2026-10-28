@@ -2,6 +2,7 @@ package requests
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -159,6 +160,45 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
+func TestDirectExpiry(t *testing.T) {
+	istanbul, err := time.LoadLocation("Europe/Istanbul")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 3, 1, 21, 30, 0, 0, time.UTC) // already 2 March in Istanbul
+	date := func(s string) *string { return &s }
+	cases := []struct {
+		name string
+		in   *string
+		want string
+		code string
+	}{
+		{"tomorrow", date("2026-03-03"), "2026-03-03", ""},
+		{"90 days from today in the company timezone", date("2026-05-31"), "2026-05-31", ""},
+		{"91 days", date("2026-06-01"), "", "duration_too_long"},
+		{"today in the company timezone", date("2026-03-02"), "", "expires_in_past"},
+		{"yesterday", date("2026-02-28"), "", "expires_in_past"},
+		{"missing", nil, "", "expires_required"},
+		{"blank", date(" "), "", "expires_required"},
+		{"malformed", date("31/05/2026"), "", "invalid_date"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DirectExpiry(tc.in, now, istanbul)
+			if tc.code != "" {
+				var e *platform.Error
+				if !errors.As(err, &e) || e.Code != tc.code || e.Field != "expiresOn" {
+					t.Fatalf("err = %v; want %s on expiresOn", err, tc.code)
+				}
+				return
+			}
+			if err != nil || got.Format(time.DateOnly) != tc.want {
+				t.Fatalf("expiry = %v, %v; want %s", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	cases := []struct {
 		moves    map[string][]string
@@ -167,8 +207,11 @@ func TestTransitions(t *testing.T) {
 	}{
 		{itemMoves, "PENDING_APPROVAL", "APPROVED", true},
 		{itemMoves, "PENDING_APPROVAL", "WITHDRAWN", true},
-		{itemMoves, "REJECTED", "APPROVED", false},  // a rejection is final (O5)
-		{itemMoves, "APPROVED", "WITHDRAWN", false}, // M6 adds withdrawal before provisioning
+		{itemMoves, "REJECTED", "APPROVED", false}, // a rejection is final (O5)
+		{itemMoves, "APPROVED", "WITHDRAWN", true}, // only before work starts on the grant (O5)
+		{itemMoves, "APPROVED", "REJECTED", false},
+		{itemMoves, "PENDING_APPROVAL", "CANCELLED", true}, // retired before provisioning
+		{itemMoves, "APPROVED", "CANCELLED", false},
 		{stepMoves, "WAITING", "PENDING", true},
 		{stepMoves, "WAITING", "APPROVED", false}, // steps are decided in order
 		{stepMoves, "PENDING", "SUPER_ADMIN_OVERRIDE", true},
@@ -178,6 +221,32 @@ func TestTransitions(t *testing.T) {
 	for _, tc := range cases {
 		if got := canMove(tc.moves, tc.from, tc.to); got != tc.ok {
 			t.Errorf("%s → %s = %v; want %v", tc.from, tc.to, got, tc.ok)
+		}
+	}
+}
+
+func TestPolicySteps(t *testing.T) {
+	have := func(types ...string) []Step {
+		var out []Step
+		for _, typ := range types {
+			out = append(out, Step{Type: typ})
+		}
+		return out
+	}
+	cases := []struct {
+		name     string
+		required []string
+		have     []Step
+		want     []string
+	}{
+		{"nothing new", []string{"MANAGER", "TOOL_OWNER"}, have("MANAGER", "TOOL_OWNER"), nil},
+		{"a step was removed: kept", []string{"MANAGER"}, have("MANAGER", "TOOL_OWNER"), nil},
+		{"InfoSec added", []string{"MANAGER", "INFOSEC"}, have("MANAGER"), []string{"INFOSEC"}},
+		{"both added, in order", []string{"MANAGER", "TOOL_OWNER", "INFOSEC"}, have("MANAGER"), []string{"TOOL_OWNER", "INFOSEC"}},
+	}
+	for _, tc := range cases {
+		if got := policySteps(tc.required, tc.have); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: policySteps = %v; want %v", tc.name, got, tc.want)
 		}
 	}
 }

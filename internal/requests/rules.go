@@ -127,14 +127,52 @@ func ParseDuration(d Duration, now time.Time, loc *time.Location) (*time.Time, e
 	return &expires, nil
 }
 
+// maxDirectDays is the longest a direct grant may last (D1).
+const maxDirectDays = 90
+
+// DirectExpiry parses a direct grant's required expiry: after today and at most 90 days
+// from today, in the company timezone (D1).
+func DirectExpiry(expiresOn *string, now time.Time, loc *time.Location) (*time.Time, error) {
+	if expiresOn == nil || strings.TrimSpace(*expiresOn) == "" {
+		return nil, platform.ValidationError("expiresOn", "expires_required")
+	}
+	expires, err := time.Parse(time.DateOnly, strings.TrimSpace(*expiresOn))
+	if err != nil {
+		return nil, platform.ValidationError("expiresOn", "invalid_date")
+	}
+	today, _ := time.Parse(time.DateOnly, now.In(loc).Format(time.DateOnly))
+	switch {
+	case !expires.After(today):
+		return nil, platform.ValidationError("expiresOn", "expires_in_past")
+	case expires.After(today.AddDate(0, 0, maxDirectDays)):
+		return nil, platform.ValidationError("expiresOn", "duration_too_long")
+	}
+	return &expires, nil
+}
+
 // Allowed status changes (A9). Anything else is a conflict.
 var (
-	itemMoves = map[string][]string{"PENDING_APPROVAL": {"APPROVED", "REJECTED", "WITHDRAWN"}}
+	itemMoves = map[string][]string{
+		"PENDING_APPROVAL": {"APPROVED", "REJECTED", "WITHDRAWN", "CANCELLED"},
+		"APPROVED":         {"WITHDRAWN"}, // only before work starts on the grant (O5)
+	}
 	stepMoves = map[string][]string{
 		"WAITING": {"PENDING", "APPROVED_BY_SUBMISSION", "CANCELLED"},
 		"PENDING": {"APPROVED", "REJECTED", "SUPER_ADMIN_OVERRIDE", "CANCELLED"},
 	}
 )
+
+// policySteps returns the step types the level now requires that the item lacks, in the
+// fixed order (F2: stricter wins). A step the level no longer requires is kept.
+func policySteps(required []string, have []Step) []string {
+	var missing []string
+	for _, typ := range required {
+		if !slices.ContainsFunc(have, func(s Step) bool { return s.Type == typ }) {
+			missing = append(missing, typ)
+		}
+	}
+	return missing
+}
 
 func canMove(moves map[string][]string, from, to string) bool {
 	return slices.Contains(moves[from], to)

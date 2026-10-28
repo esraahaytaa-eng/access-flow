@@ -20,6 +20,7 @@ type Config struct {
 	BootstrapFile        string // where its one-time password is written
 	SeedPassword         string // SEED_PASSWORD: shared local-only password of seeded users (A4)
 	CompanyTimezone      string // COMPANY_TIMEZONE: the zone that dates such as expiry are in (A6)
+	MockToolsURL         string // MOCK_TOOLS_URL: base URL of the Mock Tool Service (A6)
 }
 
 // LoadConfig reads the configuration through getenv (os.Getenv in production).
@@ -33,6 +34,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		BootstrapFile:        getenv("BOOTSTRAP_FILE"),
 		SeedPassword:         getenv("SEED_PASSWORD"),
 		CompanyTimezone:      getenv("COMPANY_TIMEZONE"),
+		MockToolsURL:         getenv("MOCK_TOOLS_URL"),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"
@@ -45,6 +47,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if cfg.CompanyTimezone == "" {
 		cfg.CompanyTimezone = "Europe/Istanbul"
+	}
+	if cfg.MockToolsURL == "" {
+		cfg.MockToolsURL = "http://mocktools:8081"
 	}
 	if _, err := time.LoadLocation(cfg.CompanyTimezone); err != nil {
 		return Config{}, fmt.Errorf("COMPANY_TIMEZONE: %w", err)

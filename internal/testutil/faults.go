@@ -10,9 +10,10 @@ import (
 // Faults wraps a real handler and injects failures into the next requests, in the order
 // they were queued. It is safe for concurrent use.
 type Faults struct {
-	next  http.Handler
-	mu    sync.Mutex
-	queue []func(http.ResponseWriter, *http.Request)
+	next     http.Handler
+	mu       sync.Mutex
+	queue    []func(http.ResponseWriter, *http.Request)
+	requests int
 }
 
 func NewFaults(next http.Handler) *Faults { return &Faults{next: next} }
@@ -49,6 +50,22 @@ func (f *Faults) MalformNext() {
 	})
 }
 
+// RespondNext answers the next request with status and body, without reaching the handler.
+func (f *Faults) RespondNext(status int, body string) {
+	f.push(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	})
+}
+
+// Requests is how many requests reached Faults, faulted or not.
+func (f *Faults) Requests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.requests
+}
+
 // ApplyThenFail lets the handler apply the next request, then answers 500: the lost response.
 func (f *Faults) ApplyThenFail() {
 	f.push(func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +76,7 @@ func (f *Faults) ApplyThenFail() {
 
 func (f *Faults) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
+	f.requests++
 	var fault func(http.ResponseWriter, *http.Request)
 	if len(f.queue) > 0 {
 		fault, f.queue = f.queue[0], f.queue[1:]
