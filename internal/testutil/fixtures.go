@@ -9,9 +9,10 @@ import (
 
 // EmployeeSpec describes a test employee; zero values get sensible defaults.
 type EmployeeSpec struct {
-	Email  string   // default: a unique address
-	Status string   // default: ACTIVE
-	Roles  []string // open role assignments
+	Email                string   // default: a unique address
+	Status               string   // default: ACTIVE
+	Roles                []string // open role assignments
+	Department, JobTitle string   // default: none
 	// Password gives the employee the permanent password Password (hash PasswordHash).
 	Password bool
 }
@@ -40,8 +41,9 @@ func CreateEmployee(t testing.TB, db DB, spec EmployeeSpec) Employee {
 		spec.Status = "ACTIVE"
 	}
 	e := Employee{Email: spec.Email}
-	err := db.App.QueryRow(ctx, `INSERT INTO employees (email, full_name, status) VALUES ($1, $2, $3) RETURNING id`,
-		spec.Email, "Test "+spec.Email, spec.Status).Scan(&e.ID)
+	err := db.App.QueryRow(ctx, `INSERT INTO employees (email, full_name, status, department, job_title)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')) RETURNING id`,
+		spec.Email, "Test "+spec.Email, spec.Status, spec.Department, spec.JobTitle).Scan(&e.ID)
 	if err != nil {
 		t.Fatalf("create employee %s: %v", spec.Email, err)
 	}
@@ -57,4 +59,52 @@ func CreateEmployee(t testing.TB, db DB, spec EmployeeSpec) Employee {
 		}
 	}
 	return e
+}
+
+// CreateGroup inserts an admin group with a unique name.
+func CreateGroup(t testing.TB, db DB) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := db.App.QueryRow(context.Background(), "INSERT INTO admin_groups (name) VALUES ($1) RETURNING id",
+		"group-"+randomHex(t)).Scan(&id); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	return id
+}
+
+// ToolSpec describes a test tool; zero values get a unique name, API, a new owner and group.
+type ToolSpec struct {
+	Name, Method string
+	OwnerID      uuid.UUID
+}
+
+// CreateTool inserts an active tool.
+func CreateTool(t testing.TB, db DB, spec ToolSpec) uuid.UUID {
+	t.Helper()
+	if spec.Name == "" {
+		spec.Name = "tool-" + randomHex(t)
+	}
+	if spec.Method == "" {
+		spec.Method = "API"
+	}
+	if spec.OwnerID == uuid.Nil {
+		spec.OwnerID = CreateEmployee(t, db, EmployeeSpec{}).ID
+	}
+	var id uuid.UUID
+	if err := db.App.QueryRow(context.Background(), `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id)
+		VALUES ($1, $2, $3, $4) RETURNING id`, spec.Name, spec.Method, spec.OwnerID, CreateGroup(t, db)).Scan(&id); err != nil {
+		t.Fatalf("create tool: %v", err)
+	}
+	return id
+}
+
+// CreateLevel inserts an active access level with the given optional steps.
+func CreateLevel(t testing.TB, db DB, tool uuid.UUID, name string, toolOwner, infosec bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := db.App.QueryRow(context.Background(), `INSERT INTO access_levels (tool_id, name, requires_tool_owner, requires_infosec)
+		VALUES ($1, $2, $3, $4) RETURNING id`, tool, name, toolOwner, infosec).Scan(&id); err != nil {
+		t.Fatalf("create level: %v", err)
+	}
+	return id
 }

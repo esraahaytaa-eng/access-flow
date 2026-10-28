@@ -187,7 +187,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 ### M3 — Employees, roles and development fixture
 
 - **Detailed plan:** [`2026-10-28-m3-employees-roles.md`](2026-10-28-m3-employees-roles.md), approved 2026-10-28 (HR Manager and Super Admin administer employees; rules recorded in F4, D2 and D12).
-- **Status:** implemented 2026-10-28 on `feat/identity`, pending commit approval.
+- **Status:** merged 2026-10-28 with M2 as PR #3 (`fd5001c`).
 - **Review follow-ups (2026-10-28), assigned:**
   - M9: `people.checkManager` reads the manager's status without a lock; once termination exists, take `FOR SHARE` on the manager (or lock both rows) so an employee cannot be given a manager who is being terminated.
   - Open question for the user before M5 (manager approvals): may HR Managers and Super Admins change their **own** manager? If so, an HR Manager could choose who approves their own requests. Today no approved rule forbids it.
@@ -208,6 +208,12 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **UI slice:** Employees (list, create, edit), Administration (roles, groups, password reset).
 
 ### M4 — Catalog and Mock Tool Service
+
+- **Detailed plan:** [`2026-10-28-m4-catalog-mocktools.md`](2026-10-28-m4-catalog-mocktools.md), approved 2026-10-28 (with its listed implementation calls).
+- **Status:** implemented 2026-10-28 on `feat/catalog-requests`, pending commit approval.
+- **Review follow-ups (2026-10-28), assigned:**
+  - M6: the Mock Tool Service stores only successful operations. A rejected one (`409 not_granted`, `level_suspended`) rolls back, so a retry with the same operation ID is evaluated again. The runner must treat a `409` as a non-retryable failure of that attempt (an exception), not as final per ID, and must not expect it to be replayed.
+  - M9: the Tool Owner check (`catalog.checkOwner`) holds `FOR SHARE` on the owner while a tool is created or edited; what happens to tools whose owner is later terminated or suspended is part of M9 (as for managers).
 
 - **Objective:** Super Admin configures tools and access levels with approval steps; the Mock Tool Service manages per-level permissions idempotently.
 - **Dependencies:** M3.

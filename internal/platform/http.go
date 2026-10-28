@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Error is a typed business error. WriteError turns it into an HTTP response with a
@@ -64,6 +66,18 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	slog.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+}
+
+// CheckText limits s to max characters and rejects control characters (PostgreSQL refuses
+// NUL in text).
+func CheckText(s, field string, max int) error {
+	if utf8.RuneCountInString(s) > max {
+		return ValidationError(field, "value_too_long")
+	}
+	if strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return ValidationError(field, "value_invalid")
+	}
+	return nil
 }
 
 // maxBodyBytes caps JSON request bodies; nothing in the API needs more.
