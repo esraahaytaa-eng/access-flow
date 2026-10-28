@@ -140,11 +140,15 @@ func (s *Service) login(ctx context.Context, email, password string) (Session, e
 			lockedUntil, expAt *time.Time
 			hash               *string
 		)
+		// Lock first, then read in a new statement: a statement that waited for the lock re-reads
+		// only the locked row and keeps the credential it joined before, e.g. one a reset replaced.
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE email = $1 FOR UPDATE", email); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `
 			SELECT e.id, e.status, e.token_version, e.failed_login_count, e.locked_until, c.password_hash, c.expires_at
 			FROM employees e LEFT JOIN password_credentials c ON c.employee_id = e.id
-			WHERE e.email = $1
-			FOR UPDATE OF e`, email).Scan(&id, &status, &version, &failed, &lockedUntil, &hash, &expAt)
+			WHERE e.email = $1`, email).Scan(&id, &status, &version, &failed, &lockedUntil, &hash, &expAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_, _ = VerifyPassword(s.dummyHash, password)
 			if r := []rune(email); len(r) > MaxEmailLength {
@@ -283,11 +287,14 @@ func (s *Service) changePassword(ctx context.Context, p Principal, current, next
 			hash               *string
 			temporary          *bool
 		)
+		// Lock first, then read (see login).
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", id); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `
 			SELECT e.failed_login_count, e.locked_until, c.password_hash, c.expires_at, c.is_temporary
 			FROM employees e LEFT JOIN password_credentials c ON c.employee_id = e.id
-			WHERE e.id = $1
-			FOR UPDATE OF e`, id).Scan(&failed, &lockedUntil, &hash, &expAt, &temporary)
+			WHERE e.id = $1`, id).Scan(&failed, &lockedUntil, &hash, &expAt, &temporary)
 		if err != nil {
 			return err
 		}

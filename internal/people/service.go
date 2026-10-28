@@ -383,11 +383,15 @@ func (s *Service) ResetPassword(ctx context.Context, actor auth.Principal, id uu
 
 // lockEmployee loads an employee under a row lock (A9: one change to a person at a time).
 func lockEmployee(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Employee, error) {
-	e, err := scanEmployee(tx.QueryRow(ctx, selectEmployees+" WHERE e.id = $1 FOR UPDATE OF e", id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Employee{}, platform.ErrNotFound
+	// Lock first, then read in a new statement: a statement that waited for the lock re-reads
+	// only the locked row, while its role and group subqueries keep the stale snapshot.
+	if err := tx.QueryRow(ctx, "SELECT id FROM employees WHERE id = $1 FOR UPDATE", id).Scan(&id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Employee{}, platform.ErrNotFound
+		}
+		return Employee{}, err
 	}
-	return e, err
+	return getEmployee(ctx, tx, id)
 }
 
 // AssignRole opens a role interval for an active employee; holding it already is a no-op (D2, A9).

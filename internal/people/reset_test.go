@@ -1,7 +1,9 @@
 package people
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -106,4 +108,44 @@ func TestResetPasswordRejects(t *testing.T) {
 		t.Fatalf("rejected resets were audited: %d", n)
 	}
 	testutil.RequireStatus(t, testutil.NewClient(t, env.srv).Login(infosec.Email, testutil.Password), http.StatusOK, "")
+}
+
+// A privileged role committed while the reset waited for the employee's lock must be seen:
+// HR may not reset someone who became InfoSec a moment earlier.
+func TestResetSeesAPrivilegedRoleCommittedWhileWaiting(t *testing.T) {
+	env := newEnv(t)
+	admin := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
+	hr := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Roles: []string{"HR_MANAGER"}})
+	target := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Password: true})
+	err := env.whileLocked(target.ID, "INSERT INTO role_assignments (employee_id, role, valid_from, granted_by) VALUES ($1, 'INFOSEC', now(), $2)",
+		[]any{target.ID, admin.ID}, func() error {
+			_, err := env.svc.ResetPassword(context.Background(), auth.Principal{EmployeeID: hr.ID, Roles: []string{"HR_MANAGER"}}, target.ID)
+			return err
+		})
+	var pe *platform.Error
+	if !errors.As(err, &pe) || pe.Code != "privileged_reset_requires_super_admin" {
+		t.Fatalf("reset error = %v; want privileged_reset_requires_super_admin", err)
+	}
+}
+
+// A login waiting for the employee's lock while a reset commits must check the new password,
+// not the credential row it read before the wait.
+func TestLoginWaitingOnAResetChecksTheNewPassword(t *testing.T) {
+	env := newEnv(t)
+	target := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Password: true})
+	newHash, err := auth.HashPassword("a brand new password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := testutil.NewClient(t, env.srv)
+	err = env.whileLocked(target.ID, "UPDATE password_credentials SET password_hash = $2 WHERE employee_id = $1",
+		[]any{target.ID, newHash}, func() error {
+			if r := c.Login(target.Email, testutil.Password); r.Status != http.StatusUnauthorized {
+				return fmt.Errorf("login with the old password: status %d; want 401", r.Status)
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -73,4 +74,35 @@ func (e *testEnv) count(sql string, args ...any) int {
 
 func (e *testEnv) audits(action string, subject uuid.UUID) int {
 	return e.count("SELECT count(*) FROM audit_events WHERE action = $1 AND subject_employee_id = $2", action, subject)
+}
+
+// whileLocked holds the employee's row lock in a second transaction, runs sql there, starts
+// call, waits until call is blocked on that lock, then commits and returns call's error.
+// It makes the "change committed while I waited for the lock" race deterministic.
+func (e *testEnv) whileLocked(id uuid.UUID, sql string, args []any, call func() error) error {
+	e.t.Helper()
+	ctx := context.Background()
+	tx, err := e.db.App.Begin(ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", id); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		e.t.Fatalf("%s: %v", sql, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- call() }()
+	for deadline := time.Now().Add(5 * time.Second); e.count("SELECT count(*) FROM pg_locks WHERE NOT granted") == 0; {
+		if time.Now().After(deadline) {
+			e.t.Fatal("call never waited for the row lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		e.t.Fatal(err)
+	}
+	return <-done
 }

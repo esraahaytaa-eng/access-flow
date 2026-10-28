@@ -146,6 +146,25 @@ func TestConcurrentRoleAssignmentCreatesOneRow(t *testing.T) {
 	}
 }
 
+// The role committed while AssignRole waited for the employee's lock must be seen: no
+// duplicate open row (unique violation), no second ROLE_ASSIGNED event.
+func TestAssignRoleSeesARoleCommittedWhileWaiting(t *testing.T) {
+	env := newEnv(t)
+	admin := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
+	actor := auth.Principal{EmployeeID: admin.ID, Roles: []string{"SUPER_ADMIN"}}
+	target := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
+	err := env.whileLocked(target.ID, "INSERT INTO role_assignments (employee_id, role, valid_from, granted_by) VALUES ($1, 'HR_MANAGER', now(), $2)",
+		[]any{target.ID, admin.ID}, func() error {
+			return env.svc.AssignRole(context.Background(), actor, target.ID, "HR_MANAGER")
+		})
+	if err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if n := env.audits("ROLE_ASSIGNED", target.ID); n != 0 {
+		t.Fatalf("ROLE_ASSIGNED events = %d; want 0 (the role was already held)", n)
+	}
+}
+
 // A role or membership opened after the removing transaction began (a concurrent assign)
 // must still close cleanly, never with valid_to before valid_from.
 func TestRemovalClosesARowOpenedLater(t *testing.T) {
