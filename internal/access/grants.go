@@ -17,7 +17,8 @@ import (
 
 // CreateGrant creates the grant of an item at its final approval, in the caller's
 // transaction, with its GRANT operation. API grants are provisioned by the runner;
-// Manual and Vendor grants wait for their fulfillment task (M7).
+// Manual and Vendor grants wait for their fulfillment task (M7). A LEVEL_CHANGE item's
+// grant replaces the grant the item names (D4).
 func CreateGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.UUID) (uuid.UUID, error) {
 	var employee uuid.UUID
 	if err := tx.QueryRow(ctx, "SELECT beneficiary_id FROM request_items WHERE id = $1", itemID).Scan(&employee); err != nil {
@@ -28,9 +29,10 @@ func CreateGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uu
 		return uuid.Nil, err
 	}
 	var id uuid.UUID
-	if err := tx.QueryRow(ctx, `INSERT INTO grants (request_item_id, employee_id, tool_id, access_level_id, method, status, expires_on, created_at)
+	if err := tx.QueryRow(ctx, `INSERT INTO grants (request_item_id, employee_id, tool_id, access_level_id, method, status, expires_on,
+		       replaces_grant_id, created_at)
 		SELECT i.id, i.beneficiary_id, i.tool_id, i.access_level_id, t.fulfillment_method,
-		       CASE WHEN t.fulfillment_method = 'API' THEN 'PROVISIONING' ELSE 'PENDING_FULFILLMENT' END, i.expires_on, $2
+		       CASE WHEN t.fulfillment_method = 'API' THEN 'PROVISIONING' ELSE 'PENDING_FULFILLMENT' END, i.expires_on, i.grant_id, $2
 		FROM request_items i JOIN tools t ON t.id = i.tool_id WHERE i.id = $1 RETURNING id`, itemID, now).Scan(&id); err != nil {
 		return uuid.Nil, err
 	}
@@ -55,6 +57,14 @@ func WithdrawGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID 
 	var grant, employee uuid.UUID
 	err := tx.QueryRow(ctx, "SELECT id, employee_id FROM grants WHERE request_item_id = $1", itemID).Scan(&grant, &employee)
 	if errors.Is(err, pgx.ErrNoRows) {
+		var extension bool
+		if err := tx.QueryRow(ctx, `SELECT r.kind = 'EXTENSION' FROM request_items i JOIN requests r ON r.id = i.request_id
+			WHERE i.id = $1`, itemID).Scan(&extension); err != nil {
+			return err
+		}
+		if extension {
+			return errStarted // an approved extension is already in force
+		}
 		return nil // approved before grants existed (M5): nothing to cancel
 	}
 	if err != nil {
@@ -80,6 +90,90 @@ func WithdrawGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID 
 		return errStarted
 	}
 	return cancelGrant(ctx, tx, now, &actor, grant, employee, reason)
+}
+
+// requestRemoval removes an open grant, in the caller's transaction after the employee's
+// and the grant's operations' locks. A grant never sent to the tool is cancelled with no
+// call; otherwise a verified REVOKE is queued (reason by), and a queued or failed GRANT is
+// cancelled so it cannot re-apply access. A grant already being removed, or closed, is left
+// as it is. A nil actor is the system.
+func requestRemoval(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, grant, employee uuid.UUID, by, reason string) error {
+	status, err := lockGrant(ctx, tx, grant)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case "REVOCATION_REQUESTED", "REVOCATION_FAILED", "REVOKED", "CANCELLED":
+		return nil
+	}
+	if err := endChanges(ctx, tx, now, actor, grant, employee); err != nil {
+		return err
+	}
+	var op uuid.UUID
+	var opStatus string
+	var neverSent bool
+	if err := tx.QueryRow(ctx, "SELECT id, status, first_attempt_at IS NULL FROM operations WHERE grant_id = $1 AND type = 'GRANT'",
+		grant).Scan(&op, &opStatus, &neverSent); err != nil {
+		return err
+	}
+	if opStatus == "PENDING" && neverSent {
+		return cancelGrant(ctx, tx, now, actor, grant, employee, reason)
+	}
+	grantCancelled := opStatus == "PENDING" || opStatus == "FAILED"
+	if grantCancelled {
+		if err := setOp(ctx, tx, op, opStatus, "CANCELLED", "completed_at = $2", now); err != nil {
+			return err
+		}
+	}
+	if err := setGrant(ctx, tx, grant, status, "REVOCATION_REQUESTED", "closed_reason = $3, revocation_requested_by = $4",
+		reason, actor); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO operations (grant_id, type, reason, priority, next_attempt_at, created_at)
+		VALUES ($1, 'REVOKE', $2, 1, $3, $3)`, grant, by, now); err != nil {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "GRANT_REVOCATION_REQUESTED", Entity: "grant",
+		EntityID: &grant, SubjectID: &employee, Reason: reason, Details: map[string]any{"by": by, "grantOperationCancelled": grantCancelled}})
+}
+
+// endChanges cancels the pending extension or level change of a grant being closed, so it
+// never blocks the next request for the tool (D6). The caller locked the item first.
+func endChanges(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, grant, employee uuid.UUID) error {
+	const reason = "the access has ended"
+	var item uuid.UUID // at most one: one open item per person and tool
+	err := tx.QueryRow(ctx, `UPDATE request_items SET status = 'CANCELLED', closed_at = $2, closed_reason = $3, version = version + 1
+		WHERE grant_id = $1 AND status = 'PENDING_APPROVAL' RETURNING id`, grant, now, reason).Scan(&item)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE approval_steps SET status = 'CANCELLED', version = version + 1
+		WHERE item_id = $1 AND status IN ('WAITING', 'PENDING')`, item); err != nil {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "ITEM_CANCELLED", Entity: "request_item", EntityID: &item,
+		SubjectID: &employee, Reason: reason})
+}
+
+// Extend applies an approved EXTENSION item to its grant, in the caller's transaction under
+// the employee's lock: the item's expiry date, or none for Until Revoked (D6). There is no
+// operation: the tool already holds the level.
+func Extend(ctx context.Context, tx pgx.Tx, actor, grant, itemID uuid.UUID) error {
+	var employee uuid.UUID
+	var from, to *string
+	if err := tx.QueryRow(ctx, "SELECT employee_id, to_char(expires_on, 'YYYY-MM-DD') FROM grants WHERE id = $1 FOR UPDATE",
+		grant).Scan(&employee, &from); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `UPDATE grants SET expires_on = (SELECT expires_on FROM request_items WHERE id = $2), version = version + 1
+		WHERE id = $1 RETURNING to_char(expires_on, 'YYYY-MM-DD')`, grant, itemID).Scan(&to); err != nil {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: &actor, Action: "GRANT_EXTENDED", Entity: "grant", EntityID: &grant,
+		SubjectID: &employee, Details: map[string]any{"requestItemId": itemID, "from": from, "to": to}})
 }
 
 // Person is an employee as shown on a grant.
@@ -141,10 +235,8 @@ func (s *Service) Team(ctx context.Context, actor auth.Principal) ([]Grant, erro
 }
 
 // Revoke gives up a grant: by its employee (O6), their current direct manager (D5) or,
-// directly, a Super Admin (D1).
-// A grant never sent to the tool is cancelled with no call; otherwise a verified REVOKE
-// is queued, and a queued or failed GRANT is cancelled so it cannot re-apply access. A
-// repeat while the grant is being removed returns its current state.
+// directly, a Super Admin (D1), through requestRemoval. A repeat while the grant is being
+// removed returns its current state.
 func (s *Service) Revoke(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (Grant, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -154,19 +246,11 @@ func (s *Service) Revoke(ctx context.Context, actor auth.Principal, id uuid.UUID
 		return Grant{}, err
 	}
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		var employee uuid.UUID
-		err := tx.QueryRow(ctx, "SELECT employee_id FROM grants WHERE id = $1", id).Scan(&employee)
+		employee, err := lockForRemoval(ctx, tx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return platform.ErrNotFound
 		}
 		if err != nil {
-			return err
-		}
-		// Lock order: employee, operations, grant (see Runner); then read.
-		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", employee); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", id); err != nil {
 			return err
 		}
 		var status string
@@ -193,32 +277,7 @@ func (s *Service) Revoke(ctx context.Context, actor auth.Principal, id uuid.UUID
 		if current != version {
 			return errVersionConflict
 		}
-		var op uuid.UUID
-		var opStatus string
-		var neverSent bool
-		if err := tx.QueryRow(ctx, "SELECT id, status, first_attempt_at IS NULL FROM operations WHERE grant_id = $1 AND type = 'GRANT'",
-			id).Scan(&op, &opStatus, &neverSent); err != nil {
-			return err
-		}
-		if opStatus == "PENDING" && neverSent {
-			return cancelGrant(ctx, tx, now, &actor.EmployeeID, id, employee, reason)
-		}
-		grantCancelled := opStatus == "PENDING" || opStatus == "FAILED"
-		if grantCancelled {
-			if err := setOp(ctx, tx, op, opStatus, "CANCELLED", "completed_at = $2", now); err != nil {
-				return err
-			}
-		}
-		if err := setGrant(ctx, tx, id, status, "REVOCATION_REQUESTED", "closed_reason = $3, revocation_requested_by = $4",
-			reason, actor.EmployeeID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO operations (grant_id, type, reason, priority, next_attempt_at, created_at)
-			VALUES ($1, 'REVOKE', $2, 1, $3, $3)`, id, by, now); err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "GRANT_REVOCATION_REQUESTED", Entity: "grant",
-			EntityID: &id, SubjectID: &employee, Reason: reason, Details: map[string]any{"by": by, "grantOperationCancelled": grantCancelled}})
+		return requestRemoval(ctx, tx, now, &actor.EmployeeID, id, employee, by, reason)
 	})
 	if err != nil {
 		return Grant{}, err

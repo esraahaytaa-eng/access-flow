@@ -26,6 +26,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 	"github.com/esraahaytaa-eng/access-flow/internal/requests"
+	"github.com/esraahaytaa-eng/access-flow/internal/sweeps"
 	"github.com/esraahaytaa-eng/access-flow/internal/webui"
 )
 
@@ -88,10 +89,12 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	// One runner (A2: one instance); it stops with ctx and finishes before the pool closes.
+	// One runner and one sweeps loop (A2: one instance); they stop with ctx and finish
+	// before the pool closes.
 	runner := access.NewRunner(pool, access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second))
 	var wg sync.WaitGroup
 	wg.Go(func() { runner.Run(ctx) })
+	wg.Go(func() { sweeps.New(pool, loc).Run(ctx) })
 	defer wg.Wait()
 	defer stop() // runs first: a server that fails to start must stop the runner too
 

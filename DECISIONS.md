@@ -54,6 +54,7 @@ HR creates the employee; the system generates a one-time temporary password show
 - Super Admin may **directly grant and revoke**, with justification. A direct action skips only the approval steps; fulfillment uses the tool's normal method (see Fulfillment methods): API through the Mock Tool Service with status verification; Manual through a task for the tool's administration group; Vendor through a tracked ticket with a manually recorded outcome. Manual and Vendor outcomes remain labelled self-reported.
 - For Manual and Vendor direct actions, the initiating Super Admin may not complete or confirm the fulfillment; a different authorized admin must.
 - Direct grants are always **temporary, maximum 90 days**, measured from the direct grant's creation time — the only duration limit in the system. No additional reminders or escalations apply.
+  - *Refinement — [APPROVED 2026-10-28, M8 plan]:* with end-of-day expiry (D6), a direct grant's access ends at 00:00 on the day after its expiration date, and that moment may not be later than creation + 90 days, so the latest allowed date is today + 89. A direct grant may be extended only through the normal approval workflow (D6).
 - Never for the Super Admin's own access; no self-approval.
 - [DEFAULT] An override cannot reverse a rejection; it applies only to live items. A direct grant is a normal access item (`DIRECT_GRANT`). InfoSec, the beneficiary's manager and the bypassed approver are notified in-app. Overrides and direct grants appear in a dedicated report included in quarterly evidence.
 
@@ -81,6 +82,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - Every level change grants and verifies (API) or confirms (Manual/Vendor) the new level first; only then is the revocation of the old level created.
 - If granting the new level fails, the old level is preserved and nothing is revoked; the failure is visible and retryable (O3).
 - If revoking the old level fails, both levels are held and an **overlap exception** is shown until removal is verified or confirmed.
+  - *Refinement — [APPROVED 2026-10-28, M8 plan]:* the overlap is shown from the old removal's first failed attempt until that removal is verified or confirmed: the old grant has an open removal with an error recorded, and the grant that replaces it is `ACTIVE`, whatever the removal's reason. A removal that is merely pending is ordinary work and not listed (O7).
 - No additional workflows or recovery mechanisms beyond the normal operation pipeline.
 - History records the actual time each level became effective and ended; nothing is rewritten. Reviews show the current effective level.
 
@@ -108,6 +110,9 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - Extensions (`EXTENSION`) and changing Temporary → Until Revoked follow the normal approval workflow, re-running the level's current approval steps.
 - Super Admin direct grants are the only exception: always temporary, maximum 90 days (D1).
 - No expiry reminders. Expiration dates are shown in the employee's access list and the manager's view; extensions are requested manually. Temporary access still expires automatically into the normal revocation workflow. Reviewers see the duration type and grant age.
+- *Refinement — [APPROVED 2026-10-28, M8 plan]:* **expiry is end of day.** A temporary grant stays valid through its whole expiration date in the company timezone; it becomes due for removal at 00:00 on the next day (an expiration date of 30 November is removed from 1 December, 00:00 Europe/Istanbul). The expiry job requests removal for open grants whose date is before today, with reason `EXPIRED`, and never sends notifications.
+- *Refinement — [APPROVED 2026-10-28, M8 plan]:* **an item approved after its expiration date** (the date passed while it waited) is cancelled at final approval ("expired before approval"); no grant is created.
+- *Refinement — [APPROVED 2026-10-28, M8 plan]:* **extensions.** An extension (a later date, or Until Revoked) applies to a temporary `ACTIVE` grant and only changes its expiration date at final approval, with no tool call; the access stays active meanwhile and expiry is never held back by a pending extension. An extension approved after the grant was closed or became due is cancelled ("the access has ended"). Closing a grant (revocation, expiry, cancellation) cancels its pending extension or level change in the same transaction. A direct grant (D1) may be extended only through this normal workflow, including to Until Revoked; the 90-day limit applies to the direct grant itself.
 
 *Trade-off:* privileged permissions (e.g. AWS Admin) may be held Until Revoked after a single approval chain. For these grants expiry provides no protection; removal relies on quarterly reviews (with day-21 auto-revocation for unanswered InfoSec-approved items, D8), manager and HR actions, and termination. Accepted for simplicity and to avoid duration configuration.
 

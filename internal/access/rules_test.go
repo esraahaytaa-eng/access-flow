@@ -5,6 +5,27 @@ import (
 	"time"
 )
 
+func TestToday(t *testing.T) {
+	istanbul, err := time.LoadLocation("Europe/Istanbul")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		now  time.Time
+		want string
+	}{
+		{time.Date(2026, 3, 1, 21, 30, 0, 0, time.UTC), "2026-03-02"}, // already 2 March in Istanbul
+		{time.Date(2026, 3, 1, 20, 59, 0, 0, time.UTC), "2026-03-01"},
+		{time.Date(2026, 12, 31, 21, 0, 0, 0, time.UTC), "2027-01-01"},
+	}
+	for _, tc := range cases {
+		got := Today(tc.now, istanbul)
+		if got.Format(time.DateOnly) != tc.want || got.Location() != time.UTC || got.Hour() != 0 {
+			t.Errorf("Today(%v) = %v; want %s at UTC midnight", tc.now, got, tc.want)
+		}
+	}
+}
+
 func TestBackoff(t *testing.T) {
 	cases := []struct {
 		attempts int

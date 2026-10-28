@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
@@ -120,18 +121,18 @@ func ParseDuration(d Duration, now time.Time, loc *time.Location) (*time.Time, e
 	if err != nil {
 		return nil, invalid
 	}
-	today, _ := time.Parse(time.DateOnly, now.In(loc).Format(time.DateOnly))
-	if !expires.After(today) {
+	if !expires.After(access.Today(now, loc)) {
 		return nil, platform.ValidationError("duration", "expiry_not_in_future")
 	}
 	return &expires, nil
 }
 
-// maxDirectDays is the longest a direct grant may last (D1).
+// maxDirectDays is the longest a direct grant may last from its creation (D1).
 const maxDirectDays = 90
 
-// DirectExpiry parses a direct grant's required expiry: after today and at most 90 days
-// from today, in the company timezone (D1).
+// DirectExpiry parses a direct grant's required expiry date, after today in the company
+// timezone. Access lasts through that date (end of day, 2026-10-28), so it ends at 00:00
+// the next day, which may not be later than 90 days from now (D1).
 func DirectExpiry(expiresOn *string, now time.Time, loc *time.Location) (*time.Time, error) {
 	if expiresOn == nil || strings.TrimSpace(*expiresOn) == "" {
 		return nil, platform.ValidationError("expiresOn", "expires_required")
@@ -140,11 +141,11 @@ func DirectExpiry(expiresOn *string, now time.Time, loc *time.Location) (*time.T
 	if err != nil {
 		return nil, platform.ValidationError("expiresOn", "invalid_date")
 	}
-	today, _ := time.Parse(time.DateOnly, now.In(loc).Format(time.DateOnly))
+	ends := time.Date(expires.Year(), expires.Month(), expires.Day()+1, 0, 0, 0, 0, loc)
 	switch {
-	case !expires.After(today):
+	case !expires.After(access.Today(now, loc)):
 		return nil, platform.ValidationError("expiresOn", "expires_in_past")
-	case expires.After(today.AddDate(0, 0, maxDirectDays)):
+	case ends.After(now.AddDate(0, 0, maxDirectDays)):
 		return nil, platform.ValidationError("expiresOn", "duration_too_long")
 	}
 	return &expires, nil

@@ -60,6 +60,41 @@ func FailedOperations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, err
 	return operations(ctx, pool, "o.status = 'FAILED'")
 }
 
+// Overlap is a level change whose old level is still held because its removal failed (D4):
+// listed from the removal's first failed attempt until it is verified or confirmed.
+type Overlap struct {
+	Employee    Person    `json:"employee"`
+	Tool        string    `json:"tool"`
+	OldGrantID  uuid.UUID `json:"oldGrantId"`
+	OldLevel    string    `json:"oldLevel"`
+	NewGrantID  uuid.UUID `json:"newGrantId"`
+	NewLevel    string    `json:"newLevel"`
+	OperationID uuid.UUID `json:"operationId"`
+	Status      string    `json:"status"`
+	LastError   *string   `json:"lastError"`
+}
+
+// Overlaps lists the D4 overlaps: an ACTIVE grant replacing one whose open removal has
+// failed at least once, whatever the removal's reason. The caller checks who may read them.
+func Overlaps(ctx context.Context, pool *pgxpool.Pool) ([]Overlap, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT e.id, e.full_name, t.name, g.id, ol.name, n.id, nl.name, o.id, o.status, o.last_error
+		FROM grants n JOIN grants g ON g.id = n.replaces_grant_id
+		JOIN operations o ON o.grant_id = g.id AND o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
+		JOIN employees e ON e.id = g.employee_id JOIN tools t ON t.id = g.tool_id
+		JOIN access_levels ol ON ol.id = g.access_level_id JOIN access_levels nl ON nl.id = n.access_level_id
+		WHERE n.status = 'ACTIVE' AND o.last_error IS NOT NULL
+		ORDER BY o.created_at LIMIT 200`) // shortcut: first 200 only, as FailedOperations
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Overlap, error) {
+		var o Overlap
+		return o, row.Scan(&o.Employee.ID, &o.Employee.FullName, &o.Tool, &o.OldGrantID, &o.OldLevel, &o.NewGrantID, &o.NewLevel,
+			&o.OperationID, &o.Status, &o.LastError)
+	})
+}
+
 // Retry starts a new round of attempts for a FAILED operation with the same operation ID.
 // Allowed for a Super Admin or a member of the tool's admin group, never on one's own
 // grant (F2). A repeat while the operation is queued or running returns its state.

@@ -64,7 +64,7 @@ func (s *Service) DirectGrant(ctx context.Context, actor auth.Principal, in Dire
 		if status != "ACTIVE" {
 			return platform.ValidationError("beneficiaryId", "beneficiary_not_active")
 		}
-		c, err := checkLevel(ctx, tx, in.BeneficiaryID, in.AccessLevelID)
+		c, err := checkLevel(ctx, tx, in.BeneficiaryID, in.AccessLevelID, nil)
 		if err != nil {
 			return err
 		}
@@ -103,15 +103,7 @@ func (s *Service) DirectGrant(ctx context.Context, actor auth.Principal, in Dire
 		return nil
 	})
 	if isUnique(err, "requests_submission_id_key") {
-		// The same ID was committed concurrently, for another beneficiary (whose row we did not lock).
-		prev, err := existing(ctx, s.pool, actor, in.SubmissionID, "DIRECT_GRANT")
-		if err != nil {
-			return Request{}, false, err
-		}
-		if prev == nil {
-			return Request{}, false, errSubmissionReused
-		}
-		return *prev, false, nil
+		return s.repeated(ctx, actor, in.SubmissionID, "DIRECT_GRANT")
 	}
 	return req, created, err
 }

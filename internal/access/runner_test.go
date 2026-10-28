@@ -402,3 +402,74 @@ func TestClaimSeesARetirementCommittedWhileItWaited(t *testing.T) {
 		t.Fatal("a retired level reached the tool")
 	}
 }
+
+// A claim that cancels a retired, never-sent GRANT needs the employee (the audit event's key
+// lock) after the operation's lock; a revoke holding the employee waits for that operation.
+// The claim skips the operation while the employee is locked instead of deadlocking.
+func TestClaimOfARetiredGrantYieldsToTheEmployeeLock(t *testing.T) {
+	r := newRig(t)
+	g := r.grant("API")
+	r.exec("UPDATE access_levels SET status = 'RETIRED' WHERE id = $1", g.level)
+	ctx := context.Background()
+	tx, err := r.db.App.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", g.emp.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := r.runner.RunOnce(ctx); done <- err }()
+	select {
+	case err := <-done: // skipped the operation while the employee was locked
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the claim waited for the employee while holding the operation")
+	}
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", g.id); err != nil {
+		t.Fatalf("revoke's operation lock: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.runOnce(true) // now the claim cancels it
+	r.requireState(g, "CANCELLED", "CANCELLED", 0)
+}
+
+// The runner records under the employee's lock, taken before the operation's, like every
+// other grant change (A9). Revoke locks the employee, then the operations: if record took
+// the operation first, the two would deadlock.
+func TestRunnerRecordsUnderTheEmployeeLock(t *testing.T) {
+	r := newRig(t)
+	g := r.grant("API")
+	ctx := context.Background()
+	tx, err := r.db.App.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", g.emp.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := r.runner.RunOnce(ctx); done <- err }()
+	for deadline := time.Now().Add(5 * time.Second); r.count(`SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock'`) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("record never waited for the employee")
+		}
+	}
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", g.id); err != nil {
+		t.Fatalf("revoke's operation lock: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r.requireState(g, "ACTIVE", "SUCCEEDED", 1)
+}

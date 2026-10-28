@@ -106,7 +106,7 @@ func TestDirectGrantRules(t *testing.T) {
 		{"no expiry", w.admin, directBody(w.dev.ID, w.jiraViewer, nil), 400, "expires_required"},
 		{"expires today", w.admin, directBody(w.dev.ID, w.jiraViewer, in(0)), 400, "expires_in_past"},
 		{"expired", w.admin, directBody(w.dev.ID, w.jiraViewer, in(-1)), 400, "expires_in_past"},
-		{"91 days", w.admin, directBody(w.dev.ID, w.jiraViewer, in(91)), 400, "duration_too_long"},
+		{"90 days", w.admin, directBody(w.dev.ID, w.jiraViewer, in(90)), 400, "duration_too_long"}, // valid through day 90 (end of day)
 		{"not a date", w.admin, directBody(w.dev.ID, w.jiraViewer, "soon"), 400, ""},
 		{"blank justification", w.admin, map[string]any{"submissionId": uuid.New(), "beneficiaryId": w.dev.ID,
 			"accessLevelId": w.jiraViewer, "justification": " ", "expiresOn": in(30)}, 400, "justification_required"},
@@ -116,7 +116,7 @@ func TestDirectGrantRules(t *testing.T) {
 		{"inactive beneficiary", w.admin, directBody(gone.ID, w.jiraViewer, in(30)), 400, "beneficiary_not_active"},
 		{"submission ID of a request", w.admin, map[string]any{"submissionId": w.mustSubmit(w.admin.c, body(&w.skip.ID, item(w.github)))["submissionId"],
 			"beneficiaryId": w.dev.ID, "accessLevelId": w.jiraViewer, "justification": "x", "expiresOn": in(30)}, 409, "submission_id_reused"},
-		{"90 days", w.admin, directBody(w.dev.ID, w.jiraViewer, in(90)), 201, ""},
+		{"89 days", w.admin, directBody(w.dev.ID, w.jiraViewer, in(89)), 201, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { testutil.RequireStatus(t, directGrant(tc.by, tc.b), tc.status, tc.code) })

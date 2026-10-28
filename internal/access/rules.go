@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// Today is now's date in the company timezone, at UTC midnight as dates are read and
+// compared everywhere (A6).
+func Today(now time.Time, loc *time.Location) time.Time {
+	y, m, d := now.In(loc).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
 // Backoff returns the wait after a failed attempt, or final once the 5th has failed (O3).
 func Backoff(attempts int) (wait time.Duration, final bool) {
 	if attempts >= 5 {

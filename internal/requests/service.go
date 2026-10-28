@@ -137,7 +137,8 @@ func loadItems(ctx context.Context, q querier, where string, args ...any) ([]Ite
 		SELECT i.id, i.request_id, b.id, b.full_name, s.id, s.full_name, t.id, t.name, l.id, l.name, i.justification,
 		       i.duration_type, to_char(i.expires_on, 'YYYY-MM-DD'), i.status, i.version, i.created_at, i.closed_at,
 		       i.closed_reason, g.id, g.method, g.status, g.activation_evidence, g.closed_reason, o.ticket_ref IS NOT NULL
-		FROM request_items i JOIN requests r ON r.id = i.request_id LEFT JOIN grants g ON g.request_item_id = i.id
+		FROM request_items i JOIN requests r ON r.id = i.request_id
+		LEFT JOIN grants g ON g.request_item_id = i.id OR (r.kind = 'EXTENSION' AND i.status = 'APPROVED' AND g.id = i.grant_id)
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN employees b ON b.id = r.beneficiary_id JOIN employees s ON s.id = r.submitted_by
 		JOIN tools t ON t.id = i.tool_id JOIN access_levels l ON l.id = i.access_level_id
@@ -335,15 +336,10 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 			return platform.ValidationError("beneficiaryId", "beneficiary_not_active")
 		}
 
-		type checked struct {
-			levelCheck
-			ItemInput
-			expires *time.Time
-		}
-		var all []checked
+		var all []newItem
 		seen := map[uuid.UUID]bool{}
 		for i, it := range in.Items {
-			c, err := checkLevel(ctx, tx, beneficiary, it.AccessLevelID)
+			c, err := checkLevel(ctx, tx, beneficiary, it.AccessLevelID, nil)
 			if err != nil {
 				return itemError(i, err)
 			}
@@ -356,69 +352,96 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 				return itemError(i, err)
 			}
 			it.Justification = justifications[i]
-			all = append(all, checked{c, it, expires})
+			all = append(all, newItem{c, it, expires, nil})
 		}
-
-		var requestID uuid.UUID
-		if err := tx.QueryRow(ctx, `INSERT INTO requests (submission_id, beneficiary_id, submitted_by, created_at)
-			VALUES ($1, $2, $3, $4) RETURNING id`, in.SubmissionID, beneficiary, actor.EmployeeID, now).Scan(&requestID); err != nil {
+		if req, err = s.create(ctx, tx, now, actor, "NEW_ACCESS", in.SubmissionID, beneficiary, managerID, all); err != nil {
 			return err
 		}
-		// D3: the beneficiary's current direct manager's submission satisfies the Manager step.
-		bySubmission := managerID != nil && *managerID == actor.EmployeeID
-		var details []map[string]any
-		var itemIDs []uuid.UUID
-		for _, c := range all {
-			var itemID uuid.UUID
-			if err := tx.QueryRow(ctx, `INSERT INTO request_items (request_id, beneficiary_id, tool_id, access_level_id, justification,
-				duration_type, expires_on, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-				requestID, beneficiary, c.toolID, c.AccessLevelID, c.Justification, c.Duration.Type, c.expires, now).Scan(&itemID); err != nil {
-				return err
-			}
-			for pos, typ := range c.steps {
-				if pos == 0 && bySubmission {
-					_, err = tx.Exec(ctx, `INSERT INTO approval_steps (item_id, position, type, status, decided_by, decided_at)
-						VALUES ($1, 1, 'MANAGER', 'APPROVED_BY_SUBMISSION', $2, $3)`, itemID, actor.EmployeeID, now)
-				} else {
-					_, err = tx.Exec(ctx, "INSERT INTO approval_steps (item_id, position, type) VALUES ($1, $2, $3)", itemID, pos+1, typ)
-				}
-				if err != nil {
-					return err
-				}
-			}
-			itemIDs = append(itemIDs, itemID)
-			details = append(details, map[string]any{"itemId": itemID, "tool": c.tool, "level": c.level,
-				"duration": c.Duration.Type, "expiresOn": c.expires})
-		}
-		if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "REQUEST_SUBMITTED", Entity: "request",
-			EntityID: &requestID, SubjectID: &beneficiary, Details: map[string]any{"submissionId": in.SubmissionID,
-				"approvedBySubmission": bySubmission, "items": details}}); err != nil {
-			return err
-		}
-		for _, id := range itemIDs { // after REQUEST_SUBMITTED, so the trail reads in order
-			if err := advance(ctx, tx, now, actor.EmployeeID, id); err != nil {
-				return err
-			}
-		}
-		reqs, err := loadRequests(ctx, tx, "r.id = $1", requestID)
-		if err != nil {
-			return err
-		}
-		req, created = reqs[0], true
+		created = true
 		return queueEmail(ctx, tx, req)
 	})
 	if isUnique(err, "requests_submission_id_key") {
-		// The same ID was committed concurrently, for another beneficiary (whose row we did not lock).
-		prev, err := existing(ctx, s.pool, actor, in.SubmissionID, "NEW_ACCESS")
-		if err != nil {
-			return Request{}, false, err
-		}
-		if prev == nil {
-			return Request{}, false, errSubmissionReused
-		}
-		return *prev, false, nil
+		return s.repeated(ctx, actor, in.SubmissionID, "NEW_ACCESS")
 	}
 	return req, created, err
+}
+
+// newItem is a checked item, ready to create.
+type newItem struct {
+	levelCheck
+	ItemInput
+	expires *time.Time
+	grantID *uuid.UUID // the grant an EXTENSION or LEVEL_CHANGE acts on
+}
+
+// create writes a request of kind with its items and their steps, records REQUEST_SUBMITTED
+// and opens each item's first step, in the caller's transaction under the beneficiary's lock.
+func (s *Service) create(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, kind string,
+	submissionID, beneficiary uuid.UUID, managerID *uuid.UUID, all []newItem) (Request, error) {
+	var requestID uuid.UUID
+	if err := tx.QueryRow(ctx, `INSERT INTO requests (submission_id, kind, beneficiary_id, submitted_by, created_at)
+			VALUES ($1, $2, $3, $4, $5) RETURNING id`, submissionID, kind, beneficiary, actor.EmployeeID, now).Scan(&requestID); err != nil {
+		return Request{}, err
+	}
+	// D3: the beneficiary's current direct manager's submission satisfies the Manager step.
+	bySubmission := managerID != nil && *managerID == actor.EmployeeID
+	var details []map[string]any
+	var itemIDs []uuid.UUID
+	for _, c := range all {
+		var itemID uuid.UUID
+		if err := tx.QueryRow(ctx, `INSERT INTO request_items (request_id, beneficiary_id, tool_id, access_level_id, justification,
+				duration_type, expires_on, grant_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+			requestID, beneficiary, c.toolID, c.AccessLevelID, c.Justification, c.Duration.Type, c.expires, c.grantID, now).Scan(&itemID); err != nil {
+			return Request{}, err
+		}
+		for pos, typ := range c.steps {
+			var err error
+			if pos == 0 && bySubmission {
+				_, err = tx.Exec(ctx, `INSERT INTO approval_steps (item_id, position, type, status, decided_by, decided_at)
+						VALUES ($1, 1, 'MANAGER', 'APPROVED_BY_SUBMISSION', $2, $3)`, itemID, actor.EmployeeID, now)
+			} else {
+				_, err = tx.Exec(ctx, "INSERT INTO approval_steps (item_id, position, type) VALUES ($1, $2, $3)", itemID, pos+1, typ)
+			}
+			if err != nil {
+				return Request{}, err
+			}
+		}
+		itemIDs = append(itemIDs, itemID)
+		d := map[string]any{"itemId": itemID, "tool": c.tool, "level": c.level, "duration": c.Duration.Type, "expiresOn": c.expires}
+		if c.grantID != nil {
+			d["grantId"] = *c.grantID
+		}
+		details = append(details, d)
+	}
+	if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "REQUEST_SUBMITTED", Entity: "request",
+		EntityID: &requestID, SubjectID: &beneficiary, Details: map[string]any{"submissionId": submissionID, "kind": kind,
+			"approvedBySubmission": bySubmission, "items": details}}); err != nil {
+		return Request{}, err
+	}
+	for _, id := range itemIDs { // after REQUEST_SUBMITTED, so the trail reads in order
+		if err := advance(ctx, tx, now, s.loc, actor.EmployeeID, id); err != nil {
+			return Request{}, err
+		}
+	}
+	reqs, err := loadRequests(ctx, tx, "r.id = $1", requestID)
+	if err != nil {
+		return Request{}, err
+	}
+	return reqs[0], nil
+}
+
+// repeated answers a create whose submission ID was committed concurrently by another
+// transaction (A9), for another beneficiary whose row we did not lock: the original for
+// its submitter, otherwise submission_id_reused.
+func (s *Service) repeated(ctx context.Context, actor auth.Principal, submissionID uuid.UUID, kind string) (Request, bool, error) {
+	prev, err := existing(ctx, s.pool, actor, submissionID, kind)
+	if err != nil {
+		return Request{}, false, err
+	}
+	if prev == nil {
+		return Request{}, false, errSubmissionReused
+	}
+	return *prev, false, nil
 }
 
 type levelCheck struct {
@@ -427,10 +450,11 @@ type levelCheck struct {
 	steps       []string
 }
 
-// checkLevel: the level and its tool are ACTIVE and the beneficiary has no open item for
-// the tool (2026-10-28: one open item per person and tool). The tool row lock holds off a
-// concurrent retirement; the level is read after it (M3: lock first, then read).
-func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID) (levelCheck, error) {
+// checkLevel: the level and its tool are ACTIVE, the beneficiary has no open item for the
+// tool (2026-10-28: one open item per person and tool) and holds no open grant for it but
+// the one being changed, if any (D4). The tool row lock holds off a concurrent retirement;
+// the level is read after it (M3: lock first, then read).
+func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID, changing *uuid.UUID) (levelCheck, error) {
 	var c levelCheck
 	err := tx.QueryRow(ctx, "SELECT tool_id FROM access_levels WHERE id = $1", levelID).Scan(&c.toolID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -448,8 +472,9 @@ func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID) 
 	var owner, infosec, open, held bool
 	if err := tx.QueryRow(ctx, `SELECT name, status, requires_tool_owner, requires_infosec,
 		EXISTS (SELECT 1 FROM request_items WHERE beneficiary_id = $2 AND tool_id = $3 AND status = 'PENDING_APPROVAL'),
-		EXISTS (SELECT 1 FROM grants WHERE employee_id = $2 AND tool_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED'))
-		FROM access_levels WHERE id = $1`, levelID, beneficiary, c.toolID).Scan(&c.level, &levelStatus, &owner, &infosec, &open, &held); err != nil {
+		EXISTS (SELECT 1 FROM grants WHERE employee_id = $2 AND tool_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED')
+		        AND id IS DISTINCT FROM $4)
+		FROM access_levels WHERE id = $1`, levelID, beneficiary, c.toolID, changing).Scan(&c.level, &levelStatus, &owner, &infosec, &open, &held); err != nil {
 		return c, err
 	}
 	if toolStatus != "ACTIVE" || levelStatus != "ACTIVE" {
@@ -466,9 +491,9 @@ func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID) 
 }
 
 // queueEmail writes the one Mock Email Outbox message of a NEW_ACCESS submission whose
-// Manager step went to a person (O2). Nothing when the manager submitted (D3) or the
-// step went to the InfoSec pool. All items route the Manager step alike: same people,
-// same exclusions, in one transaction.
+// Manager step went to a person (O2); never for an EXTENSION or LEVEL_CHANGE. Nothing when
+// the manager submitted (D3) or the step went to the InfoSec pool. All items route the
+// Manager step alike: same people, same exclusions, in one transaction.
 func queueEmail(ctx context.Context, tx pgx.Tx, req Request) error {
 	var recipient *uuid.UUID
 	var tools []string

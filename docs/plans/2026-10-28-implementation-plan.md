@@ -261,7 +261,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Requirement from the PR #4 review (2026-10-28):** an approved request never provisions a retired tool or access level. Retiring a level or tool does not cancel items already pending for it (M4/M5), so the check runs immediately before provisioning: at final approval, with the stricter-wins check, and again when the runner claims a `GRANT` operation (a retirement can land in between). Required regression test: an item approved after its level, or its tool, was retired creates no Mock Tool Service call and no active grant; the same for a retirement between grant creation and the runner's claim. Decided 2026-10-28: such items, or their grants and operations, are `CANCELLED` with the reason and an audit event (DECISIONS.md, Fulfillment methods).
 - **Required tests:** retired tool or level never provisioned (see above); full API scenario; backoff schedule; lease expiry re-claims; success response with wrong state is not success; termination-priority ordering; revoke while grant queued / in flight / failed; stricter-wins adds a step before provisioning.
 - **UI slice:** My Access (status, expiry, give up access), manager's team access with revoke, Exceptions (failed ops, retry).
-- **Status:** committed on `feat/fulfillment` 2026-10-28 (push and PR pending, shared with M7); detailed plan `2026-10-28-m6-api-fulfillment.md`. The O5 follow-up for API items is covered by revoke: a grant never sent to the tool is cancelled without a call; Manual/Vendor withdrawal before the task is claimed remains M7.
+- **Status:** merged 2026-10-28 with M7 as PR #5 (`6e998bf`); detailed plan `2026-10-28-m6-api-fulfillment.md`. The O5 follow-up for API items is covered by revoke: a grant never sent to the tool is cancelled without a call; Manual/Vendor withdrawal before the task is claimed remains M7.
 
 ### M7 — Manual and Vendor fulfillment, direct grants
 
@@ -274,7 +274,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** Manual and Vendor rows of the fulfillment table behave exactly as specified; no Manual/Vendor result is `VERIFIED`.
 - **Required tests:** non-member cannot act; beneficiary cannot fulfil own task; Vendor confirm without ticket rejected; direct grant > 90 days or for self rejected; initiator cannot confirm own direct task; repeated confirm idempotent.
 - **UI slice:** Fulfillment Tasks; direct grant / revoke in Administration.
-- **Status:** implemented on `feat/fulfillment` 2026-10-28, awaiting commit approval (one PR with M6); detailed plan `2026-10-28-m7-manual-vendor-fulfillment.md`. Approved items can be withdrawn until work starts, for API items too (O5).
+- **Status:** merged 2026-10-28 with M6 as PR #5 (`6e998bf`); detailed plan `2026-10-28-m7-manual-vendor-fulfillment.md`. Approved items can be withdrawn until work starts, for API items too (O5).
 - **Follow-ups from the M7 reviews (2026-10-28), not in M7:**
   - Task membership is checked before the task's locks; a membership removal committed during an action does not stop it (narrow race; closing it needs membership changes to lock the group's open tasks).
   - Direct-grant and override notifications are not deduplicated: a person holding two recipient roles gets two.
@@ -296,6 +296,9 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** D4 and D6 hold for all three methods; overlap visible in Exceptions until removal verified/confirmed.
 - **Required tests:** expiry sweep twice → one operation; grant stays active during extension; new-level failure keeps old level; old-level revoke failure shows overlap; second level outside a level change rejected.
 - **UI slice:** extend / change level actions in My Access; overlap in Exceptions.
+- **Status:** implemented on `feat/lifecycle` 2026-10-28, awaiting commit approval; detailed plan `2026-10-28-m8-expiry-extensions-level-changes.md`. Decision 1 was approved as end of day (access valid through its expiry date; direct grants at most today + 89). Found and fixed in merged M6 code: the runner's `record` took the operation's lock before the employee's (the audit event's key lock), which deadlocked with a concurrent revoke; it now locks the employee first.
+- **Review fixes:** the runner's claim no longer deadlocks with a revoke or expiry when it cancels a retired, never-sent grant (it skips the operation while the employee is locked); the expiry re-check handles an Until Revoked extension; a level change's old-level removal is always the system's request.
+- **Follow-ups (not in M8):** `ParseDuration` still requires a requested expiry after today, although a date of today would now be valid for the rest of the day.
 
 ### M9 — Termination and suspension
 
@@ -305,6 +308,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
   1. Suspension (D7): login blocked, token invalidated, `SUSPEND` operations, pending requests cancelled, steps / tasks / reviews released or reassigned; reactivation with re-evaluation and `RESUME`. Includes the Manual / Vendor suspend and resume tasks (moved from M7, decided 2026-10-28).
   2. Termination immediate and scheduled (sweep), cancel / reschedule; overrides pending provisioning and resume; security-revocation exception.
 - **Acceptance criteria:** all D7 effects happen in one transaction per action; terminated employees' removals run first and stay in Exceptions until confirmed.
+- **Requirement from M8 (2026-10-28):** suspension and termination act on every open grant of the employee, not only `ACTIVE` ones. This includes a level change's replacement grant that is still provisioning (`replaces_grant_id` set, not yet `ACTIVE`): an unsent one is cancelled, a sent or failed one is removed. Otherwise it would become `ACTIVE` after the old grant was removed (M8 lets a new level activate after its old grant is revoked or expires). Required test: terminate and suspend during a level change leave no access.
 - **Follow-up from M5 (2026-10-28), assigned:** re-route pending approval steps whose assignee is suspended or terminated (F2 fallback); until then InfoSec reassigns them (D9).
 - **Required tests:** terminate during queued / in-flight grant; scheduled termination after downtime runs once; expiry during suspension; reactivation skips expired / revoked grants; suspended user's token rejected.
 - **UI slice:** suspend / reactivate / terminate / schedule actions on Employees; security revocations in Exceptions.
