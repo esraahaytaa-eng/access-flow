@@ -124,3 +124,25 @@ func assertJSON(t *testing.T, rec *httptest.ResponseRecorder, status int, body s
 		t.Errorf("body = %s; want %s", got, body)
 	}
 }
+
+func TestDecodeJSONRejectsTrailingData(t *testing.T) {
+	cases := []struct {
+		body string
+		ok   bool
+	}{
+		{`{"a":1}`, true},
+		{"{\"a\":1}\n", true},
+		{`{"a":1} junk`, false},
+		{`{"a":1}{"a":2}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.body, func(t *testing.T) {
+			var v struct{ A int }
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			err := platform.DecodeJSON(httptest.NewRecorder(), r, &v)
+			if tc.ok != (err == nil) {
+				t.Fatalf("DecodeJSON(%q) error = %v; want ok %v", tc.body, err, tc.ok)
+			}
+		})
+	}
+}

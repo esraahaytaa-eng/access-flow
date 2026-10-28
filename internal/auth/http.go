@@ -166,6 +166,7 @@ func principalBody(p Principal) map[string]any {
 			"fullName": p.FullName,
 			"roles":    p.Roles,
 		},
+		"adminGroups":        p.AdminGroups,
 		"mustChangePassword": p.MustChangePassword,
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -74,6 +75,9 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		return ValidationError("", "invalid_json")
+	}
+	if dec.Decode(&struct{}{}) != io.EOF { // exactly one JSON value
 		return ValidationError("", "invalid_json")
 	}
 	return nil

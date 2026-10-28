@@ -16,6 +16,7 @@ type Config struct {
 	SecureCookies        bool   // COOKIE_SECURE: set when served over HTTPS (A4)
 	BootstrapAdminEmail  string // the initial Super Admin, created once (A4)
 	BootstrapFile        string // where its one-time password is written
+	SeedPassword         string // SEED_PASSWORD: shared local-only password of seeded users (A4)
 }
 
 // LoadConfig reads the configuration through getenv (os.Getenv in production).
@@ -27,6 +28,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		JWTSecret:            getenv("JWT_SECRET"),
 		BootstrapAdminEmail:  getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapFile:        getenv("BOOTSTRAP_FILE"),
+		SeedPassword:         getenv("SEED_PASSWORD"),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"

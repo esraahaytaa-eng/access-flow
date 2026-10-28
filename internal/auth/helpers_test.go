@@ -3,13 +3,9 @@ package auth
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -113,73 +109,4 @@ func nullable(id uuid.UUID) *uuid.UUID {
 	return &id
 }
 
-// client is a browser-like client: it keeps cookies and sends the CSRF header.
-type client struct {
-	env  *testEnv
-	http *http.Client
-	csrf bool
-}
-
-func (e *testEnv) client() *client {
-	jar, _ := cookiejar.New(nil)
-	return &client{env: e, http: &http.Client{Jar: jar}, csrf: true}
-}
-
-type response struct {
-	status int
-	body   map[string]any
-	header http.Header
-}
-
-func (c *client) do(method, path string, body any) response {
-	c.env.t.Helper()
-	var r io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		r = bytes.NewReader(b)
-	}
-	req, _ := http.NewRequest(method, c.env.srv.URL+path, r)
-	if c.csrf {
-		if v := c.cookie(csrfCookie); v != "" {
-			req.Header.Set("X-CSRF-Token", v)
-		}
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		c.env.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	out := response{status: resp.StatusCode, header: resp.Header}
-	_ = json.NewDecoder(resp.Body).Decode(&out.body)
-	return out
-}
-
-func (c *client) cookie(name string) string {
-	u, _ := url.Parse(c.env.srv.URL)
-	for _, ck := range c.http.Jar.Cookies(u) {
-		if ck.Name == name {
-			return ck.Value
-		}
-	}
-	return ""
-}
-
-func (c *client) setCookie(name, value string) {
-	u, _ := url.Parse(c.env.srv.URL)
-	c.http.Jar.SetCookies(u, []*http.Cookie{{Name: name, Value: value, Path: "/"}})
-}
-
-func (c *client) login(email, password string) response {
-	c.env.t.Helper()
-	return c.do(http.MethodPost, "/api/v1/auth/login", map[string]string{"email": email, "password": password})
-}
-
-func requireStatus(t *testing.T, r response, status int, code string) {
-	t.Helper()
-	if r.status != status {
-		t.Fatalf("status = %d (body %v); want %d", r.status, r.body, status)
-	}
-	if code != "" && r.body["error"] != code {
-		t.Fatalf("error = %v; want %q", r.body["error"], code)
-	}
-}
+func (e *testEnv) client() *testutil.Client { return testutil.NewClient(e.t, e.srv) }

@@ -2,6 +2,7 @@ package platform_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -84,5 +85,39 @@ func TestAuditEventsReferenceRealEmployees(t *testing.T) {
 			_, err := db.App.Exec(ctx, "INSERT INTO audit_events ("+column+", action, entity_type) VALUES ($1, 'X', 'x')", uuid.New())
 			testutil.RequireSQLState(t, err, "23503") // foreign_key_violation
 		})
+	}
+}
+
+// The CHECK mirrors auth.NormalizeEmail, so no code path can store an address the rule rejects.
+func TestEmployeesEmailCheckMatchesTheGoRule(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.NewDB(t)
+	for _, email := range []string{"admİn@x.com", "ayşe@x.com", "a\tb@x.com", "a b@x.com", "nobody", "a@b@c",
+		strings.Repeat("a", 64) + "@" + strings.Repeat("b", 186) + ".com"} {
+		t.Run(email, func(t *testing.T) {
+			_, err := db.App.Exec(ctx, "INSERT INTO employees (email, full_name) VALUES ($1, 'X')", email)
+			testutil.RequireSQLState(t, err, "23514")
+		})
+	}
+}
+
+func TestAdminGroupSchema(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.NewDB(t)
+	emp := testutil.CreateEmployee(t, db, testutil.EmployeeSpec{})
+	var group uuid.UUID
+	if err := db.App.QueryRow(ctx, "INSERT INTO admin_groups (name) VALUES ('Finance IT') RETURNING id").Scan(&group); err != nil {
+		t.Fatal(err)
+	}
+	_, err := db.App.Exec(ctx, "INSERT INTO admin_groups (name) VALUES ('finance it')")
+	testutil.RequireSQLState(t, err, "23505") // names are unique regardless of case
+	if _, err := db.App.Exec(ctx, "INSERT INTO admin_group_memberships (group_id, employee_id) VALUES ($1, $2)", group, emp.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.App.Exec(ctx, "INSERT INTO admin_group_memberships (group_id, employee_id) VALUES ($1, $2)", group, emp.ID)
+	testutil.RequireSQLState(t, err, "23505") // one open membership per pair
+	for _, table := range []string{"admin_groups", "admin_group_memberships"} {
+		_, err := db.App.Exec(ctx, "DELETE FROM "+table)
+		testutil.RequireSQLState(t, err, "42501")
 	}
 }

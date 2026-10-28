@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,10 +23,11 @@ import (
 // existed (A4, D2). The temporary password goes to the bootstrap file, never to the
 // log, and does not expire; it is valid until the first password change (F4).
 func (s *Service) Bootstrap(ctx context.Context, email string) error {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return errors.New("bootstrap: the initial Super Admin email is empty")
+	normalized, err := NormalizeEmail(email)
+	if err != nil {
+		return fmt.Errorf("BOOTSTRAP_ADMIN_EMAIL %q is not a valid email address", email)
 	}
+	email = normalized
 	password, err := NewTemporaryPassword()
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -26,6 +27,28 @@ func ValidatePassword(pw string) error {
 		return platform.ValidationError("newPassword", "password_length")
 	}
 	return nil
+}
+
+// MaxEmailLength is the longest valid address.
+const MaxEmailLength = 254
+
+var errInvalidEmail = platform.ValidationError("email", "invalid_email")
+
+// NormalizeEmail trims and lowercases an address and checks it: printable ASCII without
+// spaces, one "@" between non-empty parts, at most 254 characters. ASCII only, so Go and
+// PostgreSQL lowercase it identically; the employees CHECK enforces the same rule.
+func NormalizeEmail(s string) (string, error) {
+	s = strings.Trim(s, " \t\r\n\v\f")
+	at := strings.IndexByte(s, '@')
+	if len(s) > MaxEmailLength || at <= 0 || at == len(s)-1 || strings.Count(s, "@") != 1 {
+		return "", errInvalidEmail
+	}
+	for i := 0; i < len(s); i++ { // before lowercasing: Go maps some non-ASCII letters to ASCII
+		if s[i] < '!' || s[i] > '~' {
+			return "", errInvalidEmail
+		}
+	}
+	return strings.ToLower(s), nil
 }
 
 // RegisterFailure returns the new failure count and, on the 5th consecutive failure,

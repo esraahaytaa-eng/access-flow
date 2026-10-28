@@ -27,6 +27,8 @@ func TestLoadConfig(t *testing.T) {
 			want: changed(func(c *platform.Config) { c.JWTSecret = "s3cret" })},
 		{name: "secure cookies", env: with(full, "COOKIE_SECURE", "true"),
 			want: changed(func(c *platform.Config) { c.SecureCookies = true })},
+		{name: "seed password from the environment", env: with(full, "SEED_PASSWORD", "local-demo-password"),
+			want: changed(func(c *platform.Config) { c.SeedPassword = "local-demo-password" })},
 		{name: "COOKIE_SECURE must be a boolean", env: with(full, "COOKIE_SECURE", "yes please"), wantErr: true},
 		{name: "bootstrap admin and file from the environment",
 			env: with(with(full, "BOOTSTRAP_ADMIN_EMAIL", "root@example.com"), "BOOTSTRAP_FILE", "/data/admin.txt"),

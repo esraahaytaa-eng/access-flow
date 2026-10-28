@@ -176,27 +176,35 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** bootstrap Super Admin logs in with the file password, must change it, file is removed; all A4 rules hold; logins, failures, lockouts and password changes are audited; CI green.
 - **Required tests:** non-HS256 token rejected; expired token rejected; re-issue keeps login time and respects 12 h; logout invalidates a copied token; suspended/terminated user denied with valid token; temporary-password session allows only password change, logout and `me`; employee temporary password expires after 72 h, the bootstrap one does not; 5 failures → 15-minute lock, concurrent failures counted correctly; CSRF missing/mismatched and cross-origin requests rejected; identical response for unknown email, wrong password, locked and inactive accounts; bootstrap password never appears in logs; runtime user cannot delete employees, credentials or roles.
 - **UI slice:** login, forced password change, logout (in U1, English and Turkish).
-- **Status:** implemented 2026-10-28 on `feat/identity` (shares a PR with M3).
+- **Status:** implemented 2026-10-28 on `feat/identity`, commit `21da9c8` (shares a PR with M3).
 - **Review follow-ups (2026-10-28), assigned:**
-  - M3: employee email validation, one rule shared by Go and PostgreSQL (ASCII only, at most 254 characters, trimmed and lowercased identically); `BOOTSTRAP_ADMIN_EMAIL` is checked with the same rule at startup. Today Go's `TrimSpace`/`ToLower` and PostgreSQL's `btrim`/`lower` differ on tabs and some non-ASCII letters (Turkish İ), so such an email fails the CHECK.
-  - M3: an employee temporary password that expires during a session: password change answers a distinct `temporary_password_expired` code and does not count toward lockout (today: `invalid_current_password`, counted).
-  - M3: `platform.DecodeJSON` rejects trailing data after the JSON body (today `{...} junk` is accepted).
+  - M3 (done 2026-10-28): employee email validation, one rule shared by Go and PostgreSQL (ASCII only, at most 254 characters, trimmed and lowercased identically); `BOOTSTRAP_ADMIN_EMAIL` is checked with the same rule at startup. Today Go's `TrimSpace`/`ToLower` and PostgreSQL's `btrim`/`lower` differ on tabs and some non-ASCII letters (Turkish İ), so such an email fails the CHECK.
+  - M3 (done 2026-10-28): an employee temporary password that expires during a session: password change answers a distinct `temporary_password_expired` code and does not count toward lockout (today: `invalid_current_password`, counted).
+  - M3 (done 2026-10-28): `platform.DecodeJSON` rejects trailing data after the JSON body (today `{...} junk` is accepted).
   - U1: logout or any request with an expired session answers 401 without clearing the cookies; the UI treats 401 as signed out and drops its session state.
   - Accepted, documented in README known limitations: no login rate limiting beyond the A4 lockout (so anyone who knows an email can keep that account locked); one app instance only (bootstrap is safe across processes through an advisory lock, but multi-instance operation is not tested).
 
 ### M3 — Employees, roles and development fixture
 
+- **Detailed plan:** [`2026-10-28-m3-employees-roles.md`](2026-10-28-m3-employees-roles.md), approved 2026-10-28 (HR Manager and Super Admin administer employees; rules recorded in F4, D2 and D12).
+- **Status:** implemented 2026-10-28 on `feat/identity`, pending commit approval.
+- **Review follow-ups (2026-10-28), assigned:**
+  - M9: `people.checkManager` reads the manager's status without a lock; once termination exists, take `FOR SHARE` on the manager (or lock both rows) so an employee cannot be given a manager who is being terminated.
+  - Open question for the user before M5 (manager approvals): may HR Managers and Super Admins change their **own** manager? If so, an HR Manager could choose who approves their own requests. Today no approved rule forbids it.
+  - Open question for the user before M14 (D2): a Super Admin may reset an InfoSec member's password (F4) and sign in as them, so with one Super Admin the "different InfoSec member authorizes" step of D2 can be performed by one person. The reset is audited and ends the target's sessions; M14 should decide on a control (for example: an authorizer whose password was last reset by the proposer cannot authorize).
+  - Declined (2026-10-28): `ListEmployees` returns full rows and the handler reduces them to the basic view; its only other caller is the dev fixture as the system. Revisit if another package needs the directory.
+
 - **Objective:** HR creates and edits employees; Super Admin manages roles and admin groups; password resets; a small dev fixture for manual testing.
 - **Dependencies:** M2.
 - **Tasks:**
-  1. HR: create employee (temporary password shown once), edit manager / department / job title (job-title-only change → audit only; transfer effects come in M10).
+  1. HR Manager or Super Admin (F4, 2026-10-28): create employee (temporary password shown once), edit manager / department / job title (job-title-only change → audit only; transfer effects come in M10).
   2. Super Admin: assign/remove roles (InfoSec, HR Manager, Auditor) and admin-group memberships as intervals, audited (D2 general rule). Includes the `admin_groups` and membership tables and loading memberships in the auth middleware (moved from M2, approved 2026-10-28).
   3. Password reset; privileged targets need a different Super Admin (F4).
   4. Employee directory API with role-based field visibility.
   5. `internal/devfixture`: a handful of employees, two InfoSec members, through real services; idempotent; seed-originated marker.
   6. M2 review follow-ups assigned here (see M2): shared email validation rule, `temporary_password_expired`, `DecodeJSON` trailing data.
 - **Acceptance criteria:** HR and Super Admin flows work and are audited; non-HR cannot create employees; role removal takes effect on the next request.
-- **Required tests:** permission matrix per endpoint (Auditor role alone cannot approve, fulfil, administer or modify access); self privileged reset rejected; manager cycle rejected; dev fixture idempotent; invalid emails (non-ASCII, over 254 characters, tabs) rejected with a validation code; expired temporary password gives `temporary_password_expired` without a lockout count; trailing JSON data rejected.
+- **Required tests:** permission matrix per endpoint, covering plain employee, HR Manager, InfoSec, Auditor and Super Admin, including privileged password-reset restrictions (Auditor role alone cannot approve, fulfil, administer or modify access); self privileged reset rejected; manager cycle rejected; dev fixture idempotent; invalid emails (non-ASCII, over 254 characters, tabs) rejected with a validation code; expired temporary password gives `temporary_password_expired` without a lockout count; trailing JSON data rejected.
 - **UI slice:** Employees (list, create, edit), Administration (roles, groups, password reset).
 
 ### M4 — Catalog and Mock Tool Service

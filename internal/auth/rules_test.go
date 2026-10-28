@@ -139,3 +139,41 @@ func TestCredentialUsable(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeEmail(t *testing.T) {
+	// 64 + 1 + 189 = 254 characters, the longest valid address.
+	longest := strings.Repeat("a", 64) + "@" + strings.Repeat("b", 185) + ".com"
+	cases := []struct {
+		in, want string
+		ok       bool
+	}{
+		{" Admin@Example.COM ", "admin@example.com", true},
+		{"\tuser@example.com\n", "user@example.com", true},
+		{longest, longest, true},
+		{longest + "x", "", false},
+		{"", "", false},
+		{"a", "", false},
+		{"a@", "", false},
+		{"@b", "", false},
+		{"a@b@c", "", false},
+		{"a b@c.d", "", false},
+		{"a\tb@c.d", "", false},
+		{"admİn@x.com", "", false}, // Turkish dotted capital I: Go and PostgreSQL lowercase it differently
+		{"ayşe@x.com", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := NormalizeEmail(tc.in)
+			if !tc.ok {
+				var e *platform.Error
+				if !errors.As(err, &e) || e.Code != "invalid_email" || e.Field != "email" {
+					t.Fatalf("NormalizeEmail(%q) = %q, %v; want invalid_email on field email", tc.in, got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("NormalizeEmail(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+			}
+		})
+	}
+}

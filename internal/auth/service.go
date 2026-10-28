@@ -19,10 +19,8 @@ var (
 	errInvalidCredentials     = platform.NewError(401, "invalid_credentials")
 	errInvalidCurrentPassword = platform.ValidationError("currentPassword", "invalid_current_password")
 	errPasswordUnchanged      = platform.ValidationError("newPassword", "password_unchanged")
+	errTemporaryExpired       = platform.ValidationError("currentPassword", "temporary_password_expired")
 )
-
-// maxEmailLength is the longest valid address; longer submitted emails are cut in the audit log.
-const maxEmailLength = 254
 
 // Options configures the Service.
 type Options struct {
@@ -61,8 +59,20 @@ type Principal struct {
 	Email              string
 	FullName           string
 	Roles              []string
+	AdminGroups        []Group
 	MustChangePassword bool
 }
+
+// Group is an admin group the employee currently belongs to.
+type Group struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// OpenGroupsJSON selects the open admin groups of employee e as a JSON array, ordered by name.
+const OpenGroupsJSON = `COALESCE((SELECT json_agg(json_build_object('id', g.id, 'name', g.name) ORDER BY lower(g.name))
+	FROM admin_group_memberships m JOIN admin_groups g ON g.id = m.group_id
+	WHERE m.employee_id = e.id AND m.valid_to IS NULL), '[]')`
 
 // HasRole reports whether the principal currently holds role.
 func (p Principal) HasRole(role string) bool {
@@ -85,6 +95,16 @@ func (s *Service) hashSlot(ctx context.Context) (release func(), err error) {
 	}
 }
 
+// Hash hashes a password under the hash-slot limit; for other packages that set passwords.
+func (s *Service) Hash(ctx context.Context, pw string) (string, error) {
+	release, err := s.hashSlot(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return HashPassword(pw)
+}
+
 // verify checks pw against stored; a corrupted hash counts as a wrong password, so the
 // response stays identical, and is logged.
 func (s *Service) verify(id uuid.UUID, stored, pw string) bool {
@@ -98,7 +118,13 @@ func (s *Service) verify(id uuid.UUID, stored, pw string) bool {
 // login checks the password under a row lock on the employee and records every outcome.
 // Failed attempts are committed (they are audit evidence); the caller gets one generic error.
 func (s *Service) login(ctx context.Context, email, password string) (Session, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
+	if normalized, err := NormalizeEmail(email); err == nil {
+		email = normalized
+	} else {
+		// Not lowercased: Go folds some non-ASCII letters to ASCII (Kelvin sign → "k"), which
+		// could match a real address. Stored emails are lowercase ASCII, so this matches none.
+		email = strings.TrimSpace(email)
+	}
 	release, err := s.hashSlot(ctx)
 	if err != nil {
 		return Session{}, err
@@ -121,8 +147,8 @@ func (s *Service) login(ctx context.Context, email, password string) (Session, e
 			FOR UPDATE OF e`, email).Scan(&id, &status, &version, &failed, &lockedUntil, &hash, &expAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_, _ = VerifyPassword(s.dummyHash, password)
-			if r := []rune(email); len(r) > maxEmailLength {
-				email = string(r[:maxEmailLength])
+			if r := []rune(email); len(r) > MaxEmailLength {
+				email = string(r[:MaxEmailLength])
 			}
 			return audit.Record(ctx, tx, audit.Event{Action: "LOGIN_FAILED", Entity: "employee",
 				Details: map[string]any{"email": email, "reason": "unknown_email"}})
@@ -200,9 +226,10 @@ func (s *Service) loadPrincipal(ctx context.Context, session Session) (Principal
 	var temporary *bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT e.email, e.full_name, e.status, e.token_version, c.is_temporary,
-		       ARRAY(SELECT r.role FROM role_assignments r WHERE r.employee_id = e.id AND r.valid_to IS NULL ORDER BY r.role)
+		       ARRAY(SELECT r.role FROM role_assignments r WHERE r.employee_id = e.id AND r.valid_to IS NULL ORDER BY r.role),
+		       `+OpenGroupsJSON+`
 		FROM employees e LEFT JOIN password_credentials c ON c.employee_id = e.id
-		WHERE e.id = $1`, session.EmployeeID).Scan(&p.Email, &p.FullName, &status, &version, &temporary, &p.Roles)
+		WHERE e.id = $1`, session.EmployeeID).Scan(&p.Email, &p.FullName, &status, &version, &temporary, &p.Roles, &p.AdminGroups)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, platform.ErrUnauthorized
 	}
@@ -247,7 +274,7 @@ func (s *Service) changePassword(ctx context.Context, p Principal, current, next
 		return Session{}, err
 	}
 	var session Session
-	changed := false
+	changed, expired := false, false
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		id := p.EmployeeID
 		var (
@@ -270,7 +297,14 @@ func (s *Service) changePassword(ctx context.Context, p Principal, current, next
 		}
 		match := s.verify(id, stored, current)
 		event := audit.Event{ActorID: &id, Entity: "employee", EntityID: &id, SubjectID: &id}
-		if locked := IsLocked(lockedUntil, now); locked || !match || hash == nil || !CredentialUsable(expAt, now) {
+		locked := IsLocked(lockedUntil, now)
+		if !locked && match && hash != nil && !CredentialUsable(expAt, now) {
+			// The right password, but too late: not a guess, so it does not count toward lockout.
+			expired = true
+			event.Action, event.Details = "PASSWORD_CHANGE_FAILED", map[string]any{"reason": "temporary_password_expired"}
+			return audit.Record(ctx, tx, event)
+		}
+		if locked || !match || hash == nil {
 			if !locked {
 				if err := s.registerFailure(ctx, tx, id, failed, now); err != nil {
 					return err
@@ -299,6 +333,9 @@ func (s *Service) changePassword(ctx context.Context, p Principal, current, next
 	})
 	if err != nil {
 		return Session{}, err
+	}
+	if expired {
+		return Session{}, errTemporaryExpired
 	}
 	if !changed {
 		return Session{}, errInvalidCurrentPassword

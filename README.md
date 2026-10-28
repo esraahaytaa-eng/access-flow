@@ -3,7 +3,7 @@
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
 
-> Status: authentication API (milestone M2). Sign-in, sessions, password change and the initial Super Admin work through the API; there is no sign-in screen yet (it arrives with the design). Business features arrive in later milestones.
+> Status: identity API (milestones M2–M3). Sign-in, sessions, password change, the initial Super Admin, employees, roles and admin groups work through the API; there are no screens yet (they arrive with the design). Access workflows arrive in later milestones.
 
 ## Run
 
@@ -33,6 +33,17 @@ All optional:
 | `COOKIE_SECURE` | `false` | set `true` when served over HTTPS |
 | `BOOTSTRAP_ADMIN_EMAIL` | `admin@accessflow.local` | the initial Super Admin |
 | `BOOTSTRAP_FILE` | `/var/lib/accessflow/bootstrap-admin.txt` | where its one-time password is kept (the `appdata` volume) |
+| `SEED_PASSWORD` | `accessflow-local-demo` (set in `compose.yaml`) | shared password of the development fixture users; local only |
+
+### Development fixture
+
+For trying the API by hand, create a few employees (HR Manager, two InfoSec members, an Auditor, a manager with two reports):
+
+```bash
+docker compose exec app /accessflow dev-fixture
+```
+
+They are `hr@`, `infosec1@`, `infosec2@`, `auditor@`, `manager@`, `dev1@` and `dev2@accessflow.local`, all with the `SEED_PASSWORD` value. The command never runs on its own, can be run again safely (it skips existing employees and leaves them as they are) and marks what it creates as seeded (DECISIONS.md D12).
 
 ## API
 
@@ -44,6 +55,15 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `GET /api/v1/auth/me` | the signed-in employee |
 | `POST /api/v1/auth/password` | `{currentPassword, newPassword}` (12–128 characters, different from the current one); signs out the employee's other sessions |
 | `POST /api/v1/auth/logout` | ends every session of the employee |
+| `GET /api/v1/employees` | the directory: every employee with status, roles, groups and version for Super Admin, HR Manager, InfoSec and Auditor; otherwise active employees with id, email, name, department, job title and manager |
+| `POST /api/v1/employees` | HR Manager or Super Admin: `{email, fullName, department?, jobTitle?, managerId?}` → `201 {employee, temporaryPassword}`; the password is shown once and expires after 72 hours |
+| `PUT /api/v1/employees/{id}` | HR Manager or Super Admin: `{version, managerId, department, jobTitle}`, all four required (null clears; a missing one is `400 field_required`); `409 version_conflict` on a stale version; manager cycles are rejected |
+| `POST /api/v1/employees/{id}/password-reset` | HR Manager or Super Admin → `{temporaryPassword}`; accounts holding Super Admin or InfoSec need a Super Admin; never your own |
+| `POST /api/v1/employees/{id}/roles` · `DELETE …/roles/{role}` | Super Admin: assign or remove `INFOSEC`, `HR_MANAGER`, `AUDITOR`; never your own |
+| `GET /api/v1/admin-groups` · `POST /api/v1/admin-groups` | list (members for the directory roles); create `{name}` (Super Admin) |
+| `POST /api/v1/admin-groups/{id}/members` · `DELETE …/members/{employeeId}` | Super Admin: add `{employeeId}` or remove a member; never yourself |
+
+Only active employees receive roles, group memberships or password resets. Removing a role or membership closes it; nothing is deleted. Every change is in the audit log. In this milestone a department or manager change is only recorded; the transfer workflow (DECISIONS.md D5) comes later.
 
 Sessions last 30 minutes, are renewed while in use, and end after at most 12 hours. Role, status and logout changes apply on the next request.
 
@@ -74,13 +94,15 @@ This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory P
 ## Layout
 
 ```
-cmd/accessflow      server (and `healthcheck`, `bootstrap-password` commands)
+cmd/accessflow      server (and `healthcheck`, `bootstrap-password`, `dev-fixture` commands)
 cmd/mocktools       Mock Tool Service
 internal/platform   config, DB pool and transactions, migrations, HTTP helpers
 internal/audit      append-only audit writer
 internal/auth       sign-in, sessions, passwords, initial Super Admin
+internal/people     employees, roles, admin groups
+internal/devfixture development employees (opt-in)
 internal/webui      embedded web build and SPA fallback
-internal/testutil   test databases
+internal/testutil   test databases, fixtures, API test client
 web/                React + TypeScript app (placeholder until the design arrives)
 deploy/postgres     database and user setup, run on first start
 ```

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
 var passwordLine = regexp.MustCompile(`(?m)^password: (\S+)$`)
@@ -102,20 +104,20 @@ func TestBootstrapAdminMustChangeThePasswordAndTheFileIsDeleted(t *testing.T) {
 	password := bootstrapPassword(t, env.svc.bootstrapFile)
 
 	c := env.client()
-	r := c.login("admin@accessflow.local", password)
-	requireStatus(t, r, http.StatusOK, "")
-	if r.body["mustChangePassword"] != true {
-		t.Fatalf("mustChangePassword = %v; want true", r.body["mustChangePassword"])
+	r := c.Login("admin@accessflow.local", password)
+	testutil.RequireStatus(t, r, http.StatusOK, "")
+	if r.Body["mustChangePassword"] != true {
+		t.Fatalf("mustChangePassword = %v; want true", r.Body["mustChangePassword"])
 	}
-	requireStatus(t, c.do(http.MethodGet, "/api/v1/probe/admin", nil), http.StatusForbidden, "password_change_required")
+	testutil.RequireStatus(t, c.Do(http.MethodGet, "/api/v1/probe/admin", nil), http.StatusForbidden, "password_change_required")
 
-	requireStatus(t, c.do(http.MethodPost, "/api/v1/auth/password",
+	testutil.RequireStatus(t, c.Do(http.MethodPost, "/api/v1/auth/password",
 		map[string]string{"currentPassword": password, "newPassword": "the admin's own password"}), http.StatusOK, "")
 	if _, err := os.Stat(env.svc.bootstrapFile); !os.IsNotExist(err) {
 		t.Fatalf("bootstrap file still exists after the change (%v)", err)
 	}
-	requireStatus(t, c.do(http.MethodGet, "/api/v1/probe/admin", nil), http.StatusOK, "")
-	requireStatus(t, env.client().login("admin@accessflow.local", password), http.StatusUnauthorized, "invalid_credentials")
+	testutil.RequireStatus(t, c.Do(http.MethodGet, "/api/v1/probe/admin", nil), http.StatusOK, "")
+	testutil.RequireStatus(t, env.client().Login("admin@accessflow.local", password), http.StatusUnauthorized, "invalid_credentials")
 }
 
 func TestStaleBootstrapFileIsRemovedAtStartup(t *testing.T) {
@@ -181,5 +183,18 @@ func TestLoadSecret(t *testing.T) {
 	_ = env.db.App.QueryRow(ctx, "SELECT count(*) FROM audit_events WHERE action = 'JWT_SECRET_GENERATED'").Scan(&events)
 	if events != 1 {
 		t.Fatalf("JWT_SECRET_GENERATED events = %d; want 1", events)
+	}
+}
+
+func TestBootstrapRejectsAnInvalidEmail(t *testing.T) {
+	env := newEnv(t)
+	err := env.svc.Bootstrap(context.Background(), "admİn@accessflow.local")
+	if err == nil || !strings.Contains(err.Error(), "BOOTSTRAP_ADMIN_EMAIL") {
+		t.Fatalf("err = %v; want an error naming BOOTSTRAP_ADMIN_EMAIL", err)
+	}
+	var employees int
+	_ = env.db.App.QueryRow(context.Background(), "SELECT count(*) FROM employees").Scan(&employees)
+	if employees != 0 {
+		t.Fatalf("employees = %d; want 0", employees)
 	}
 }

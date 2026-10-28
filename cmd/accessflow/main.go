@@ -18,6 +18,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/devfixture"
+	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 	"github.com/esraahaytaa-eng/access-flow/internal/webui"
 )
@@ -67,6 +69,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(args) > 0 && args[0] == "dev-fixture" {
+		return runDevFixture(ctx, people.NewService(pool, svc), cfg.SeedPassword, os.Stdout)
+	}
 	if err := svc.Bootstrap(ctx, cfg.BootstrapAdminEmail); err != nil {
 		return err
 	}
@@ -91,16 +96,25 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
 		platform.WriteError(w, r, platform.NewError(http.StatusForbidden, "cross_origin_request"))
 	}))
 
+	peopleSvc := people.NewService(pool, svc)
+
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
 		r.Use(crossOrigin.Handler)
-		r.Method(http.MethodGet, "/v1/health", platform.HealthHandler(pool.Ping))
-		r.Mount("/v1/auth", svc.Routes())
+		// Set before the routes below, so the /v1 subrouter inherits the JSON answers.
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			platform.WriteError(w, r, platform.ErrNotFound)
 		})
 		r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 			platform.WriteError(w, r, platform.NewError(http.StatusMethodNotAllowed, "method_not_allowed"))
+		})
+		r.Route("/v1", func(r chi.Router) {
+			r.Method(http.MethodGet, "/health", platform.HealthHandler(pool.Ping))
+			r.Mount("/auth", svc.Routes())
+			r.Group(func(r chi.Router) {
+				r.Use(svc.RequireSession)
+				peopleSvc.Register(r)
+			})
 		})
 	})
 	r.Handle("/*", webui.Handler(dist))
@@ -119,4 +133,17 @@ func printBootstrapPassword(file string, out io.Writer) error {
 	}
 	_, err = out.Write(data)
 	return err
+}
+
+// runDevFixture creates the development employees on request (never at startup).
+func runDevFixture(ctx context.Context, svc *people.Service, password string, out io.Writer) error {
+	created, err := devfixture.Run(ctx, svc, password)
+	for _, email := range created {
+		fmt.Fprintln(out, "created", email)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%d employees created; all sign in with the SEED_PASSWORD value (local only)\n", len(created))
+	return nil
 }

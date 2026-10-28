@@ -3,6 +3,8 @@ package auth
 import (
 	"strings"
 	"testing"
+
+	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
 func TestHashAndVerifyPassword(t *testing.T) {
@@ -66,5 +68,13 @@ func TestNewTemporaryPassword(t *testing.T) {
 	}
 	if len(seen) != 50 {
 		t.Fatalf("got %d distinct passwords out of 50", len(seen))
+	}
+}
+
+// testutil cannot import auth (cycle), so it carries a precomputed hash; this keeps it honest.
+func TestTestutilPasswordHashMatches(t *testing.T) {
+	ok, err := VerifyPassword(testutil.PasswordHash, testutil.Password)
+	if err != nil || !ok {
+		t.Fatalf("testutil.PasswordHash does not verify testutil.Password: %v %v", ok, err)
 	}
 }
