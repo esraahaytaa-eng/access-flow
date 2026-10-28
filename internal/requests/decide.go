@@ -109,8 +109,8 @@ func candidate(ctx context.Context, tx pgx.Tx, id *uuid.UUID) (*Candidate, *uuid
 }
 
 // advance opens the item's next waiting step, routed now (F2), or approves the item when
-// every step is done. The caller holds the item lock.
-func advance(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.UUID) error {
+// every step is done. The caller holds the item lock; loc is the company timezone.
+func advance(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location, actor, itemID uuid.UUID) error {
 	it, err := lockItem(ctx, tx, itemID)
 	if err != nil {
 		return err
@@ -123,7 +123,7 @@ func advance(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.U
 		}
 	}
 	if next == nil {
-		return finish(ctx, tx, now, actor, it)
+		return finish(ctx, tx, now, loc, actor, it)
 	}
 	var route Route
 	switch next.Type {
@@ -160,11 +160,13 @@ func advance(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.U
 	return err
 }
 
-// finish runs when every step is decided. A retired level or tool is cancelled first,
-// without reaching the tool or asking anyone else; then steps the level now requires are
-// added and routed (F2: stricter wins); otherwise the item is approved and its grant
-// created in this transaction.
-func finish(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, it itemState) error {
+// finish runs when every step is decided. An item that can no longer apply is cancelled
+// first, without reaching the tool or asking anyone else: a retired level or tool, an
+// expiry date already passed (D6), or an extension or level change of access that has
+// ended. Then steps the level now requires are added and routed (F2: stricter wins);
+// otherwise the item is approved and applied in this transaction: a new grant, or for an
+// EXTENSION the grant's new expiry date.
+func finish(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location, actor uuid.UUID, it itemState) error {
 	// The beneficiary first, as Submit does (A9); CreateGrant's lock is then a re-lock.
 	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", it.beneficiary); err != nil {
 		return err
@@ -177,14 +179,27 @@ func finish(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, it i
 	if _, err := tx.Exec(ctx, "SELECT 1 FROM tools WHERE id = $1 FOR SHARE", toolID); err != nil {
 		return err
 	}
-	var toolStatus, levelStatus string
-	var owner, infosec bool
-	if err := tx.QueryRow(ctx, `SELECT t.status, l.status, l.requires_tool_owner, l.requires_infosec
-		FROM request_items i JOIN tools t ON t.id = i.tool_id JOIN access_levels l ON l.id = i.access_level_id
-		WHERE i.id = $1`, it.id).Scan(&toolStatus, &levelStatus, &owner, &infosec); err != nil {
+	// The grant a change acts on moves only under the beneficiary's lock, held here.
+	var toolStatus, levelStatus, kind string
+	var owner, infosec, expired, ended bool
+	var grant *uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT t.status, l.status, l.requires_tool_owner, l.requires_infosec, r.kind, i.grant_id,
+		       coalesce(i.expires_on < $2, false),
+		       i.grant_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.id = i.grant_id
+		           AND g.status = 'ACTIVE' AND (g.expires_on IS NULL OR g.expires_on >= $2))
+		FROM request_items i JOIN requests r ON r.id = i.request_id JOIN tools t ON t.id = i.tool_id
+		JOIN access_levels l ON l.id = i.access_level_id
+		WHERE i.id = $1`, it.id, access.Today(now, loc)).Scan(&toolStatus, &levelStatus, &owner, &infosec, &kind, &grant, &expired, &ended); err != nil {
 		return err
 	}
-	if reason := access.RetiredReason(toolStatus, levelStatus); reason != "" {
+	reason := access.RetiredReason(toolStatus, levelStatus)
+	switch {
+	case expired: // access lasts through its date: a passed date gives nothing
+		reason = "expired before approval"
+	case ended:
+		reason = "the access has ended"
+	}
+	if reason != "" {
 		return closeItem(ctx, tx, now, actor, it, "CANCELLED", reason)
 	}
 	if added := policySteps(catalog.Steps(owner, infosec), it.steps); len(added) > 0 {
@@ -199,10 +214,13 @@ func finish(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, it i
 				return err
 			}
 		}
-		return advance(ctx, tx, now, actor, it.id)
+		return advance(ctx, tx, now, loc, actor, it.id)
 	}
 	if err := closeItem(ctx, tx, now, actor, it, "APPROVED", ""); err != nil {
 		return err
+	}
+	if kind == "EXTENSION" {
+		return access.Extend(ctx, tx, actor, *grant, it.id)
 	}
 	_, err := access.CreateGrant(ctx, tx, now, actor, it.id)
 	return err
@@ -275,7 +293,7 @@ func (s *Service) decide(ctx context.Context, actor auth.Principal, stepID uuid.
 		if to == "REJECTED" {
 			err = closeItem(ctx, tx, now, actor.EmployeeID, it, "REJECTED", reason)
 		} else {
-			err = advance(ctx, tx, now, actor.EmployeeID, it.id)
+			err = advance(ctx, tx, now, s.loc, actor.EmployeeID, it.id)
 		}
 		if err != nil {
 			return err
@@ -450,7 +468,7 @@ func (s *Service) Override(ctx context.Context, actor auth.Principal, stepID uui
 		if err := notifyOverride(ctx, tx, it, step, details); err != nil {
 			return err
 		}
-		if err := advance(ctx, tx, now, actor.EmployeeID, it.id); err != nil {
+		if err := advance(ctx, tx, now, s.loc, actor.EmployeeID, it.id); err != nil {
 			return err
 		}
 		out, err = loadItem(ctx, tx, it.id)
@@ -546,11 +564,12 @@ func (s *Service) Inbox(ctx context.Context, actor auth.Principal) ([]Approval, 
 		actor.EmployeeID)
 }
 
-// Exceptions are what needs a person (O3, F2): FAILED operations and pool steps nobody may
-// decide. Read-only for Auditors (O7).
+// Exceptions are what needs a person (O3, F2, D4): FAILED operations, pool steps nobody may
+// decide and level changes whose old level is still held. Read-only for Auditors (O7).
 type Exceptions struct {
 	FailedOperations []access.Operation `json:"failedOperations"`
 	UnroutableSteps  []Approval         `json:"unroutableSteps"`
+	Overlaps         []access.Overlap   `json:"overlaps"`
 }
 
 func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Exceptions, error) {
@@ -562,7 +581,11 @@ func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Excepti
 		return Exceptions{}, err
 	}
 	steps, err := s.approvals(ctx, "st.pool IS NOT NULL AND NOT "+fmt.Sprintf(eligibleInfoSec, "true"))
-	return Exceptions{FailedOperations: ops, UnroutableSteps: steps}, err
+	if err != nil {
+		return Exceptions{}, err
+	}
+	overlaps, err := access.Overlaps(ctx, s.pool)
+	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps}, err
 }
 
 // Open lists every open step, unroutable ones marked, for InfoSec and Super Admins, who

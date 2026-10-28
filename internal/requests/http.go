@@ -26,6 +26,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Get("/email-outbox", s.handleOutbox)
 	r.Get("/exceptions", s.handleExceptions)
 	r.Post("/direct-grants", s.handleDirectGrant)
+	r.Post("/grants/{id}/change", s.handleChange)
 }
 
 func actor(r *http.Request) auth.Principal {

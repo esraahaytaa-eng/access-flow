@@ -174,7 +174,10 @@ func TestDirectExpiry(t *testing.T) {
 		code string
 	}{
 		{"tomorrow", date("2026-03-03"), "2026-03-03", ""},
-		{"90 days from today in the company timezone", date("2026-05-31"), "2026-05-31", ""},
+		// End of day (2026-10-28): access lasts through the date, so it ends at 00:00 the next day,
+		// which may not be later than 90 days after now.
+		{"89 days from today in the company timezone", date("2026-05-30"), "2026-05-30", ""},
+		{"90 days: access would end 90 days and 2.5 hours from now", date("2026-05-31"), "", "duration_too_long"},
 		{"91 days", date("2026-06-01"), "", "duration_too_long"},
 		{"today in the company timezone", date("2026-03-02"), "", "expires_in_past"},
 		{"yesterday", date("2026-02-28"), "", "expires_in_past"},

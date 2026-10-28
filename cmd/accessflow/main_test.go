@@ -65,6 +65,16 @@ func TestRouter(t *testing.T) {
 	}
 }
 
+// The change route (M8) exists and needs a session.
+func TestRouterRequiresASessionToChangeAGrant(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testRouter(t, fstest.MapFS{}).ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/grants/01a18416-8264-781d-97fb-a3768f60d41d/change", strings.NewReader("{}")))
+	if rec.Code != http.StatusUnauthorized || strings.TrimSpace(rec.Body.String()) != `{"error":"authentication_required"}` {
+		t.Fatalf("status = %d %s; want 401", rec.Code, rec.Body)
+	}
+}
+
 func TestRouterAnswersWrongMethodsOnTheAPIWithJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testRouter(t, fstest.MapFS{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/health", nil))

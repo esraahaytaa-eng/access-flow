@@ -95,7 +95,11 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 			return err
 		}
 		if next.typ == "GRANT" && neverSent {
-			if cancelled, err := cancelIfRetired(ctx, tx, now, nil, next.grant, next.employee); err != nil || cancelled {
+			cancelled, err := cancelIfRetired(ctx, tx, now, nil, next.grant, next.employee)
+			if errors.Is(err, errEmployeeBusy) {
+				return nil // left PENDING for the next claim
+			}
+			if err != nil || cancelled {
 				return err
 			}
 		}
@@ -132,9 +136,15 @@ func (r *Runner) call(ctx context.Context, c claimed) error {
 }
 
 // record writes the outcome, unless the lease was lost: then the worker that re-claimed
-// the operation owns the result.
+// the operation owns the result. The employee is locked first, as by every other grant
+// change: the audit event's key lock on the employee would otherwise come after the
+// operation's lock and deadlock with a revoke. (The claim takes the employee only to
+// cancel a retired grant, and then without waiting: see cancelIfRetired.)
 func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 	return platform.InTx(ctx, r.pool, func(tx pgx.Tx, now time.Time) error {
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", c.employee); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE id = $1 AND lease_token = $2 AND status = 'IN_PROGRESS' FOR UPDATE",
 			c.op, c.token)
 		if err != nil || tag.RowsAffected() == 0 {
@@ -174,7 +184,9 @@ func lockGrant(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {
 
 // succeed records a confirmed result of an IN_PROGRESS operation: VERIFIED by the runner,
 // SELF_REPORTED by a task's claimer. A GRANT that completes after its removal was requested
-// records when access began and leaves the removal in charge (D5).
+// records when access began and leaves the removal in charge (D5). A level change's new
+// grant becoming ACTIVE requests the old grant's removal in this transaction: never before
+// the new level is verified or confirmed (D4, A9).
 func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op, grant, employee uuid.UUID,
 	typ, grantStatus, evidence string, details map[string]any) error {
 	if err := setOp(ctx, tx, op, "IN_PROGRESS", "SUCCEEDED", "completed_at = $2, last_error = NULL", now); err != nil {
@@ -193,7 +205,19 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 		if err := setGrant(ctx, tx, grant, grantStatus, to, "activation_evidence = $3, effective_from = $4", evidence, now); err != nil {
 			return err
 		}
-		return event("GRANT_ACTIVATED")
+		if err := event("GRANT_ACTIVATED"); err != nil || to != "ACTIVE" {
+			return err
+		}
+		var replaces *uuid.UUID
+		if err := tx.QueryRow(ctx, "SELECT replaces_grant_id FROM grants WHERE id = $1", grant).Scan(&replaces); err != nil || replaces == nil {
+			return err
+		}
+		// The caller holds the employee's lock; the old grant's operations come next (see Runner).
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", *replaces); err != nil {
+			return err
+		}
+		// The system's request, for every method: the confirmer only confirmed the new level.
+		return requestRemoval(ctx, tx, now, nil, *replaces, employee, "LEVEL_CHANGE", "level change")
 	}
 	if err := setGrant(ctx, tx, grant, grantStatus, "REVOKED", "effective_to = CASE WHEN effective_from IS NOT NULL THEN $3::timestamptz END", now); err != nil {
 		return err
@@ -252,8 +276,13 @@ func setGrant(ctx context.Context, tx pgx.Tx, id uuid.UUID, from, to, set string
 	return err
 }
 
+// errEmployeeBusy: another transaction holds the employee, and may be waiting for a lock we hold.
+var errEmployeeBusy = errors.New("employee locked")
+
 // cancelIfRetired cancels a grant never sent whose level or tool was retired since its
-// approval (retired before provisioning), and reports whether it did.
+// approval (retired before provisioning), and reports whether it did. The cancellation
+// needs the employee: the runner's claim holds only the operation, so a revoke holding the
+// employee may be waiting for it; then nothing is done (errEmployeeBusy).
 func cancelIfRetired(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, grant, employee uuid.UUID) (bool, error) {
 	// Catalog retirement locks the tool: lock first, then read its status (A9).
 	if _, err := tx.Exec(ctx, "SELECT 1 FROM tools WHERE id = (SELECT tool_id FROM grants WHERE id = $1) FOR SHARE", grant); err != nil {
@@ -267,6 +296,13 @@ func cancelIfRetired(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.
 	reason := RetiredReason(toolStatus, levelStatus)
 	if reason == "" {
 		return false, nil
+	}
+	tag, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE SKIP LOCKED", employee) // ours if we hold it
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, errEmployeeBusy
 	}
 	return true, cancelGrant(ctx, tx, now, actor, grant, employee, reason)
 }
