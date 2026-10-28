@@ -330,3 +330,58 @@ func TestNewLevelRevokedInFlightKeepsTheOld(t *testing.T) {
 		t.Fatal("the old level was removed for a new level that never became ACTIVE")
 	}
 }
+
+// The old grant expiring while the new one provisions ends in exactly the new level: one
+// removal of the old, the new one active and the only level the tool holds (D4).
+func TestOldGrantExpiresDuringChange(t *testing.T) {
+	w := newWorld(t)
+	tl := w.startTools()
+	old, _ := w.levelChange(tl)
+	w.expiresOn(old, in(-1))
+	w.sweep()
+	requireGrant(t, w.myGrant(w.dev.c, w.jiraViewer), "REVOCATION_REQUESTED", "REVOCATION_REQUESTED")
+	tl.drain(t)
+	niu := w.myGrant(w.dev.c, w.jiraAdmin)
+	old = w.myGrant(w.dev.c, w.jiraViewer)
+	requireGrant(t, niu, "ACTIVE", "ACTIVE / VERIFIED")
+	requireGrant(t, old, "REVOKED", "REVOKED / VERIFIED")
+	if old["closedReason"] != "expired" || w.removals(old) != 1 || tl.held(t, old, w.dev.Email) != 0 || tl.held(t, niu, w.dev.Email) != 1 {
+		t.Fatalf("old %v closed %v, removals %d; want only the new level held", old["status"], old["closedReason"], w.removals(old))
+	}
+	if n := w.count("SELECT count(*) FROM grants WHERE employee_id = $1 AND status NOT IN ('REVOKED', 'CANCELLED')", w.dev.ID); n != 1 {
+		t.Fatalf("open grants = %d", n)
+	}
+}
+
+// The same for a Manual tool: the old level's removal confirmed first, then the new level's
+// grant, leaves no second removal task and no overlap.
+func TestManualOldGrantRevokedDuringChange(t *testing.T) {
+	w := newWorld(t)
+	f := w.fulfillers()
+	owner := testutil.CreateLevel(t, w.db, f.manualTool, "Owner", false, false)
+	old := w.activeManual(f)
+	w.approveAll(items(w.mustChange(w.dev.c, old, changeBody(owner, untilRevoked)))[0])
+	w.mustRevoke(w.mgr.c, w.myGrant(w.dev.c, f.manual))
+	w.mustAct(f.fixer, w.mustAct(f.fixer, w.mustTask(f.fixer, f.manual, "REVOKE"), "claim", nil), "confirm", nil)
+	w.mustAct(f.fixer, w.mustAct(f.fixer, w.mustTask(f.fixer, owner, "GRANT"), "claim", nil), "confirm", nil)
+	requireGrant(t, w.myGrant(w.dev.c, owner), "ACTIVE", "ACTIVE / SELF_REPORTED")
+	requireGrant(t, w.myGrant(w.dev.c, f.manual), "REVOKED", "REVOKED / SELF_REPORTED")
+	if w.removals(old) != 1 || w.task(f.fixer, f.manual, "REVOKE") != nil || len(w.overlaps()) != 0 {
+		t.Fatal("a second removal, a leftover task or an overlap")
+	}
+}
+
+// Revoking both grants while the new one is still unsent leaves no access: the new grant
+// is cancelled, never sent.
+func TestBothGrantsRevokedDuringChange(t *testing.T) {
+	w := newWorld(t)
+	tl := w.startTools()
+	old, _ := w.levelChange(tl)
+	w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraViewer))
+	niu := w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraAdmin))
+	tl.drain(t)
+	if niu["status"] != "CANCELLED" || w.myGrant(w.dev.c, w.jiraViewer)["status"] != "REVOKED" ||
+		tl.held(t, old, w.dev.Email) != 0 || tl.held(t, niu, w.dev.Email) != 0 {
+		t.Fatalf("new grant %v; want no access left", niu["status"])
+	}
+}
