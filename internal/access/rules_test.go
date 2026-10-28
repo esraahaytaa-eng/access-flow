@@ -67,6 +67,9 @@ func TestDisplayStatus(t *testing.T) {
 		{"API", "REVOKED", false, "REVOKED / VERIFIED"},
 		{"MANUAL", "REVOKED", false, "REVOKED / SELF_REPORTED"},
 		{"API", "CANCELLED", false, "CANCELLED"}, // never reached the tool
+		{"API", "SUSPENDED", false, "SUSPENDED / VERIFIED"},
+		{"MANUAL", "SUSPENDED", false, "SUSPENDED / SELF_REPORTED"},
+		{"VENDOR", "SUSPENDED", true, "SUSPENDED / SELF_REPORTED"},
 	}
 	for _, tc := range cases {
 		if got := DisplayStatus(tc.method, tc.status, tc.ticket); got != tc.want {
@@ -92,6 +95,11 @@ func TestGrantTransitions(t *testing.T) {
 		{grantMoves, "REVOCATION_FAILED", "REVOCATION_REQUESTED", true},
 		{grantMoves, "REVOKED", "ACTIVE", false}, // final
 		{grantMoves, "CANCELLED", "PROVISIONING", false},
+		{grantMoves, "ACTIVE", "SUSPENDED", true}, // D7: once the SUSPEND is verified or confirmed
+		{grantMoves, "SUSPENDED", "ACTIVE", true}, // once the RESUME is
+		{grantMoves, "SUSPENDED", "REVOCATION_REQUESTED", true},
+		{grantMoves, "SUSPENDED", "CANCELLED", false},
+		{grantMoves, "PROVISIONING", "SUSPENDED", false},
 		{opMoves, "PENDING", "CANCELLED", true},
 		{opMoves, "IN_PROGRESS", "CANCELLED", true}, // a grant superseded by its removal
 		{opMoves, "FAILED", "PENDING", true},        // manual retry
@@ -100,6 +108,28 @@ func TestGrantTransitions(t *testing.T) {
 	for _, tc := range cases {
 		if got := canMove(tc.moves, tc.from, tc.to); got != tc.ok {
 			t.Errorf("%s → %s = %v; want %v", tc.from, tc.to, got, tc.ok)
+		}
+	}
+}
+
+// needsOp: a SUSPEND or RESUME is queued unless the grant already is, or is about to be,
+// in the target state; a cancelled operation that was sent may have changed the tool.
+func TestNeedsOp(t *testing.T) {
+	cases := []struct {
+		target, effective string
+		cancelledSent     bool
+		want              bool
+	}{
+		{"SUSPENDED", "ACTIVE", false, true},
+		{"SUSPENDED", "SUSPENDED", false, false},
+		{"SUSPENDED", "SUSPENDED", true, true},
+		{"ACTIVE", "ACTIVE", true, true}, // a failed SUSPEND may have applied
+		{"ACTIVE", "ACTIVE", false, false},
+		{"ACTIVE", "SUSPENDED", false, true},
+	}
+	for _, tc := range cases {
+		if got := needsOp(tc.target, tc.effective, tc.cancelledSent); got != tc.want {
+			t.Errorf("needsOp(%s, %s, %v) = %v; want %v", tc.target, tc.effective, tc.cancelledSent, got, tc.want)
 		}
 	}
 }

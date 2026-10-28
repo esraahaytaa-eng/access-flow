@@ -77,7 +77,7 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 		err := tx.QueryRow(ctx, `SELECT o.id FROM operations o JOIN grants g ON g.id = o.grant_id
 			WHERE g.method = 'API'
 			  AND ((o.status = 'PENDING' AND o.next_attempt_at <= $1) OR (o.status = 'IN_PROGRESS' AND o.lease_until <= $1))
-			  AND NOT `+revokeWaits+`
+			  AND NOT `+waitsForEarlier+`
 			ORDER BY o.priority, o.created_at LIMIT 1 FOR UPDATE OF o SKIP LOCKED`, now).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -131,6 +131,10 @@ func (r *Runner) call(ctx context.Context, c claimed) error {
 		return errors.New("status lookup: the level is not active")
 	case c.typ == "REVOKE" && held >= 0:
 		return errors.New("status lookup: the level is still held")
+	case c.typ == "SUSPEND" && (held < 0 || state.Levels[held].Status != "SUSPENDED"):
+		return errors.New("status lookup: the level is not suspended")
+	case c.typ == "RESUME" && (held < 0 || state.Levels[held].Status != "ACTIVE"):
+		return errors.New("status lookup: the level is not active")
 	}
 	return nil
 }
@@ -168,7 +172,11 @@ func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 		if errors.As(callErr, &rejected) && rejected.Status == http.StatusConflict {
 			final = true // the tool refused the operation: retrying cannot help (O3)
 		}
-		if !final && !(c.typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED") {
+		stale, err := unwanted(ctx, tx, c.op, c.grant, c.typ, grantStatus)
+		if err != nil {
+			return err
+		}
+		if !final && !stale && !(c.typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED") {
 			return setOp(ctx, tx, c.op, "IN_PROGRESS", "PENDING", "next_attempt_at = $2, last_error = $3", now.Add(wait), msg)
 		}
 		return fail(ctx, tx, now, nil, c.op, c.grant, c.employee, c.typ, grantStatus, msg, map[string]any{"attempts": c.attempts})
@@ -197,6 +205,16 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 		return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: action, Entity: "grant", EntityID: &grant, SubjectID: &employee,
 			Details: details})
 	}
+	if typ == "SUSPEND" || typ == "RESUME" {
+		to, err := suspensionChange(ctx, tx, now, grant, typ, grantStatus, evidence)
+		if err != nil {
+			return err
+		}
+		if err := event(map[string]string{"SUSPEND": "GRANT_SUSPENDED", "RESUME": "GRANT_RESUMED"}[typ]); err != nil || to != "ACTIVE" {
+			return err
+		}
+		return suspendIfSuspended(ctx, tx, now, grant, employee)
+	}
 	if typ == "GRANT" {
 		to := grantStatus
 		if grantStatus == "PROVISIONING" || grantStatus == "PENDING_FULFILLMENT" {
@@ -206,6 +224,9 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 			return err
 		}
 		if err := event("GRANT_ACTIVATED"); err != nil || to != "ACTIVE" {
+			return err
+		}
+		if err := suspendIfSuspended(ctx, tx, now, grant, employee); err != nil {
 			return err
 		}
 		var replaces *uuid.UUID
@@ -222,6 +243,9 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 	if err := setGrant(ctx, tx, grant, grantStatus, "REVOKED", "effective_to = CASE WHEN effective_from IS NOT NULL THEN $3::timestamptz END", now); err != nil {
 		return err
 	}
+	if err := endSuspension(ctx, tx, now, grant); err != nil {
+		return err
+	}
 	return event("GRANT_REVOKED")
 }
 
@@ -234,18 +258,29 @@ func fail(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op, g
 		return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: action, Entity: "operation", EntityID: &op, SubjectID: &employee,
 			Details: details})
 	}
-	if typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED" {
+	stale, err := unwanted(ctx, tx, op, grant, typ, grantStatus)
+	if err != nil {
+		return err
+	}
+	if stale || typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED" {
 		if err := setOp(ctx, tx, op, "IN_PROGRESS", "CANCELLED", "completed_at = $2, last_error = $3", now, msg); err != nil {
 			return err
 		}
-		return event("OPERATION_CANCELLED", map[string]any{"reason": "the grant is being removed"})
+		reason := "the grant is being removed"
+		if stale && grantStatus != "REVOCATION_REQUESTED" && grantStatus != "REVOCATION_FAILED" {
+			reason = "superseded"
+		}
+		return event("OPERATION_CANCELLED", map[string]any{"reason": reason})
 	}
 	if err := setOp(ctx, tx, op, "IN_PROGRESS", "FAILED", "completed_at = $2, last_error = $3", now, msg); err != nil {
 		return err
 	}
-	to := map[string]string{"GRANT": "FAILED", "REVOKE": "REVOCATION_FAILED"}[typ]
-	if err := setGrant(ctx, tx, grant, grantStatus, to, ""); err != nil {
-		return err
+	// A failed SUSPEND or RESUME leaves the grant as it is: the tool's state is unknown, and
+	// the operation waits in Exceptions (D7).
+	if to, ok := map[string]string{"GRANT": "FAILED", "REVOKE": "REVOCATION_FAILED"}[typ]; ok {
+		if err := setGrant(ctx, tx, grant, grantStatus, to, ""); err != nil {
+			return err
+		}
 	}
 	if details == nil {
 		details = map[string]any{}

@@ -109,6 +109,15 @@ func requestRemoval(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.U
 	if err := endChanges(ctx, tx, now, actor, grant, employee); err != nil {
 		return err
 	}
+	// A waiting SUSPEND or RESUME is pointless once the access goes. An API call in flight
+	// finishes first (waitsForEarlier) and is cancelled if it fails (unwanted); a claimed
+	// Manual or Vendor task is a person's to-do, so it is cancelled now: its claimer cannot
+	// confirm it and the removal task is ready at once (D7).
+	if _, err := cancelSuspensionOps(ctx, tx, now, actor, grant, employee,
+		"(status IN ('PENDING', 'FAILED') OR status = 'IN_PROGRESS' AND (SELECT method FROM grants WHERE id = $1) <> 'API')",
+		"the grant is being removed"); err != nil {
+		return err
+	}
 	var op uuid.UUID
 	var opStatus string
 	var neverSent bool
@@ -129,8 +138,12 @@ func requestRemoval(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.U
 		reason, actor); err != nil {
 		return err
 	}
+	priority := 1
+	if by == "TERMINATION" {
+		priority = 0 // A6: termination removals first
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO operations (grant_id, type, reason, priority, next_attempt_at, created_at)
-		VALUES ($1, 'REVOKE', $2, 1, $3, $3)`, grant, by, now); err != nil {
+		VALUES ($1, 'REVOKE', $2, $4, $3, $3)`, grant, by, now, priority); err != nil {
 		return err
 	}
 	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "GRANT_REVOCATION_REQUESTED", Entity: "grant",
@@ -198,6 +211,7 @@ type Grant struct {
 	EffectiveTo   *time.Time `json:"effectiveTo"`
 	ExpiresOn     *string    `json:"expiresOn"`
 	ClosedReason  *string    `json:"closedReason"` // why it was revoked or cancelled
+	Suspension    *string    `json:"suspension"`   // a SUSPEND or RESUME not yet verified or confirmed (D7)
 	Version       int        `json:"version"`
 	CreatedAt     time.Time  `json:"createdAt"`
 }
@@ -206,7 +220,11 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 	rows, err := s.pool.Query(ctx, `
 		SELECT g.id, e.id, e.full_name, t.id, t.name, l.id, l.name, g.method, g.status, g.activation_evidence,
 		       g.effective_from, g.effective_to, to_char(g.expires_on, 'YYYY-MM-DD'), g.closed_reason, g.version, g.created_at,
-		       o.ticket_ref IS NOT NULL
+		       o.ticket_ref IS NOT NULL,
+		       (SELECT CASE x.type WHEN 'SUSPEND' THEN 'SUSPENSION' ELSE 'RESUME' END ||
+		               CASE WHEN x.last_error IS NULL THEN '_REQUESTED' ELSE '_FAILED' END
+		        FROM operations x WHERE x.grant_id = g.id AND x.type IN ('SUSPEND', 'RESUME') AND x.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
+		        ORDER BY x.created_at DESC, x.id DESC LIMIT 1)
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
@@ -218,7 +236,8 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		var g Grant
 		var ticket bool
 		err := row.Scan(&g.ID, &g.Employee.ID, &g.Employee.FullName, &g.ToolID, &g.Tool, &g.AccessLevelID, &g.Level, &g.Method,
-			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket)
+			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket,
+			&g.Suspension)
 		g.DisplayStatus = DisplayStatus(g.Method, g.Status, ticket)
 		return g, err
 	})

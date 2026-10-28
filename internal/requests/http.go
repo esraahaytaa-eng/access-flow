@@ -27,6 +27,11 @@ func (s *Service) Register(r chi.Router) {
 	r.Get("/exceptions", s.handleExceptions)
 	r.Post("/direct-grants", s.handleDirectGrant)
 	r.Post("/grants/{id}/change", s.handleChange)
+	r.Post("/employees/{id}/suspend", s.lifecycleRoute(s.Suspend))
+	r.Post("/employees/{id}/reactivate", s.lifecycleRoute(s.Reactivate))
+	r.Post("/employees/{id}/terminate", s.lifecycleRoute(s.Terminate))
+	r.Put("/employees/{id}/termination", s.handleSchedule)
+	r.Post("/employees/{id}/termination/cancel", s.lifecycleRoute(s.CancelTermination))
 }
 
 func actor(r *http.Request) auth.Principal {

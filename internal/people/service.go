@@ -60,8 +60,16 @@ type Employee struct {
 	Roles              []string     `json:"roles"`
 	AdminGroups        []auth.Group `json:"adminGroups"`
 	MustChangePassword bool         `json:"mustChangePassword"`
+	Termination        *Termination `json:"termination"`
 	Version            int          `json:"version"`
 	CreatedAt          time.Time    `json:"createdAt"`
+}
+
+// Termination is a scheduled termination (D7).
+type Termination struct {
+	At          time.Time `json:"at"`
+	Reason      string    `json:"reason"`
+	ScheduledBy uuid.UUID `json:"scheduledBy"`
 }
 
 // basicEmployee is what employees without a directory role see (approved 2026-10-28).
@@ -78,17 +86,19 @@ const selectEmployees = `
 	SELECT e.id, e.email, e.full_name, e.department, e.job_title, e.manager_id, e.status, e.version, e.created_at,
 	       COALESCE(c.is_temporary, false),
 	       ARRAY(SELECT r.role FROM role_assignments r WHERE r.employee_id = e.id AND r.valid_to IS NULL ORDER BY r.role),
-	       ` + auth.OpenGroupsJSON + `
+	       ` + auth.OpenGroupsJSON + `,
+	       CASE WHEN e.termination_at IS NOT NULL THEN json_build_object('at', e.termination_at, 'reason', e.termination_reason,
+	           'scheduledBy', e.termination_scheduled_by) END
 	FROM employees e LEFT JOIN password_credentials c ON c.employee_id = e.id`
 
 func scanEmployee(row pgx.Row) (Employee, error) {
 	var e Employee
 	err := row.Scan(&e.ID, &e.Email, &e.FullName, &e.Department, &e.JobTitle, &e.ManagerID, &e.Status, &e.Version,
-		&e.CreatedAt, &e.MustChangePassword, &e.Roles, &e.AdminGroups)
+		&e.CreatedAt, &e.MustChangePassword, &e.Roles, &e.AdminGroups, &e.Termination)
 	return e, err
 }
 
-func getEmployee(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Employee, error) {
+func GetEmployee(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Employee, error) {
 	e, err := scanEmployee(tx.QueryRow(ctx, selectEmployees+" WHERE e.id = $1", id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Employee{}, platform.ErrNotFound
@@ -176,7 +186,7 @@ func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in N
 			EntityID: &id, SubjectID: &id, Details: details}); err != nil {
 			return err
 		}
-		created, err = getEmployee(ctx, tx, id)
+		created, err = GetEmployee(ctx, tx, id)
 		return err
 	})
 	if err != nil {
@@ -191,7 +201,7 @@ func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in N
 // checkManager requires an existing, active manager.
 func checkManager(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	var status string
-	err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", id).Scan(&status)
+	err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", id).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errManagerNotFound
 	}
@@ -265,7 +275,7 @@ func (s *Service) UpdateEmployee(ctx context.Context, actor auth.Principal, id u
 				return err
 			}
 		}
-		cur, err := lockEmployee(ctx, tx, id)
+		cur, err := LockEmployee(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -303,7 +313,7 @@ func (s *Service) UpdateEmployee(ctx context.Context, actor auth.Principal, id u
 			EntityID: &id, SubjectID: &id, Details: changes}); err != nil {
 			return err
 		}
-		updated, err = getEmployee(ctx, tx, id)
+		updated, err = GetEmployee(ctx, tx, id)
 		return err
 	})
 	return updated, err
@@ -355,11 +365,11 @@ func (s *Service) ResetPassword(ctx context.Context, actor auth.Principal, id uu
 		return "", err
 	}
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		target, err := lockEmployee(ctx, tx, id)
+		target, err := LockEmployee(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if err := checkReset(actor, id, target.Roles); err != nil {
+		if err := CheckAccountAction(actor, id, target.Roles); err != nil {
 			return err
 		}
 		if target.Status != "ACTIVE" {
@@ -384,8 +394,8 @@ func (s *Service) ResetPassword(ctx context.Context, actor auth.Principal, id uu
 	return password, nil
 }
 
-// lockEmployee loads an employee under a row lock (A9: one change to a person at a time).
-func lockEmployee(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Employee, error) {
+// LockEmployee loads an employee under a row lock (A9: one change to a person at a time).
+func LockEmployee(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Employee, error) {
 	// Lock first, then read in a new statement: a statement that waited for the lock re-reads
 	// only the locked row, while its role and group subqueries keep the stale snapshot.
 	if err := tx.QueryRow(ctx, "SELECT id FROM employees WHERE id = $1 FOR UPDATE", id).Scan(&id); err != nil {
@@ -394,7 +404,7 @@ func lockEmployee(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Employee, error
 		}
 		return Employee{}, err
 	}
-	return getEmployee(ctx, tx, id)
+	return GetEmployee(ctx, tx, id)
 }
 
 // AssignRole opens a role interval for an active employee; holding it already is a no-op (D2, A9).
@@ -403,7 +413,7 @@ func (s *Service) AssignRole(ctx context.Context, actor auth.Principal, id uuid.
 		return err
 	}
 	return platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		target, err := lockEmployee(ctx, tx, id)
+		target, err := LockEmployee(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -429,7 +439,7 @@ func (s *Service) RemoveRole(ctx context.Context, actor auth.Principal, id uuid.
 		return err
 	}
 	return platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		if _, err := lockEmployee(ctx, tx, id); err != nil {
+		if _, err := LockEmployee(ctx, tx, id); err != nil {
 			return err
 		}
 		// GREATEST: a row opened by a concurrent assign may start after this transaction did.

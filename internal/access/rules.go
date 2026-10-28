@@ -27,7 +27,7 @@ func DisplayStatus(method, status string, ticket bool) string {
 	if status == "PENDING_FULFILLMENT" && ticket {
 		return "WAITING_VENDOR"
 	}
-	if status != "ACTIVE" && status != "REVOKED" {
+	if status != "ACTIVE" && status != "SUSPENDED" && status != "REVOKED" {
 		return status
 	}
 	if method == "API" {
@@ -51,7 +51,8 @@ func RetiredReason(toolStatus, levelStatus string) string {
 var grantMoves = map[string][]string{
 	"PROVISIONING":         {"ACTIVE", "FAILED", "CANCELLED", "REVOCATION_REQUESTED"},
 	"PENDING_FULFILLMENT":  {"ACTIVE", "FAILED", "CANCELLED", "REVOCATION_REQUESTED"},
-	"ACTIVE":               {"REVOCATION_REQUESTED"},
+	"ACTIVE":               {"SUSPENDED", "REVOCATION_REQUESTED"},
+	"SUSPENDED":            {"ACTIVE", "REVOCATION_REQUESTED"},
 	"FAILED":               {"PROVISIONING", "PENDING_FULFILLMENT", "REVOCATION_REQUESTED"},
 	"REVOCATION_REQUESTED": {"REVOKED", "REVOCATION_FAILED"},
 	"REVOCATION_FAILED":    {"REVOCATION_REQUESTED"},
@@ -61,6 +62,14 @@ var opMoves = map[string][]string{
 	"PENDING":     {"IN_PROGRESS", "CANCELLED"},
 	"IN_PROGRESS": {"SUCCEEDED", "PENDING", "FAILED", "CANCELLED"},
 	"FAILED":      {"PENDING", "CANCELLED"},
+}
+
+// needsOp says whether a SUSPEND or RESUME must be queued to bring a grant to target
+// (SUSPENDED or ACTIVE). effective is where the grant is heading: the target of its
+// IN_PROGRESS SUSPEND or RESUME, else its status. A cancelled operation that was sent may
+// have changed the tool, so the target state is then applied again.
+func needsOp(target, effective string, cancelledSent bool) bool {
+	return cancelledSent || effective != target
 }
 
 func canMove(moves map[string][]string, from, to string) bool {
