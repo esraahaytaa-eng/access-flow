@@ -1,0 +1,70 @@
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Claude Code personal settings (local-scope plugins, permissions)
+.claude/settings.local.json
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+secrets/
+credentials*.json
+
+# Go
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+*.prof
+coverage.*
+/vendor/
+go.work
+go.work.sum
+
+# Frontend (Node.js / React / Vite)
+node_modules/
+/web/dist/
+/web/coverage/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+
+# Built frontend embedded into the Go binary at image build time
+/internal/webui/dist/*
+!/internal/webui/dist/.keep
+
+# Databases, dumps and local data
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+/data/
+/pgdata/
+
+# Docker / local overrides
+docker-compose.override.yml
+docker-compose.override.yaml
+compose.override.yml
+compose.override.yaml
+
+# Logs and temporary files
+*.log
+tmp/
+.cache/
