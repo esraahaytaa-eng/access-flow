@@ -424,6 +424,27 @@ func TestWithdrawApprovedBeforeWorkStarts(t *testing.T) {
 	w.mustSubmit(w.dev.c, body(nil, item(f.manual))) // the access may be requested again
 }
 
+// An item approved before M6 has no grant: withdrawing it closes the item, with nothing to cancel.
+func TestWithdrawAnItemApprovedWithoutAGrant(t *testing.T) {
+	w := newWorld(t)
+	it := items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0]
+	w.exec(`UPDATE approval_steps SET status = 'APPROVED', decided_by = $2, decided_at = now(), version = version + 1
+		WHERE item_id = $1`, it["id"], w.mgr.ID)
+	w.exec("UPDATE request_items SET status = 'APPROVED', closed_at = now(), version = version + 1 WHERE id = $1", it["id"])
+	it = items(w.get(w.dev.c, "/api/v1/requests").Body["requests"].([]any)[0].(map[string]any))[0]
+
+	r := withdraw(w.dev.c, it, "not needed")
+	testutil.RequireStatus(t, r, http.StatusOK, "")
+	if r.Body["status"] != "WITHDRAWN" || r.Body["fulfillment"] != nil {
+		t.Fatalf("withdrawn item = %v", r.Body)
+	}
+	if n := w.count(`SELECT count(*) FROM audit_events WHERE action = 'ITEM_WITHDRAWN' AND entity_id = $1 AND actor_id = $2
+		AND reason = 'not needed'`, it["id"], w.dev.ID); n != 1 || w.audits("GRANT_CANCELLED") != 0 {
+		t.Fatalf("ITEM_WITHDRAWN = %d, GRANT_CANCELLED = %d", n, w.audits("GRANT_CANCELLED"))
+	}
+	testutil.RequireStatus(t, withdraw(w.dev.c, it, "again"), http.StatusOK, "") // a repeat returns the current state
+}
+
 // An approved item whose grant was already cancelled (retired before provisioning) can
 // still be withdrawn: no work ever started.
 func TestWithdrawAfterTheGrantWasCancelled(t *testing.T) {

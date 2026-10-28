@@ -50,10 +50,14 @@ var (
 // WithdrawGrant cancels the grant of an approved item that is being withdrawn, in the
 // caller's transaction after the item's lock, as long as no work started on it (O5): its
 // task was never claimed, or the runner never sent it. A grant already cancelled leaves the
-// item free to withdraw.
+// item free to withdraw, as does an item approved before grants existed.
 func WithdrawGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.UUID, reason string) error {
 	var grant, employee uuid.UUID
-	if err := tx.QueryRow(ctx, "SELECT id, employee_id FROM grants WHERE request_item_id = $1", itemID).Scan(&grant, &employee); err != nil {
+	err := tx.QueryRow(ctx, "SELECT id, employee_id FROM grants WHERE request_item_id = $1", itemID).Scan(&grant, &employee)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // approved before grants existed (M5): nothing to cancel
+	}
+	if err != nil {
 		return err
 	}
 	// Lock order: employee, operations, grant (see Runner); then read.
