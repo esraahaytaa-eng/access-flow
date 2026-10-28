@@ -19,15 +19,16 @@ import (
 //go:embed migrations/*.sql
 var Migrations embed.FS
 
-// Migrate applies all pending migrations as the owner user, then closes the connection.
-func Migrate(ctx context.Context, ownerURL string) error {
+// Migrate applies the pending migrations in the migrations/ directory of fsys as the owner
+// user, then closes the connection. AccessFlow passes Migrations; the Mock Tool Service its own.
+func Migrate(ctx context.Context, ownerURL string, fsys fs.FS) error {
 	db, err := sql.Open("pgx", ownerURL)
 	if err != nil {
 		return fmt.Errorf("open migration connection: %w", err)
 	}
 	defer db.Close()
 
-	files, err := fs.Sub(Migrations, "migrations")
+	files, err := fs.Sub(fsys, "migrations")
 	if err != nil {
 		return err
 	}

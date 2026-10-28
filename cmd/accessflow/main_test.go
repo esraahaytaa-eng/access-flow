@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
@@ -21,7 +22,7 @@ func testRouter(t *testing.T, dist fstest.MapFS) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(db.App, svc, dist)
+	return newRouter(db.App, svc, time.UTC, dist)
 }
 
 func TestRouter(t *testing.T) {
@@ -34,6 +35,10 @@ func TestRouter(t *testing.T) {
 		{"/api/v1/health", "application/json", `{"status":"ok"}`, http.StatusOK},
 		{"/api/v1/auth/me", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
 		{"/api/v1/employees", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
+		{"/api/v1/tools", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
+		{"/api/v1/notifications", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
+		{"/api/v1/requests", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
+		{"/api/v1/approvals", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
 		// Unknown API paths must never fall through to the web page.
 		{"/api/v1/nope", "application/json", `{"error":"not_found"}`, http.StatusNotFound},
 		{"/api/nope", "application/json", `{"error":"not_found"}`, http.StatusNotFound},

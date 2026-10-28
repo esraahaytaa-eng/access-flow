@@ -4,7 +4,6 @@ package people
 import (
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -93,18 +92,7 @@ func cleanGroupName(s string) (string, error) {
 	if s == "" {
 		return "", platform.ValidationError("name", "name_required")
 	}
-	return s, checkText(s, "name", maxTextLength)
-}
-
-// checkText limits length and rejects control characters (PostgreSQL refuses NUL in text).
-func checkText(s, field string, max int) error {
-	if utf8.RuneCountInString(s) > max {
-		return platform.ValidationError(field, "value_too_long")
-	}
-	if strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		return platform.ValidationError(field, "value_invalid")
-	}
-	return nil
+	return s, platform.CheckText(s, "name", maxTextLength)
 }
 
 // cleanName trims a required name and checks its length.
@@ -113,7 +101,7 @@ func cleanName(s string) (string, error) {
 	if s == "" {
 		return "", platform.ValidationError("fullName", "full_name_required")
 	}
-	return s, checkText(s, "fullName", maxNameLength)
+	return s, platform.CheckText(s, "fullName", maxNameLength)
 }
 
 // cleanText trims an optional text field; blank becomes nil.
@@ -125,7 +113,7 @@ func cleanText(s *string, field string) (*string, error) {
 	if v == "" {
 		return nil, nil
 	}
-	if err := checkText(v, field, maxTextLength); err != nil {
+	if err := platform.CheckText(v, field, maxTextLength); err != nil {
 		return nil, err
 	}
 	return &v, nil

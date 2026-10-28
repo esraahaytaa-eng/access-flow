@@ -9,7 +9,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // Error is a typed business error. WriteError turns it into an HTTP response with a
@@ -66,6 +71,18 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
 }
 
+// CheckText limits s to max characters and rejects control characters (PostgreSQL refuses
+// NUL in text).
+func CheckText(s, field string, max int) error {
+	if utf8.RuneCountInString(s) > max {
+		return ValidationError(field, "value_too_long")
+	}
+	if strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return ValidationError(field, "value_invalid")
+	}
+	return nil
+}
+
 // maxBodyBytes caps JSON request bodies; nothing in the API needs more.
 const maxBodyBytes = 64 << 10
 
@@ -81,6 +98,48 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 		return ValidationError("", "invalid_json")
 	}
 	return nil
+}
+
+// Field names a required body field and whether the request sent it.
+type Field struct {
+	Name    string
+	Present bool
+}
+
+// DecodeRequired reads the body into in, then requires every listed field: a forgotten key
+// never silently drops an approval step or changes a value.
+func DecodeRequired(w http.ResponseWriter, r *http.Request, in any, fields func() []Field) error {
+	if err := DecodeJSON(w, r, in); err != nil {
+		return err
+	}
+	for _, f := range fields() {
+		if !f.Present {
+			return ValidationError(f.Name, "field_required")
+		}
+	}
+	return nil
+}
+
+// PathIDs reads UUID path parameters; a malformed one is simply not found.
+func PathIDs(r *http.Request, names ...string) ([]uuid.UUID, error) {
+	ids := make([]uuid.UUID, len(names))
+	for i, name := range names {
+		id, err := uuid.Parse(chi.URLParam(r, name))
+		if err != nil {
+			return nil, ErrNotFound
+		}
+		ids[i] = id
+	}
+	return ids, nil
+}
+
+// Respond writes v with status, or err as an error response.
+func Respond(w http.ResponseWriter, r *http.Request, status int, v any, err error) {
+	if err != nil {
+		WriteError(w, r, err)
+		return
+	}
+	WriteJSON(w, status, v)
 }
 
 // HealthHandler reports 200 while ping succeeds and 503 otherwise.

@@ -12,7 +12,8 @@ func TestLoadConfig(t *testing.T) {
 		"MIGRATION_DATABASE_URL": "postgres://owner@db/accessflow",
 	}
 	defaults := platform.Config{HTTPAddr: ":8080", DatabaseURL: full["DATABASE_URL"], MigrationDatabaseURL: full["MIGRATION_DATABASE_URL"],
-		BootstrapAdminEmail: "admin@accessflow.local", BootstrapFile: "/var/lib/accessflow/bootstrap-admin.txt"}
+		BootstrapAdminEmail: "admin@accessflow.local", BootstrapFile: "/var/lib/accessflow/bootstrap-admin.txt",
+		CompanyTimezone: "Europe/Istanbul"}
 	changed := func(f func(*platform.Config)) platform.Config { c := defaults; f(&c); return c }
 	cases := []struct {
 		name    string
@@ -35,6 +36,9 @@ func TestLoadConfig(t *testing.T) {
 			want: changed(func(c *platform.Config) {
 				c.BootstrapAdminEmail, c.BootstrapFile = "root@example.com", "/data/admin.txt"
 			})},
+		{name: "company timezone from the environment", env: with(full, "COMPANY_TIMEZONE", "America/New_York"),
+			want: changed(func(c *platform.Config) { c.CompanyTimezone = "America/New_York" })},
+		{name: "unknown company timezone", env: with(full, "COMPANY_TIMEZONE", "Mars/Olympus"), wantErr: true},
 		{name: "runtime database URL is required", env: with(full, "DATABASE_URL", ""), wantErr: true},
 		{name: "migration database URL is required", env: with(full, "MIGRATION_DATABASE_URL", ""), wantErr: true},
 	}

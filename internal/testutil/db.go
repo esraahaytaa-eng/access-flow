@@ -97,7 +97,7 @@ func ensureTemplate(ctx context.Context, admin *pgx.Conn, ownerURL string) (stri
 	if err != nil {
 		return "", err
 	}
-	if err := platform.Migrate(ctx, buildingURL); err != nil {
+	if err := platform.Migrate(ctx, buildingURL, platform.Migrations); err != nil {
 		return "", err
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s RENAME TO %s", building, name)); err != nil {

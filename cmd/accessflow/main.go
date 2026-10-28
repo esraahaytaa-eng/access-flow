@@ -18,9 +18,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/devfixture"
+	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
+	"github.com/esraahaytaa-eng/access-flow/internal/requests"
 	"github.com/esraahaytaa-eng/access-flow/internal/webui"
 )
 
@@ -49,7 +52,7 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := platform.Migrate(ctx, cfg.MigrationDatabaseURL); err != nil {
+	if err := platform.Migrate(ctx, cfg.MigrationDatabaseURL, platform.Migrations); err != nil {
 		return err
 	}
 	slog.Info("migrations applied")
@@ -70,7 +73,7 @@ func run(args []string) error {
 		return err
 	}
 	if len(args) > 0 && args[0] == "dev-fixture" {
-		return runDevFixture(ctx, people.NewService(pool, svc), cfg.SeedPassword, os.Stdout)
+		return runDevFixture(ctx, people.NewService(pool, svc), catalog.NewService(pool), cfg.SeedPassword, os.Stdout)
 	}
 	if err := svc.Bootstrap(ctx, cfg.BootstrapAdminEmail); err != nil {
 		return err
@@ -79,9 +82,13 @@ func run(args []string) error {
 		return err
 	}
 
+	loc, err := time.LoadLocation(cfg.CompanyTimezone) // checked by LoadConfig
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(pool, svc, webui.Dist()),
+		Handler:           newRouter(pool, svc, loc, webui.Dist()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
@@ -89,7 +96,7 @@ func run(args []string) error {
 }
 
 // newRouter serves the JSON API under /api and the web app on every other path.
-func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
+func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist fs.FS) http.Handler {
 	// Rejects cross-origin unsafe requests (Sec-Fetch-Site / Origin), on top of the CSRF token (A4).
 	crossOrigin := http.NewCrossOriginProtection()
 	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +104,8 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
 	}))
 
 	peopleSvc := people.NewService(pool, svc)
+	catalogSvc := catalog.NewService(pool)
+	requestsSvc := requests.NewService(pool, loc)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
@@ -114,6 +123,9 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(svc.RequireSession)
 				peopleSvc.Register(r)
+				catalogSvc.Register(r)
+				requestsSvc.Register(r)
+				notify.Register(r, pool)
 			})
 		})
 	})
@@ -135,15 +147,15 @@ func printBootstrapPassword(file string, out io.Writer) error {
 	return err
 }
 
-// runDevFixture creates the development employees on request (never at startup).
-func runDevFixture(ctx context.Context, svc *people.Service, password string, out io.Writer) error {
-	created, err := devfixture.Run(ctx, svc, password)
+// runDevFixture creates the development employees, groups and tools on request (never at startup).
+func runDevFixture(ctx context.Context, svc *people.Service, cat *catalog.Service, password string, out io.Writer) error {
+	created, err := devfixture.Run(ctx, svc, cat, password)
 	for _, email := range created {
 		fmt.Fprintln(out, "created", email)
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%d employees created; all sign in with the SEED_PASSWORD value (local only)\n", len(created))
+	fmt.Fprintf(out, "%d records created; fixture employees sign in with the SEED_PASSWORD value (local only)\n", len(created))
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/mocktools"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -42,15 +43,19 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The mocktools user owns its database, so it also runs the migrations.
+	if err := platform.Migrate(ctx, dbURL, mocktools.Migrations); err != nil {
+		return err
+	}
+	slog.Info("migrations applied")
+
 	pool, err := pgxpool.New(ctx, dbURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	mux := http.NewServeMux()
-	mux.Handle("GET /healthz", platform.HealthHandler(pool.Ping))
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: mocktools.Handler(pool), ReadHeaderTimeout: 10 * time.Second}
 	slog.Info("listening", "addr", addr)
 	return platform.Serve(ctx, srv)
 }

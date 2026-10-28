@@ -246,6 +246,9 @@ func (s *Service) UpdateEmployee(ctx context.Context, actor auth.Principal, id u
 	if !canManageEmployees(actor) {
 		return Employee{}, platform.ErrForbidden
 	}
+	if actor.EmployeeID == id { // nobody chooses who approves their own requests (2026-10-28)
+		return Employee{}, errSelfChange
+	}
 	department, err := cleanText(in.Department, "department")
 	if err != nil {
 		return Employee{}, err
