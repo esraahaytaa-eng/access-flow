@@ -51,7 +51,7 @@ Screens and areas (O7 plus its 2026-10-28 clarification): My Requests / My Acces
 
 ## Test data strategy
 
-- **From M1:** `internal/testutil` provides a migrated template database, a per-test clone and small builders (`fixtures.Employee(...)`, `fixtures.Tool(...)`, `fixtures.Level(...)`, `fixtures.Login(...)`, later `fixtures.ActiveGrant(...)`). Builders create records through the same SQL/services the application uses, at real time.
+- **From M1:** `internal/testutil` provides a migrated template database and a per-test clone on the disposable `postgres-test` service; **from M2** it adds small builders (`fixtures.Employee(...)`, `fixtures.Tool(...)`, `fixtures.Level(...)`, `fixtures.Login(...)`, later `fixtures.ActiveGrant(...)`). Builders create records through the same SQL/services the application uses, at real time.
 - Each milestone extends the builders it needs, so tests read like scenarios instead of SQL setup.
 - A tiny **development fixture** (bootstrap Super Admin plus a handful of employees, tools and levels) is added in M3, so the API and later UI can be exercised manually long before the full seed. It is idempotent, marked seed-originated and created through the real services.
 - The complete, realistic, idempotent **demo seed** remains its own later milestone (M15, D12).
@@ -114,19 +114,19 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 
 ### M1 — Walking skeleton
 
-- **Objective:** `docker compose up` on a clean machine starts all services; health endpoint; migrations and append-only audit work; test harness and fixture builders run.
+- **Objective:** `docker compose up` on a clean machine starts all services; health endpoint; migrations and append-only audit work; the test harness runs.
 - **Dependencies:** M0; Superpowers and Ponytail loaded in this project.
 - **Tasks:**
-  1. Go module; `internal/platform`: env config, pgxpool, `InTx(ctx, func(tx Tx, now time.Time) error)` reading `now()` once, typed errors → HTTP mapping, JSON helpers.
-  2. `deploy/postgres/init.sh`: `accessflow` (owner + runtime users) and `mocktools` databases, each user restricted to its database.
-  3. Embedded goose migrations run at startup as the owner user. Migration 1: `audit_events` with runtime grants `INSERT, SELECT` only and a trigger blocking `UPDATE`/`DELETE`/`TRUNCATE`.
+  1. Go module; `internal/platform`: env config, pgxpool, `InTx(ctx, func(tx Tx, now time.Time) error)` reading `now()` once, typed errors → HTTP mapping (only not-found and internal for now), JSON helpers.
+  2. `deploy/postgres/init.sh`: `accessflow` (owner + runtime users) and `mocktools` databases, each user restricted to its database; the runtime user cannot create objects. Fixed local credentials as `compose.yaml` defaults (A2, 2026-10-28).
+  3. Embedded goose migrations run at startup as the owner user. Migration 1: `audit_events` (UUID keys) with runtime grants `INSERT, SELECT` only and a trigger blocking `UPDATE`/`DELETE`/`TRUNCATE`. Actor/subject columns get their foreign keys to `employees` in M2.
   4. `audit.Record(ctx, tx, Event)`.
-  5. `cmd/mocktools` with `/healthz` and its own migrations.
-  6. `web/` Vite + React + TS placeholder page; multi-stage `Dockerfile` (npm ci → go build → small runtime image) embedding the build; SPA fallback for non-API paths.
-  7. `compose.yaml`: `postgres`, `app`, `mocktools`, health checks, `depends_on`; only 8080 published; named volumes; `tests` service under the `test` profile.
-  8. `internal/testutil`: template database, per-test clone, runtime-user connection, first fixture builder skeleton.
-- **Acceptance criteria:** clean clone → `docker compose up` → all services healthy, no manual steps; `GET /api/v1/health` 200; `/` and `/any/route` serve the page; `mocktools` not reachable from the host; test command passes.
-- **Required tests:** runtime user cannot `UPDATE`/`DELETE`/`TRUNCATE` `audit_events`; audit event and state change roll back together; config defaults; SPA fallback does not shadow `/api/v1/*`.
+  5. `cmd/mocktools` with `/healthz` checking its own database; its migration runner arrives in M4 with its first table.
+  6. `web/` Vite + React + TS placeholder page (`tsc` in the build); multi-stage `Dockerfile` (npm ci → go build → small runtime image) embedding the build; SPA fallback for non-API paths; unknown `/api/v1/*` returns a JSON 404.
+  7. `compose.yaml`: `postgres`, `app`, `mocktools`, health checks (a `healthcheck` subcommand in each binary, no curl in the image), `depends_on`; only 8080 published; named volumes; `tests` and a disposable `postgres-test` under the `test` profile (A2, 2026-10-28).
+  8. `internal/testutil`: template database, per-test clone, runtime-user connection. Fixture builders start in M2 with the first entity (`fixtures.Employee`).
+- **Acceptance criteria:** clean clone → `docker compose up` → all services healthy, no manual steps; a second `docker compose up` on the same volume also works; `GET /api/v1/health` 200; `/` and `/any/route` serve the page; `mocktools` and `postgres` not reachable from the host; test command passes.
+- **Required tests:** runtime user cannot `UPDATE`/`DELETE`/`TRUNCATE`/`DROP` `audit_events` or disable its trigger; `accessflow` users cannot connect to `mocktools` and vice versa; audit event and state change roll back together; config defaults; SPA fallback does not shadow `/api/v1/*`. `go test -race` runs in a Debian-based Go image (cgo).
 - **UI slice:** placeholder only (no design yet).
 
 ### M2 — Authentication

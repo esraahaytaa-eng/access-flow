@@ -266,6 +266,8 @@ Revocation, suspension and resume follow the same pattern and labels (see O1, D7
 - `docker compose up` works on a clean machine with no manual setup steps.
 - AccessFlow never queries the `mocktools` database; it uses only the Mock Tool Service's HTTP API.
 - A Mock Tool Service error, timeout or unexpected response is never treated as success; it goes through the retry and exception workflow (O3).
+- *Local database credentials — [APPROVED 2026-10-28]:* the PostgreSQL users use simple, fixed local credentials written in `compose.yaml`. No secret-management infrastructure; `docker compose up` needs no configuration. Postgres is not published to the host. *Documented limitation:* the credentials are in the repository and are applied only when the database volume is first created.
+- *Test database — [APPROVED 2026-10-28]:* tests use a separate, disposable PostgreSQL service (`postgres-test`, in-memory storage) that exists only under the `test` Compose profile. Test data never touches the application database, and the administrative connection that creates test databases is used only there. The three runtime services above are unchanged.
 
 ### A3. Go libraries — [APPROVED 2026-10-28]
 - **`go-chi/chi` v5** for HTTP routing and middleware.
@@ -341,6 +343,7 @@ Two mechanisms inside the Go application; no Redis, RabbitMQ, generic job queue,
   - Timestamps shown in the company timezone, with the timezone named.
   - The UI hides actions only for convenience; the server enforces every permission (A4).
   - Built assets embedded in the Go binary; unknown non-API paths return `index.html`.
+    - *Refinement — [APPROVED 2026-10-28]:* missing files under `/assets/` (the build output) return `404` instead of `index.html`, so a stale cached bundle fails clearly rather than as HTML. Client routes such as `/dashboard` still return `index.html`; unknown `/api/*` paths return JSON `404`.
   - Exact versions pinned in `package-lock.json`; Docker builds use `npm ci`.
 
 ### A8. Backend module layout — [APPROVED 2026-10-28]
