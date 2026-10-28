@@ -1,0 +1,103 @@
+# Fixed local credentials for this case-study application (DECISIONS.md A2, 2026-10-28).
+# PostgreSQL is never published to the host; only app is, on port 8080.
+x-db-credentials: &db-credentials
+  POSTGRES_PASSWORD: postgres_local
+  ACCESSFLOW_OWNER_PASSWORD: accessflow_owner_local
+  ACCESSFLOW_APP_PASSWORD: accessflow_app_local
+  MOCKTOOLS_DB_PASSWORD: mocktools_local
+
+x-postgres: &postgres
+  image: postgres:18.6-alpine3.24
+  environment: *db-credentials
+  healthcheck:
+    # TCP check: the temporary server used while init.sh runs listens only on the socket.
+    test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+services:
+  postgres:
+    <<: *postgres
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    restart: unless-stopped
+
+  mocktools:
+    build:
+      context: .
+      target: mocktools
+    environment:
+      DATABASE_URL: postgres://mocktools:mocktools_local@postgres:5432/mocktools
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/mocktools", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      target: app
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://accessflow_app:accessflow_app_local@postgres:5432/accessflow
+      MIGRATION_DATABASE_URL: postgres://accessflow_owner:accessflow_owner_local@postgres:5432/accessflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mocktools:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/accessflow", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Disposable test database: in-memory, test profile only (DECISIONS.md A2, 2026-10-28).
+  postgres-test:
+    <<: *postgres
+    profiles: [test]
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    tmpfs:
+      - /var/lib/postgresql
+    volumes:
+      - ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+
+  tests:
+    image: golang:1.27.3-bookworm # Debian-based: go test -race needs cgo
+    profiles: [test]
+    working_dir: /src
+    volumes:
+      - .:/src
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+    environment:
+      TEST_ADMIN_DATABASE_URL: postgres://postgres:postgres_local@postgres-test:5432/postgres
+      TEST_OWNER_DATABASE_URL: postgres://accessflow_owner:accessflow_owner_local@postgres-test:5432/accessflow
+      TEST_APP_DATABASE_URL: postgres://accessflow_app:accessflow_app_local@postgres-test:5432/accessflow
+      TEST_MOCKTOOLS_DATABASE_URL: postgres://mocktools:mocktools_local@postgres-test:5432/mocktools
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        unformatted=$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))
+        if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
+        go vet ./...
+        go test -race -count=1 ./...
+
+volumes:
+  pgdata:
+  gomodcache:
+  gobuildcache:
