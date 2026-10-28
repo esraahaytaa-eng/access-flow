@@ -92,7 +92,9 @@ services:
       - -c
       - |
         set -e
-        unformatted=$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))
+        # All Go code lives in cmd/ and internal/ (A8). No `go list` here: it needs git, which
+        # refuses CI checkouts owned by another user, and its failure made this check pass silently.
+        unformatted=$$(gofmt -l cmd internal)
         if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
         go vet ./...
         go test -race -count=1 ./...
