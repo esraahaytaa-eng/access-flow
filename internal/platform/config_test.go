@@ -11,22 +11,30 @@ func TestLoadConfig(t *testing.T) {
 		"DATABASE_URL":           "postgres://app@db/accessflow",
 		"MIGRATION_DATABASE_URL": "postgres://owner@db/accessflow",
 	}
+	defaults := platform.Config{HTTPAddr: ":8080", DatabaseURL: full["DATABASE_URL"], MigrationDatabaseURL: full["MIGRATION_DATABASE_URL"],
+		BootstrapAdminEmail: "admin@accessflow.local", BootstrapFile: "/var/lib/accessflow/bootstrap-admin.txt"}
+	changed := func(f func(*platform.Config)) platform.Config { c := defaults; f(&c); return c }
 	cases := []struct {
 		name    string
 		env     map[string]string
 		want    platform.Config
 		wantErr bool
 	}{
-		{
-			name: "defaults the HTTP address",
-			env:  full,
-			want: platform.Config{HTTPAddr: ":8080", DatabaseURL: full["DATABASE_URL"], MigrationDatabaseURL: full["MIGRATION_DATABASE_URL"]},
-		},
-		{
-			name: "HTTP address from the environment",
-			env:  with(full, "HTTP_ADDR", ":9000"),
-			want: platform.Config{HTTPAddr: ":9000", DatabaseURL: full["DATABASE_URL"], MigrationDatabaseURL: full["MIGRATION_DATABASE_URL"]},
-		},
+		{name: "defaults", env: full, want: defaults},
+		{name: "HTTP address from the environment", env: with(full, "HTTP_ADDR", ":9000"),
+			want: changed(func(c *platform.Config) { c.HTTPAddr = ":9000" })},
+		{name: "JWT secret from the environment", env: with(full, "JWT_SECRET", "s3cret"),
+			want: changed(func(c *platform.Config) { c.JWTSecret = "s3cret" })},
+		{name: "secure cookies", env: with(full, "COOKIE_SECURE", "true"),
+			want: changed(func(c *platform.Config) { c.SecureCookies = true })},
+		{name: "seed password from the environment", env: with(full, "SEED_PASSWORD", "local-demo-password"),
+			want: changed(func(c *platform.Config) { c.SeedPassword = "local-demo-password" })},
+		{name: "COOKIE_SECURE must be a boolean", env: with(full, "COOKIE_SECURE", "yes please"), wantErr: true},
+		{name: "bootstrap admin and file from the environment",
+			env: with(with(full, "BOOTSTRAP_ADMIN_EMAIL", "root@example.com"), "BOOTSTRAP_FILE", "/data/admin.txt"),
+			want: changed(func(c *platform.Config) {
+				c.BootstrapAdminEmail, c.BootstrapFile = "root@example.com", "/data/admin.txt"
+			})},
 		{name: "runtime database URL is required", env: with(full, "DATABASE_URL", ""), wantErr: true},
 		{name: "migration database URL is required", env: with(full, "MIGRATION_DATABASE_URL", ""), wantErr: true},
 	}

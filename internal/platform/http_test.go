@@ -22,7 +22,7 @@ func TestHealthHandler(t *testing.T) {
 		wantBody   string
 	}{
 		{"database reachable", nil, http.StatusOK, `{"status":"ok"}`},
-		{"database down", errors.New("connection refused"), http.StatusServiceUnavailable, `{"error":"database unavailable"}`},
+		{"database down", errors.New("connection refused"), http.StatusServiceUnavailable, `{"error":"database_unavailable"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,8 +41,10 @@ func TestWriteErrorMapsTypedErrorsAndHidesInternalDetails(t *testing.T) {
 		wantStatus int
 		wantBody   string
 	}{
-		{"not found", fmt.Errorf("load grant: %w", platform.ErrNotFound), http.StatusNotFound, `{"error":"not found"}`},
-		{"anything else", errors.New("pq: password=secret failed"), http.StatusInternalServerError, `{"error":"internal error"}`},
+		{"not found", fmt.Errorf("load grant: %w", platform.ErrNotFound), http.StatusNotFound, `{"error":"not_found"}`},
+		{"anything else", errors.New("pq: password=secret failed"), http.StatusInternalServerError, `{"error":"internal_error"}`},
+		{"typed error", platform.NewError(http.StatusUnauthorized, "invalid_credentials"), http.StatusUnauthorized, `{"error":"invalid_credentials"}`},
+		{"validation error names the field", fmt.Errorf("change: %w", platform.ValidationError("newPassword", "password_length")), http.StatusBadRequest, `{"error":"password_length","field":"newPassword"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,5 +122,27 @@ func assertJSON(t *testing.T, rec *httptest.ResponseRecorder, status int, body s
 	}
 	if got := strings.TrimSpace(rec.Body.String()); got != body {
 		t.Errorf("body = %s; want %s", got, body)
+	}
+}
+
+func TestDecodeJSONRejectsTrailingData(t *testing.T) {
+	cases := []struct {
+		body string
+		ok   bool
+	}{
+		{`{"a":1}`, true},
+		{"{\"a\":1}\n", true},
+		{`{"a":1} junk`, false},
+		{`{"a":1}{"a":2}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.body, func(t *testing.T) {
+			var v struct{ A int }
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			err := platform.DecodeJSON(httptest.NewRecorder(), r, &v)
+			if tc.ok != (err == nil) {
+				t.Fatalf("DecodeJSON(%q) error = %v; want ok %v", tc.body, err, tc.ok)
+			}
+		})
 	}
 }

@@ -40,6 +40,9 @@ Departments and job titles only drive **recommended starter packages**. Any empl
 ### F4. Initial credentials — [DEFAULT]
 HR creates the employee; the system generates a one-time temporary password shown once, stored only as a hash, expiring and single-use, with a forced change on first login. Resets of privileged accounts (Super Admin, InfoSec) require a Super Admin other than the target. No real email or SSO.
 *Trade-off:* HR briefly knows a working credential; mitigated by single use, expiry and audit of first login.
+- *Temporary password semantics — [APPROVED 2026-10-28]:* "single use" means a temporary password can be used for exactly one successful password change. Until then it stays valid for signing in, but every session from it may only change the password or sign out; after the change it is invalid. Employee temporary passwords also expire **72 hours** after issue, whichever comes first. The **bootstrap Super Admin's** temporary password does **not** expire; it stays valid until its first successful change (see A4, bootstrap credential delivery). No extra recovery mechanism is added for it.
+- *Employee administration — [APPROVED 2026-10-28]:* **HR Managers and Super Admins** may create and edit employees and reset passwords ("HR creates the employee" is extended to Super Admins so the bootstrap Super Admin can set up the organization without assigning HR Manager to themselves). Resets of privileged accounts (holding Super Admin or InfoSec) still require a Super Admin other than the target. Nobody resets their own password through an administrative action (they use password change). Only `ACTIVE` employees can be reset; `TERMINATED` employees cannot be edited (rehire, D7/A5). A manager must be `ACTIVE`, never the employee, and manager chains cannot form a cycle.
+- *Employee directory visibility — [APPROVED 2026-10-28]:* Super Admin, HR Manager, InfoSec and Auditor see every employee with status, roles, admin groups, pending password change and version; everyone else sees only `ACTIVE` employees with id, email, name, department, job title and manager. Enforced in the backend query. The Auditor role remains strictly read-only (O7).
 
 ---
 
@@ -58,6 +61,7 @@ HR creates the employee; the system generates a one-time temporary password show
 - Exactly one Super Admin is bootstrapped at initial setup.
 - Promotion is two-person: a Super Admin proposes, a **different** Super Admin authorizes; if only one exists, a different InfoSec member authorizes. The nominee never authorizes. Existing roles and groups are preserved.
 - Other application roles and admin group memberships are assigned by a Super Admin, with audit.
+  - *Refinement — [APPROVED 2026-10-28]:* nobody changes their own roles or admin group memberships; only `ACTIVE` employees receive roles or memberships; removal closes the interval, nothing is deleted. Admin groups are created by a Super Admin with a unique name and are create-only for now (no rename or retirement).
 - When the last Super Admin is terminated, termination proceeds immediately (login disabled, sessions ended) and the system enters `ADMIN_RECOVERY_REQUIRED`. An HR Manager nominates (self allowed); a different InfoSec member authorizes.
 - **Last resort:** if no eligible authorizer exists, recovery reuses the initial Super Admin bootstrap mechanism. It is available only when no active Super Admin exists, and it is recorded in the audit history.
 - A health warning shows whenever fewer than two active Super Admins exist. Concurrent cases cannot leave inconsistent state.
@@ -182,6 +186,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - A small, idempotent seed with realistic employees, tools, roles, requests and access records, including at least two InfoSec members (needed by F2's distinct-person fallback).
 - Real system time and normal background jobs only. No simulated clocks, "run due jobs now" controls, demo-specific workflows or recording-specific features.
 - No fabricated historical audit events. [DEFAULT] Seeded records are marked as seed-originated, and the seed's own actions are recorded at the real time they run.
+- *Development fixture — [APPROVED 2026-10-28]:* a small development fixture (M3) runs only when explicitly invoked (`docker compose exec app /accessflow dev-fixture`), never automatically; it is idempotent, creates records through the real services as the system actor, and marks them seed-originated.
 - The screen recording is a separate delivery task and does not shape the application.
 
 *Rationale:* correct behaviour, maintainability, security and tests take priority over presentation.
@@ -297,13 +302,15 @@ Revocation, suspension and resume follow the same pattern and labels (see O1, D7
 
 **CSRF**
 - The CSRF value in the JWT is also set in a readable cookie; every state-changing request must send it in an `X-CSRF-Token` header matching the JWT claim. The `Origin` header is also checked.
+  - *Implementation — [APPROVED 2026-10-28]:* the Origin check uses Go's standard `net/http.CrossOriginProtection` (Go 1.25+), which rejects unsafe cross-origin browser requests using `Sec-Fetch-Site` or `Origin` versus `Host`. It applies to every unsafe `/api` request, including login, in addition to the `X-CSRF-Token` check on authenticated requests.
 
 **Passwords and bootstrap** (preserves F4 and D2)
 - argon2id hashes (OWASP minimum parameters, per-password salt, parameters stored with the hash). Length 12–128, no composition rules.
 - Temporary passwords: 16 random characters, shown once, hashed, single use, expire after 72 hours. A token issued from a temporary password allows only password change and logout.
+  - *Refinement — [APPROVED 2026-10-28]:* see F4, temporary password semantics. The 72-hour expiry applies to employee temporary passwords; the bootstrap Super Admin's does not expire.
 - Generic login error; 5 consecutive failures lock the account for 15 minutes (checked at login, no job). Logins, failures, lockouts and password changes are audited.
 - First start: if no Super Admin has ever existed, one is created from a configured email with a one-time temporary password. D2 last-resort recovery is a one-off command (`docker compose exec app …`), usable only when no active Super Admin exists, audited, never automatic.
-- **Bootstrap credential delivery — [APPROVED 2026-10-28, refines the above]:** the temporary password is written to a private file on a persistent Docker volume (`/var/lib/accessflow/bootstrap-admin.txt`, mode 0600) and is **never printed in application logs**. The log states only how to read it (`docker compose exec app cat /var/lib/accessflow/bootstrap-admin.txt`). The file is removed after the initial password change; single use and 72-hour expiry still apply, and `recover-admin` issues a new one the same way. `docker compose up` still needs no manual setup. *Documented limitation:* anyone with access to the Docker host, the Docker daemon or the volume can read the file while it exists. *(History: previously "printed once in the app log"; changed because logs are often collected and retained.)*
+- **Bootstrap credential delivery — [APPROVED 2026-10-28, refines the above]:** the temporary password is written to a private file on a persistent Docker volume (`/var/lib/accessflow/bootstrap-admin.txt`, mode 0600) and is **never printed in application logs**. The log states only how to read it (`docker compose exec app /accessflow bootstrap-password`; see the 2026-10-28 note below). The file is removed after the initial password change; single use and 72-hour expiry still apply, and `recover-admin` issues a new one the same way. *(Refined 2026-10-28: the bootstrap password does not expire; it stays valid until the first successful password change, after which it is invalid and the file is deleted. `recover-admin` remains only the D2 last-resort recovery when no active Super Admin exists.)* *(Approved 2026-10-28: the distroless image (A2) has no `cat`, so the file is read with `docker compose exec app /accessflow bootstrap-password`, a subcommand of the app binary like `healthcheck`; the log names that command. History: originally `docker compose exec app cat /var/lib/accessflow/bootstrap-admin.txt`.)* `docker compose up` still needs no manual setup. *Documented limitation:* anyone with access to the Docker host, the Docker daemon or the volume can read the file while it exists. *(History: previously "printed once in the app log"; changed because logs are often collected and retained.)*
 - Seeded demo users (D12) share a local-only password from a setting with a documented Compose default; the seed is never used in production.
 
 **Logout**
@@ -336,6 +343,8 @@ Two mechanisms inside the Go application; no Redis, RabbitMQ, generic job queue,
 - **Vite + React + TypeScript** (strict mode), **React Router** for navigation, **TanStack Query** for server state. No Redux or other global store.
 - **UI component library: deferred.** The interface is designed separately with Claude Artifacts and delivered under `design/`. The component approach is chosen after reviewing those files: if the design uses Tailwind, shadcn/ui or another approach, its compatibility is evaluated and the existing design reused where practical. Only one UI library; no competing libraries or unnecessary rewrites of design components.
 - The design is the visual and UX reference; `CASE.md` and `DECISIONS.md` remain authoritative for functional requirements.
+- **Localization — [APPROVED 2026-10-28]:** the frontend supports **English and Turkish**. Every screen, form, status label, validation message, navigation item, modal and notification is available in both languages. It is built in U1 and in every later UI slice, not in backend milestones.
+  - *API consequence — [APPROVED 2026-10-28, implemented in M2]:* API errors return a stable machine-readable code, `{"error": "<code>", "field"?: "<fieldName>"}` (for example `{"error":"invalid_credentials"}`; `"field"` only for validation errors), never display text; the frontend maps codes to both languages.
 - Library-independent conventions:
   - One small `fetch` wrapper: adds `X-CSRF-Token`; on `401` goes to login (or forced password change); shows clear `403` and validation errors.
   - Hand-written TypeScript types matching the API; no OpenAPI code generation.
