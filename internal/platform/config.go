@@ -18,7 +18,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		DatabaseURL:          getenv("DATABASE_URL"),
 		MigrationDatabaseURL: getenv("MIGRATION_DATABASE_URL"),
 	}
-	if cfg.HTTPAddr ==  "" {
+	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"
 	}
 	if cfg.DatabaseURL == "" {
