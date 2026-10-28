@@ -22,7 +22,7 @@
 - Direct grants: temporary, at most 90 days from creation — the only duration limit (D1, D6).
 - Retries: 5 attempts, backoff 30 s, 1 min, 2 min, 4 min, then `FAILED` (A6, O3).
 - JWT: HS256 only, 30-minute lifetime, re-issued under half-life, 12-hour cap; status, `token_version` and roles loaded from the DB on every request (A4).
-- Temporary passwords: 16 characters, single use, 72-hour expiry; passwords 12–128 characters; 5 failures → 15-minute lock (A4).
+- Temporary passwords: 16 characters, valid until the first successful password change; employee temporary passwords also expire after 72 hours, the bootstrap Super Admin's never; sessions from a temporary password may only change the password or sign out (F4, A4, 2026-10-28). Passwords 12–128 characters; 5 failures → 15-minute lock (A4).
 - Every permission and data-visibility rule is enforced in backend handlers and SQL queries; the UI only hides actions (A4, A7).
 - Company timezone setting, default `Europe/Istanbul` (A6).
 - Real system time; no simulated clocks or demo controls (D12).
@@ -44,6 +44,7 @@
 
 - **Before `design/` arrives:** milestones deliver infrastructure and backend workflows proven by API scenario tests. The web app stays a placeholder page (build pipeline and embedding only). No visual design, no component library.
 - **When `design/` arrives:** milestone **U1 (UI foundation)** is inserted before the next backend milestone. It reviews `design/`, selects the UI library (A7), and builds the app shell, navigation, fetch wrapper, status-badge mapping, timezone display and login / password change. It also builds the screens for any backend milestones already completed (catch-up), so the UI never lags by more than one milestone.
+- **Localization (A7, 2026-10-28):** every screen, form, status, validation message, navigation item, modal and notification is available in English and Turkish, from U1 onward. Backend milestones return stable error codes for the UI to translate; they ship no display text.
 - **After U1:** every milestone has a **UI slice** delivering its screens together with its backend workflow, in the same milestone and PR. A milestone is not complete until its UI slice works against the real API.
 - Each milestone below lists its UI slice. Before U1, a milestone's UI slice is carried into U1's catch-up scope instead.
 
@@ -60,8 +61,8 @@ Screens and areas (O7 plus its 2026-10-28 clarification): My Requests / My Acces
 
 Approved 2026-10-28 and recorded in A4 (bootstrap credential delivery):
 - On first start, if no Super Admin has ever existed, the app creates one from the configured email and writes the one-time temporary password to a file on a private named volume (`/var/lib/accessflow/bootstrap-admin.txt`, mode 0600), never to stdout/logs.
-- The log line says only: `initial Super Admin created; read the one-time password with: docker compose exec app cat /var/lib/accessflow/bootstrap-admin.txt`.
-- The file is deleted after the first successful password change; the password stays single use with a 72-hour expiry (unchanged A4 rules). If it expires unused, the D2 `recover-admin` command issues a new one through the same file.
+- The log line says only: `initial Super Admin created; read the one-time password with: docker compose exec app /accessflow bootstrap-password` (the distroless image has no `cat`; approved 2026-10-28, see A4).
+- The bootstrap password does not expire: it stays valid until the first successful password change, after which it is invalid and the file is deleted (F4, A4, 2026-10-28). Until then it can only be used to change the password. No extra recovery mechanism is added for it; `recover-admin` (M14) stays the D2 last resort when no active Super Admin exists.
 - `docker compose up` still needs no manual setup. Seeded demo users (M15) keep the documented local-only password from A4.
 - README documents the local limitation: anyone with access to the Docker host, daemon or volume can read the file while it exists.
 
@@ -108,12 +109,14 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 
 ### M0 — Project setup
 
+- **Status:** completed 2026-10-28 (`5566100`).
 - **Objective:** clean repository with requirements, decisions, engineering instructions and this plan.
 - **Deliverables:** `CASE.md`, `DECISIONS.md`, `CLAUDE.md`, `.gitignore`, `docs/plans/2026-10-28-implementation-plan.md`.
 - **Commit/PR:** one initial commit directly on `main` (the only direct commit), after approval; push separately after approval.
 
 ### M1 — Walking skeleton
 
+- **Status:** completed 2026-10-28, PR #1 (`b972c4f`).
 - **Objective:** `docker compose up` on a clean machine starts all services; health endpoint; migrations and append-only audit work; the test harness runs.
 - **Dependencies:** M0; Superpowers and Ponytail loaded in this project.
 - **Tasks:**
@@ -131,6 +134,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 
 ### C1 — Continuous integration (added 2026-10-28, before M2)
 
+- **Status:** completed 2026-10-28, PR #2 (`5ae7289`); CI green on `main`.
 - **Objective:** every pull request to `main` and every push to `main` runs the same checks as the local Docker workflow, so each PR shows a real pass/fail result before merge approval.
 - **Dependencies:** M1 merged.
 - **Approach:** one GitHub Actions workflow that runs the existing Docker commands rather than a second toolchain setup, so CI and local runs cannot drift:
@@ -162,14 +166,23 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Objective:** secure login, logout, password change and Super Admin bootstrap.
 - **Dependencies:** M1.
 - **Tasks:**
-  1. Migrations: `employees` (status, manager, department, job title, `token_version`, lockout fields, version), password hashes, role and admin-group assignment intervals (A5, A9), `settings` (generated JWT secret).
-  2. argon2id; temporary passwords (F4, A4).
-  3. JWT cookie issue / re-issue / validate; CSRF header + Origin check; middleware loading status, version, roles and groups from DB each request; role guard helpers.
-  4. Login (generic error, lockout), logout (`token_version`++), forced password change.
-  5. Bootstrap Super Admin via the one-time file (above).
-- **Acceptance criteria:** bootstrap Super Admin logs in with the file password, must change it, file is removed; all A4 rules hold; logins, failures, lockouts and password changes are audited.
-- **Required tests:** non-HS256 token rejected; expired token rejected; re-issue keeps login time and respects 12 h; logout invalidates a copied token; suspended/terminated user denied with valid token; temporary-password token allows only password change and logout; 5 failures → 15-minute lock; CSRF missing/mismatched/foreign Origin rejected; bootstrap password never appears in logs.
-- **UI slice:** login, forced password change, logout.
+  1. Migration: `employees` (email stored lowercase and unique, status, manager, department, job title, `token_version`, lockout fields, version), `password_credentials` (argon2id hash, temporary flag, expiry), `role_assignments` as intervals (A5, A9), `settings` (generated JWT secret); foreign keys from `audit_events` to `employees`; the runtime user gets no `DELETE` on any of them. Admin groups move to M3 (approved 2026-10-28).
+  2. Pure rules: password length, lockout, token expiry and re-issue, temporary-password expiry.
+  3. argon2id (OWASP minimum: 19 MiB, 2 iterations, 1 thread, 16-byte salt, parameters stored with the hash); 16-character temporary passwords (F4, A4).
+  4. JWT (HS256 only) issue / re-issue / validate; signing secret from `JWT_SECRET` or generated once into `settings`; middleware loading status, `token_version`, roles and the temporary-password flag from the DB on every request; `X-CSRF-Token` check plus `net/http.CrossOriginProtection` (A4, 2026-10-28); role guard helper.
+  5. `POST /api/v1/auth/login` (generic error, lockout, dummy hash for unknown emails), `POST /api/v1/auth/logout` (`token_version`++), `POST /api/v1/auth/password` (forced change), `GET /api/v1/auth/me`; audit of every outcome, with failed attempts committed.
+  6. API errors as stable codes for the UI to translate: `{"error": "<code>", "field"?: "<fieldName>"}` (A7, approved 2026-10-28).
+  7. Bootstrap Super Admin via the one-time file (above), with no expiry; file removed after the change; `appdata` volume.
+- **Acceptance criteria:** bootstrap Super Admin logs in with the file password, must change it, file is removed; all A4 rules hold; logins, failures, lockouts and password changes are audited; CI green.
+- **Required tests:** non-HS256 token rejected; expired token rejected; re-issue keeps login time and respects 12 h; logout invalidates a copied token; suspended/terminated user denied with valid token; temporary-password session allows only password change, logout and `me`; employee temporary password expires after 72 h, the bootstrap one does not; 5 failures → 15-minute lock, concurrent failures counted correctly; CSRF missing/mismatched and cross-origin requests rejected; identical response for unknown email, wrong password, locked and inactive accounts; bootstrap password never appears in logs; runtime user cannot delete employees, credentials or roles.
+- **UI slice:** login, forced password change, logout (in U1, English and Turkish).
+- **Status:** implemented 2026-10-28 on `feat/identity` (shares a PR with M3).
+- **Review follow-ups (2026-10-28), assigned:**
+  - M3: employee email validation, one rule shared by Go and PostgreSQL (ASCII only, at most 254 characters, trimmed and lowercased identically); `BOOTSTRAP_ADMIN_EMAIL` is checked with the same rule at startup. Today Go's `TrimSpace`/`ToLower` and PostgreSQL's `btrim`/`lower` differ on tabs and some non-ASCII letters (Turkish İ), so such an email fails the CHECK.
+  - M3: an employee temporary password that expires during a session: password change answers a distinct `temporary_password_expired` code and does not count toward lockout (today: `invalid_current_password`, counted).
+  - M3: `platform.DecodeJSON` rejects trailing data after the JSON body (today `{...} junk` is accepted).
+  - U1: logout or any request with an expired session answers 401 without clearing the cookies; the UI treats 401 as signed out and drops its session state.
+  - Accepted, documented in README known limitations: no login rate limiting beyond the A4 lockout (so anyone who knows an email can keep that account locked); one app instance only (bootstrap is safe across processes through an advisory lock, but multi-instance operation is not tested).
 
 ### M3 — Employees, roles and development fixture
 
@@ -177,12 +190,13 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Dependencies:** M2.
 - **Tasks:**
   1. HR: create employee (temporary password shown once), edit manager / department / job title (job-title-only change → audit only; transfer effects come in M10).
-  2. Super Admin: assign/remove roles (InfoSec, HR Manager, Auditor) and admin-group memberships as intervals, audited (D2 general rule).
+  2. Super Admin: assign/remove roles (InfoSec, HR Manager, Auditor) and admin-group memberships as intervals, audited (D2 general rule). Includes the `admin_groups` and membership tables and loading memberships in the auth middleware (moved from M2, approved 2026-10-28).
   3. Password reset; privileged targets need a different Super Admin (F4).
   4. Employee directory API with role-based field visibility.
   5. `internal/devfixture`: a handful of employees, two InfoSec members, through real services; idempotent; seed-originated marker.
+  6. M2 review follow-ups assigned here (see M2): shared email validation rule, `temporary_password_expired`, `DecodeJSON` trailing data.
 - **Acceptance criteria:** HR and Super Admin flows work and are audited; non-HR cannot create employees; role removal takes effect on the next request.
-- **Required tests:** permission matrix per endpoint (Auditor role alone cannot approve, fulfil, administer or modify access); self privileged reset rejected; manager cycle rejected; dev fixture idempotent.
+- **Required tests:** permission matrix per endpoint (Auditor role alone cannot approve, fulfil, administer or modify access); self privileged reset rejected; manager cycle rejected; dev fixture idempotent; invalid emails (non-ASCII, over 254 characters, tabs) rejected with a validation code; expired temporary password gives `temporary_password_expired` without a lockout count; trailing JSON data rejected.
 - **UI slice:** Employees (list, create, edit), Administration (roles, groups, password reset).
 
 ### M4 — Catalog and Mock Tool Service
@@ -329,8 +343,8 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 ### U1 — UI foundation (inserted when `design/` arrives)
 
 - **Objective:** apply the design system and bring the UI up to the backend's current milestone.
-- **Tasks:** review `design/`; choose and add the single UI library (A7; reported for approval as a dependency); app shell and role-based navigation; fetch wrapper (CSRF, 401 → login, 403 / validation errors); shared status-badge mapping (self-reported always labelled); company-timezone timestamps; catch-up UI slices of completed milestones.
-- **Required tests:** fetch wrapper; status mapping; key forms; buttons disabled while in flight.
+- **Tasks:** review `design/`; choose and add the single UI library (A7; reported for approval as a dependency); English and Turkish localization for all UI text, including translations of API error codes (A7, 2026-10-28); app shell and role-based navigation; fetch wrapper (CSRF, 401 → login, 403 / validation errors); shared status-badge mapping (self-reported always labelled); company-timezone timestamps; catch-up UI slices of completed milestones.
+- **Required tests:** fetch wrapper; status mapping; key forms; buttons disabled while in flight; every UI text and API error code has both an English and a Turkish translation.
 
 ---
 

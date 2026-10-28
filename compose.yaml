@@ -49,6 +49,8 @@ services:
     environment:
       DATABASE_URL: postgres://accessflow_app:accessflow_app_local@postgres:5432/accessflow
       MIGRATION_DATABASE_URL: postgres://accessflow_owner:accessflow_owner_local@postgres:5432/accessflow
+    volumes:
+      - appdata:/var/lib/accessflow
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,5 +103,6 @@ services:
 
 volumes:
   pgdata:
+  appdata:
   gomodcache:
   gobuildcache:

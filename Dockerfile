@@ -16,7 +16,8 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY --from=web /web/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/accessflow ./cmd/accessflow \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mocktools ./cmd/mocktools
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mocktools ./cmd/mocktools \
+ && mkdir -m 0700 /out/appdata
 
 FROM gcr.io/distroless/static-debian12:nonroot AS mocktools
 COPY --from=build /out/mocktools /mocktools
@@ -25,5 +26,7 @@ ENTRYPOINT ["/mocktools"]
 
 FROM gcr.io/distroless/static-debian12:nonroot AS app
 COPY --from=build /out/accessflow /accessflow
+# Holds the one-time bootstrap password file (A4); the appdata volume inherits this owner.
+COPY --from=build --chown=65532:65532 /out/appdata /var/lib/accessflow
 EXPOSE 8080
 ENTRYPOINT ["/accessflow"]

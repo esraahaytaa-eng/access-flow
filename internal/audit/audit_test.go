@@ -17,7 +17,9 @@ import (
 func TestRecordStoresTheEventAtTheTransactionTime(t *testing.T) {
 	ctx := context.Background()
 	db := testutil.NewDB(t)
-	actor, entity, subject := uuid.New(), uuid.New(), uuid.New()
+	actor := testutil.CreateEmployee(t, db, testutil.EmployeeSpec{}).ID
+	subject := testutil.CreateEmployee(t, db, testutil.EmployeeSpec{}).ID
+	entity := uuid.New()
 
 	var txNow time.Time
 	err := platform.InTx(ctx, db.App, func(tx pgx.Tx, now time.Time) error {
