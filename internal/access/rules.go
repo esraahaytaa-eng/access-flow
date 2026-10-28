@@ -14,8 +14,12 @@ func Backoff(attempts int) (wait time.Duration, final bool) {
 }
 
 // DisplayStatus is the grant's screen label (Fulfillment methods): activation and removal
-// carry their evidence; only API results are verified.
-func DisplayStatus(method, status string) string {
+// carry their evidence; only API results are verified. A grant task with a vendor ticket
+// is waiting for the vendor.
+func DisplayStatus(method, status string, ticket bool) string {
+	if status == "PENDING_FULFILLMENT" && ticket {
+		return "WAITING_VENDOR"
+	}
 	if status != "ACTIVE" && status != "REVOKED" {
 		return status
 	}
@@ -39,9 +43,9 @@ func RetiredReason(toolStatus, levelStatus string) string {
 // Allowed transitions (A9). CANCELLED is only for grants that never reached the tool.
 var grantMoves = map[string][]string{
 	"PROVISIONING":         {"ACTIVE", "FAILED", "CANCELLED", "REVOCATION_REQUESTED"},
-	"PENDING_FULFILLMENT":  {"ACTIVE", "FAILED", "CANCELLED"},
+	"PENDING_FULFILLMENT":  {"ACTIVE", "FAILED", "CANCELLED", "REVOCATION_REQUESTED"},
 	"ACTIVE":               {"REVOCATION_REQUESTED"},
-	"FAILED":               {"PROVISIONING", "REVOCATION_REQUESTED"},
+	"FAILED":               {"PROVISIONING", "PENDING_FULFILLMENT", "REVOCATION_REQUESTED"},
 	"REVOCATION_REQUESTED": {"REVOKED", "REVOCATION_FAILED"},
 	"REVOCATION_FAILED":    {"REVOCATION_REQUESTED"},
 }

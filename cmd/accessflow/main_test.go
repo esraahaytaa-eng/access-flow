@@ -41,6 +41,7 @@ func TestRouter(t *testing.T) {
 		{"/api/v1/approvals", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
 		{"/api/v1/access", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
 		{"/api/v1/exceptions", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
+		{"/api/v1/fulfillment-tasks", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
 		// Unknown API paths must never fall through to the web page.
 		{"/api/v1/nope", "application/json", `{"error":"not_found"}`, http.StatusNotFound},
 		{"/api/nope", "application/json", `{"error":"not_found"}`, http.StatusNotFound},

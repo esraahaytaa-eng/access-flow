@@ -26,22 +26,30 @@ func TestBackoff(t *testing.T) {
 }
 
 func TestDisplayStatus(t *testing.T) {
-	cases := []struct{ method, status, want string }{
-		{"API", "PROVISIONING", "PROVISIONING"},
-		{"API", "ACTIVE", "ACTIVE / VERIFIED"},
-		{"MANUAL", "ACTIVE", "ACTIVE / SELF_REPORTED"},
-		{"VENDOR", "ACTIVE", "ACTIVE / SELF_REPORTED"},
-		{"MANUAL", "PENDING_FULFILLMENT", "PENDING_FULFILLMENT"},
-		{"API", "FAILED", "FAILED"},
-		{"API", "REVOCATION_REQUESTED", "REVOCATION_REQUESTED"}, // still held (O1)
-		{"API", "REVOCATION_FAILED", "REVOCATION_FAILED"},
-		{"API", "REVOKED", "REVOKED / VERIFIED"},
-		{"MANUAL", "REVOKED", "REVOKED / SELF_REPORTED"},
-		{"API", "CANCELLED", "CANCELLED"}, // never reached the tool
+	cases := []struct {
+		method, status string
+		ticket         bool // the grant's task has a vendor ticket
+		want           string
+	}{
+		{"API", "PROVISIONING", false, "PROVISIONING"},
+		{"API", "ACTIVE", false, "ACTIVE / VERIFIED"},
+		{"MANUAL", "ACTIVE", false, "ACTIVE / SELF_REPORTED"},
+		{"VENDOR", "ACTIVE", false, "ACTIVE / SELF_REPORTED"},
+		{"VENDOR", "ACTIVE", true, "ACTIVE / SELF_REPORTED"},
+		{"MANUAL", "PENDING_FULFILLMENT", false, "PENDING_FULFILLMENT"},
+		{"VENDOR", "PENDING_FULFILLMENT", false, "PENDING_FULFILLMENT"},
+		{"VENDOR", "PENDING_FULFILLMENT", true, "WAITING_VENDOR"},
+		{"VENDOR", "FAILED", true, "FAILED"},
+		{"API", "FAILED", false, "FAILED"},
+		{"API", "REVOCATION_REQUESTED", false, "REVOCATION_REQUESTED"}, // still held (O1)
+		{"API", "REVOCATION_FAILED", false, "REVOCATION_FAILED"},
+		{"API", "REVOKED", false, "REVOKED / VERIFIED"},
+		{"MANUAL", "REVOKED", false, "REVOKED / SELF_REPORTED"},
+		{"API", "CANCELLED", false, "CANCELLED"}, // never reached the tool
 	}
 	for _, tc := range cases {
-		if got := DisplayStatus(tc.method, tc.status); got != tc.want {
-			t.Errorf("DisplayStatus(%s, %s) = %q; want %q", tc.method, tc.status, got, tc.want)
+		if got := DisplayStatus(tc.method, tc.status, tc.ticket); got != tc.want {
+			t.Errorf("DisplayStatus(%s, %s, %v) = %q; want %q", tc.method, tc.status, tc.ticket, got, tc.want)
 		}
 	}
 }
@@ -56,7 +64,9 @@ func TestGrantTransitions(t *testing.T) {
 		{grantMoves, "PROVISIONING", "CANCELLED", true},
 		{grantMoves, "ACTIVE", "CANCELLED", false}, // held access is revoked, never cancelled
 		{grantMoves, "ACTIVE", "REVOCATION_REQUESTED", true},
-		{grantMoves, "FAILED", "PROVISIONING", true}, // manual retry
+		{grantMoves, "FAILED", "PROVISIONING", true},                      // manual retry
+		{grantMoves, "FAILED", "PENDING_FULFILLMENT", true},               // retry of a Manual or Vendor task
+		{grantMoves, "PENDING_FULFILLMENT", "REVOCATION_REQUESTED", true}, // removal while the task is claimed
 		{grantMoves, "FAILED", "REVOCATION_REQUESTED", true},
 		{grantMoves, "REVOCATION_FAILED", "REVOCATION_REQUESTED", true},
 		{grantMoves, "REVOKED", "ACTIVE", false}, // final

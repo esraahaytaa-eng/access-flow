@@ -42,7 +42,41 @@ func CreateGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uu
 		SubjectID: &employee, Details: map[string]any{"requestItemId": itemID}})
 }
 
-var errVersionConflict = platform.NewError(http.StatusConflict, "version_conflict")
+var (
+	errVersionConflict = platform.NewError(http.StatusConflict, "version_conflict")
+	errStarted         = platform.NewError(http.StatusConflict, "fulfillment_started")
+)
+
+// WithdrawGrant cancels the grant of an approved item that is being withdrawn, in the
+// caller's transaction after the item's lock, as long as no work started on it (O5): its
+// task was never claimed, or the runner never sent it. A grant already cancelled leaves the
+// item free to withdraw.
+func WithdrawGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uuid.UUID, reason string) error {
+	var grant, employee uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT id, employee_id FROM grants WHERE request_item_id = $1", itemID).Scan(&grant, &employee); err != nil {
+		return err
+	}
+	// Lock order: employee, operations, grant (see Runner); then read.
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", employee); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", grant); err != nil {
+		return err
+	}
+	var neverSent, cancelled bool
+	if err := tx.QueryRow(ctx, `SELECT o.status = 'PENDING' AND o.first_attempt_at IS NULL, g.status = 'CANCELLED'
+		FROM operations o JOIN grants g ON g.id = o.grant_id WHERE o.grant_id = $1 AND o.type = 'GRANT'`,
+		grant).Scan(&neverSent, &cancelled); err != nil {
+		return err
+	}
+	switch {
+	case cancelled: // retired or given up before provisioning: nothing left to cancel
+		return nil
+	case !neverSent:
+		return errStarted
+	}
+	return cancelGrant(ctx, tx, now, &actor, grant, employee, reason)
+}
 
 // Person is an employee as shown on a grant.
 type Person struct {
@@ -73,8 +107,10 @@ type Grant struct {
 func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Grant, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT g.id, e.id, e.full_name, t.id, t.name, l.id, l.name, g.method, g.status, g.activation_evidence,
-		       g.effective_from, g.effective_to, to_char(g.expires_on, 'YYYY-MM-DD'), g.closed_reason, g.version, g.created_at
+		       g.effective_from, g.effective_to, to_char(g.expires_on, 'YYYY-MM-DD'), g.closed_reason, g.version, g.created_at,
+		       o.ticket_ref IS NOT NULL
 		FROM grants g JOIN employees e ON e.id = g.employee_id
+		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
 		WHERE `+where+` ORDER BY g.created_at DESC, g.id LIMIT 200`, args...) // shortcut: newest 200 only; page when someone holds more
 	if err != nil {
@@ -82,9 +118,10 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Grant, error) {
 		var g Grant
+		var ticket bool
 		err := row.Scan(&g.ID, &g.Employee.ID, &g.Employee.FullName, &g.ToolID, &g.Tool, &g.AccessLevelID, &g.Level, &g.Method,
-			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt)
-		g.DisplayStatus = DisplayStatus(g.Method, g.Status)
+			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket)
+		g.DisplayStatus = DisplayStatus(g.Method, g.Status, ticket)
 		return g, err
 	})
 }
@@ -99,7 +136,8 @@ func (s *Service) Team(ctx context.Context, actor auth.Principal) ([]Grant, erro
 	return s.grants(ctx, "e.manager_id = $1", actor.EmployeeID)
 }
 
-// Revoke gives up a grant: by its employee (O6) or their current direct manager (D5).
+// Revoke gives up a grant: by its employee (O6), their current direct manager (D5) or,
+// directly, a Super Admin (D1).
 // A grant never sent to the tool is cancelled with no call; otherwise a verified REVOKE
 // is queued, and a queued or failed GRANT is cancelled so it cannot re-apply access. A
 // repeat while the grant is being removed returns its current state.
@@ -135,11 +173,14 @@ func (s *Service) Revoke(ctx context.Context, actor auth.Principal, id uuid.UUID
 			return err
 		}
 		by := "VOLUNTARY"
-		if actor.EmployeeID != employee {
-			if manager == nil || *manager != actor.EmployeeID {
-				return platform.ErrNotFound // nobody else may see it
-			}
+		switch {
+		case actor.EmployeeID == employee:
+		case manager != nil && *manager == actor.EmployeeID:
 			by = "MANAGER"
+		case actor.HasRole("SUPER_ADMIN"):
+			by = "DIRECT" // D1: its removal task is never worked by the Super Admin
+		default:
+			return platform.ErrNotFound // nobody else may see it
 		}
 		switch status {
 		case "REVOCATION_REQUESTED", "REVOCATION_FAILED", "REVOKED", "CANCELLED":

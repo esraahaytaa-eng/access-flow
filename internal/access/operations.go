@@ -66,18 +66,18 @@ func FailedOperations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, err
 func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID, version int) (Operation, error) {
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		var grant, employee uuid.UUID
-		var member bool
-		err := tx.QueryRow(ctx, `SELECT g.id, g.employee_id, EXISTS (SELECT 1 FROM admin_group_memberships m
-			    WHERE m.group_id = t.admin_group_id AND m.employee_id = $2 AND m.valid_to IS NULL)
+		var method string
+		var isMember bool
+		err := tx.QueryRow(ctx, `SELECT g.id, g.employee_id, g.method, `+member("$2")+`
 			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN tools t ON t.id = g.tool_id WHERE o.id = $1`,
-			id, actor.EmployeeID).Scan(&grant, &employee, &member)
+			id, actor.EmployeeID).Scan(&grant, &employee, &method, &isMember)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return platform.ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if !member && !actor.HasRole("SUPER_ADMIN") {
+		if !isMember && !actor.HasRole("SUPER_ADMIN") {
 			return platform.ErrForbidden
 		}
 		if employee == actor.EmployeeID {
@@ -101,14 +101,19 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 		case current != version:
 			return errVersionConflict
 		}
-		var grantStatus string
-		if err := tx.QueryRow(ctx, "SELECT status FROM grants WHERE id = $1 FOR UPDATE", grant).Scan(&grantStatus); err != nil {
+		grantStatus, err := lockGrant(ctx, tx, grant)
+		if err != nil {
 			return err
 		}
-		if err := setOp(ctx, tx, id, "FAILED", "PENDING", "attempts = 0, next_attempt_at = $2, completed_at = NULL", now); err != nil {
+		// A task goes back to the queue unclaimed; its refused ticket stays only in the audit history.
+		if err := setOp(ctx, tx, id, "FAILED", "PENDING",
+			"attempts = 0, next_attempt_at = $2, completed_at = NULL, claimed_by = NULL, ticket_ref = NULL", now); err != nil {
 			return err
 		}
-		to := map[string]string{"GRANT": "PROVISIONING", "REVOKE": "REVOCATION_REQUESTED"}[typ]
+		to := "REVOCATION_REQUESTED"
+		if typ == "GRANT" {
+			to = map[bool]string{true: "PROVISIONING", false: "PENDING_FULFILLMENT"}[method == "API"]
+		}
 		if err := setGrant(ctx, tx, grant, grantStatus, to, ""); err != nil {
 			return err
 		}

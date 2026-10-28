@@ -282,7 +282,7 @@ func TestRevokePermissionMatrix(t *testing.T) {
 	}{
 		{"the employee", w.dev, http.StatusOK},
 		{"the direct manager", w.mgr, http.StatusOK},
-		{"a Super Admin", w.admin, http.StatusNotFound}, // direct revocation is M7
+		{"a Super Admin", w.admin, http.StatusOK}, // direct revocation (D1)
 		{"InfoSec", w.is1, http.StatusNotFound},
 		{"an Auditor", auditor, http.StatusNotFound},
 	} {

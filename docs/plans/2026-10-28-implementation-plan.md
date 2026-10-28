@@ -269,12 +269,20 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Dependencies:** M6.
 - **Tasks:**
   1. Fulfillment Tasks per admin group (status, group, related request, time pending — O4).
-  2. Record vendor ticket (`WAITING_VENDOR`), confirm (`ACTIVE / SELF_REPORTED`, confirming admin), report failure (`FAILED`), retry; same for revoke / suspend / resume tasks.
+  2. Record vendor ticket (`WAITING_VENDOR`), confirm (`ACTIVE / SELF_REPORTED`, confirming admin), report failure (`FAILED`), retry; the same for revoke tasks. Suspend and resume tasks moved to M9 (decided 2026-10-28). Detailed plan: `2026-10-28-m7-manual-vendor-fulfillment.md`.
   3. `DIRECT_GRANT` (temporary ≤ 90 days) and direct revoke with justification; initiator cannot complete own task; notifications to InfoSec, manager, bypassed approver (D1).
 - **Acceptance criteria:** Manual and Vendor rows of the fulfillment table behave exactly as specified; no Manual/Vendor result is `VERIFIED`.
 - **Required tests:** non-member cannot act; beneficiary cannot fulfil own task; Vendor confirm without ticket rejected; direct grant > 90 days or for self rejected; initiator cannot confirm own direct task; repeated confirm idempotent.
 - **UI slice:** Fulfillment Tasks; direct grant / revoke in Administration.
-- **Follow-up from M6 (2026-10-28), assigned:** `TestApplyAndLookup` (`internal/access/toolclient_test.go`, M4) failed once during an M6 mutation run, inside a loaded full test run; it passed 5 repeated runs and every full suite since. Suspected cause: its client uses the 300 ms timeout meant for the fault cases, which a loaded machine can exceed (the same cause fixed in the M6 runner tests). Reproduce under load (e.g. `-count=20` with the whole suite), confirm the root cause, then fix it (a longer timeout for the non-fault tests), before the M6 + M7 PR.
+- **Status:** implemented on `feat/fulfillment` 2026-10-28, awaiting commit approval (one PR with M6); detailed plan `2026-10-28-m7-manual-vendor-fulfillment.md`. Approved items can be withdrawn until work starts, for API items too (O5).
+- **Follow-ups from the M7 reviews (2026-10-28), not in M7:**
+  - Task membership is checked before the task's locks; a membership removal committed during an action does not stop it (narrow race; closing it needs membership changes to lock the group's open tasks).
+  - Direct-grant and override notifications are not deduplicated: a person holding two recipient roles gets two.
+  - Withdrawing an approved item overwrites its `closed_at`; the approval time remains in the steps and the audit log.
+  - `canAct` is true for a member viewing a task another member holds (they can act only through takeover); for the UI slice.
+  - No router case for `POST /api/v1/direct-grants` (the router table is GET-only); no concurrent confirm-vs-revoke or runner-vs-withdraw race test (both rely on the employee and operation locks).
+  - Policy questions for decision: a Super Admin who is the employee's manager revokes as `MANAGER`, not `DIRECT`, so may confirm that removal task; a submitter or approver who is a group member may confirm the item's task; after a takeover the new claimer confirms with the previous claimer's ticket.
+- **Follow-up from M6 (2026-10-28), resolved in M7:** reproduced under load (`Client.Timeout exceeded while awaiting headers` in the happy-path tests); fixed by giving only the timeout case the 300 ms client; 40 of 40 runs passed beside two parallel full suites. Original note: `TestApplyAndLookup` (`internal/access/toolclient_test.go`, M4) failed once during an M6 mutation run, inside a loaded full test run; it passed 5 repeated runs and every full suite since. Suspected cause: its client uses the 300 ms timeout meant for the fault cases, which a loaded machine can exceed (the same cause fixed in the M6 runner tests). Reproduce under load (e.g. `-count=20` with the whole suite), confirm the root cause, then fix it (a longer timeout for the non-fault tests), before the M6 + M7 PR.
 
 ### M8 — Sweeps, expiry, extensions and level changes
 
@@ -294,7 +302,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Objective:** HR suspends, reactivates and terminates (immediate or scheduled); access removal is prioritized and visible until confirmed — the "14 leavers" problem.
 - **Dependencies:** M8.
 - **Tasks:**
-  1. Suspension (D7): login blocked, token invalidated, `SUSPEND` operations, pending requests cancelled, steps / tasks / reviews released or reassigned; reactivation with re-evaluation and `RESUME`.
+  1. Suspension (D7): login blocked, token invalidated, `SUSPEND` operations, pending requests cancelled, steps / tasks / reviews released or reassigned; reactivation with re-evaluation and `RESUME`. Includes the Manual / Vendor suspend and resume tasks (moved from M7, decided 2026-10-28).
   2. Termination immediate and scheduled (sweep), cancel / reschedule; overrides pending provisioning and resume; security-revocation exception.
 - **Acceptance criteria:** all D7 effects happen in one transaction per action; terminated employees' removals run first and stay in Exceptions until confirmed.
 - **Follow-up from M5 (2026-10-28), assigned:** re-route pending approval steps whose assignee is suspended or terminated (F2 fallback); until then InfoSec reassigns them (D9).

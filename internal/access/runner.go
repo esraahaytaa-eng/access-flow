@@ -77,8 +77,7 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 		err := tx.QueryRow(ctx, `SELECT o.id FROM operations o JOIN grants g ON g.id = o.grant_id
 			WHERE g.method = 'API'
 			  AND ((o.status = 'PENDING' AND o.next_attempt_at <= $1) OR (o.status = 'IN_PROGRESS' AND o.lease_until <= $1))
-			  AND NOT (o.type = 'REVOKE' AND EXISTS (SELECT 1 FROM operations x
-			           WHERE x.grant_id = o.grant_id AND x.type = 'GRANT' AND x.status IN ('PENDING', 'IN_PROGRESS')))
+			  AND NOT `+revokeWaits+`
 			ORDER BY o.priority, o.created_at LIMIT 1 FOR UPDATE OF o SKIP LOCKED`, now).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -87,24 +86,18 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 			return err
 		}
 		found = true
-		// Catalog retirement locks the tool: lock first, then read its status (A9).
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM tools WHERE id = (SELECT g.tool_id FROM operations o JOIN grants g ON g.id = o.grant_id
-			WHERE o.id = $1) FOR SHARE`, id); err != nil {
-			return err
-		}
 		next := claimed{op: id, token: uuid.New()}
 		var neverSent bool
-		var toolStatus, levelStatus string
 		if err := tx.QueryRow(ctx, `SELECT o.type, o.attempts + 1, o.first_attempt_at IS NULL, g.id, g.employee_id, e.email,
-			       g.tool_id, g.access_level_id, t.status, l.status
-			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN employees e ON e.id = g.employee_id
-			JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id WHERE o.id = $1`, id).
-			Scan(&next.typ, &next.attempts, &neverSent, &next.grant, &next.employee, &next.account,
-				&next.tool, &next.level, &toolStatus, &levelStatus); err != nil {
+			       g.tool_id, g.access_level_id
+			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN employees e ON e.id = g.employee_id WHERE o.id = $1`, id).
+			Scan(&next.typ, &next.attempts, &neverSent, &next.grant, &next.employee, &next.account, &next.tool, &next.level); err != nil {
 			return err
 		}
-		if reason := RetiredReason(toolStatus, levelStatus); next.typ == "GRANT" && neverSent && reason != "" {
-			return cancelGrant(ctx, tx, now, nil, next.grant, next.employee, reason)
+		if next.typ == "GRANT" && neverSent {
+			if cancelled, err := cancelIfRetired(ctx, tx, now, nil, next.grant, next.employee); err != nil || cancelled {
+				return err
+			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE operations SET status = 'IN_PROGRESS', attempts = attempts + 1, lease_token = $2,
 			lease_until = $3, first_attempt_at = coalesce(first_attempt_at, $4), version = version + 1 WHERE id = $1`,
@@ -147,19 +140,17 @@ func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		var grantStatus string
-		if err := tx.QueryRow(ctx, "SELECT status FROM grants WHERE id = $1 FOR UPDATE", c.grant).Scan(&grantStatus); err != nil {
+		grantStatus, err := lockGrant(ctx, tx, c.grant)
+		if err != nil {
 			return err
 		}
-		event := func(action string, entity string, id uuid.UUID, details map[string]any) error {
-			return audit.Record(ctx, tx, audit.Event{Action: action, Entity: entity, EntityID: &id, SubjectID: &c.employee, Details: details})
-		}
 		if callErr == nil {
-			return r.succeeded(ctx, tx, now, c, grantStatus, event)
+			return succeed(ctx, tx, now, nil, c.op, c.grant, c.employee, c.typ, grantStatus, "VERIFIED", map[string]any{})
 		}
 
 		msg := strings.ToValidUTF8(callErr.Error()[:min(len(callErr.Error()), 500)], "")
-		if err := event("OPERATION_ATTEMPT_FAILED", "operation", c.op, map[string]any{"attempt": c.attempts, "error": msg}); err != nil {
+		if err := audit.Record(ctx, tx, audit.Event{Action: "OPERATION_ATTEMPT_FAILED", Entity: "operation", EntityID: &c.op,
+			SubjectID: &c.employee, Details: map[string]any{"attempt": c.attempts, "error": msg}}); err != nil {
 			return err
 		}
 		wait, final := Backoff(c.attempts)
@@ -167,53 +158,81 @@ func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 		if errors.As(callErr, &rejected) && rejected.Status == http.StatusConflict {
 			final = true // the tool refused the operation: retrying cannot help (O3)
 		}
-		switch {
-		case c.typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED":
-			// The removal takes over; a retried GRANT could re-apply access after it.
-			if err := setOp(ctx, tx, c.op, "IN_PROGRESS", "CANCELLED", "completed_at = $2, last_error = $3", now, msg); err != nil {
-				return err
-			}
-			return event("OPERATION_CANCELLED", "operation", c.op, map[string]any{"reason": "the grant is being removed"})
-		case !final:
+		if !final && !(c.typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED") {
 			return setOp(ctx, tx, c.op, "IN_PROGRESS", "PENDING", "next_attempt_at = $2, last_error = $3", now.Add(wait), msg)
 		}
-		if err := setOp(ctx, tx, c.op, "IN_PROGRESS", "FAILED", "completed_at = $2, last_error = $3", now, msg); err != nil {
-			return err
-		}
-		to := map[string]string{"GRANT": "FAILED", "REVOKE": "REVOCATION_FAILED"}[c.typ]
-		if err := setGrant(ctx, tx, c.grant, grantStatus, to, ""); err != nil {
-			return err
-		}
-		return event("OPERATION_FAILED", "operation", c.op, map[string]any{"attempts": c.attempts, "error": msg})
+		return fail(ctx, tx, now, nil, c.op, c.grant, c.employee, c.typ, grantStatus, msg, map[string]any{"attempts": c.attempts})
 	})
 }
 
-// succeeded records a verified result. A GRANT that completes after its removal was
-// requested records when access began and leaves the removal in charge (D5).
-func (r *Runner) succeeded(ctx context.Context, tx pgx.Tx, now time.Time, c claimed, grantStatus string,
-	event func(string, string, uuid.UUID, map[string]any) error) error {
-	if err := setOp(ctx, tx, c.op, "IN_PROGRESS", "SUCCEEDED", "completed_at = $2, last_error = NULL", now); err != nil {
-		return err
-	}
-	if c.typ == "GRANT" {
-		to := grantStatus
-		if grantStatus == "PROVISIONING" {
-			to = "ACTIVE"
-		}
-		if err := setGrant(ctx, tx, c.grant, grantStatus, to, "activation_evidence = 'VERIFIED', effective_from = $3", now); err != nil {
-			return err
-		}
-		return event("GRANT_ACTIVATED", "grant", c.grant, map[string]any{"operationId": c.op, "evidence": "VERIFIED"})
-	}
-	if err := setGrant(ctx, tx, c.grant, grantStatus, "REVOKED", "effective_to = CASE WHEN effective_from IS NOT NULL THEN $3::timestamptz END", now); err != nil {
-		return err
-	}
-	return event("GRANT_REVOKED", "grant", c.grant, map[string]any{"operationId": c.op, "evidence": "VERIFIED"})
+// lockGrant locks a grant and returns its status.
+func lockGrant(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {
+	var status string
+	err := tx.QueryRow(ctx, "SELECT status FROM grants WHERE id = $1 FOR UPDATE", id).Scan(&status)
+	return status, err
 }
 
-// setOp moves a locked operation, clearing its lease; set may use $2… for args.
+// succeed records a confirmed result of an IN_PROGRESS operation: VERIFIED by the runner,
+// SELF_REPORTED by a task's claimer. A GRANT that completes after its removal was requested
+// records when access began and leaves the removal in charge (D5).
+func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op, grant, employee uuid.UUID,
+	typ, grantStatus, evidence string, details map[string]any) error {
+	if err := setOp(ctx, tx, op, "IN_PROGRESS", "SUCCEEDED", "completed_at = $2, last_error = NULL", now); err != nil {
+		return err
+	}
+	details["operationId"], details["evidence"] = op, evidence
+	event := func(action string) error {
+		return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: action, Entity: "grant", EntityID: &grant, SubjectID: &employee,
+			Details: details})
+	}
+	if typ == "GRANT" {
+		to := grantStatus
+		if grantStatus == "PROVISIONING" || grantStatus == "PENDING_FULFILLMENT" {
+			to = "ACTIVE"
+		}
+		if err := setGrant(ctx, tx, grant, grantStatus, to, "activation_evidence = $3, effective_from = $4", evidence, now); err != nil {
+			return err
+		}
+		return event("GRANT_ACTIVATED")
+	}
+	if err := setGrant(ctx, tx, grant, grantStatus, "REVOKED", "effective_to = CASE WHEN effective_from IS NOT NULL THEN $3::timestamptz END", now); err != nil {
+		return err
+	}
+	return event("GRANT_REVOKED")
+}
+
+// fail ends an IN_PROGRESS operation that did not work; it waits in Exceptions for a retry
+// (O3). A GRANT failing while its removal is requested is cancelled instead: a retried
+// GRANT could re-apply access after the removal.
+func fail(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op, grant, employee uuid.UUID,
+	typ, grantStatus, msg string, details map[string]any) error {
+	event := func(action string, details map[string]any) error {
+		return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: action, Entity: "operation", EntityID: &op, SubjectID: &employee,
+			Details: details})
+	}
+	if typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED" {
+		if err := setOp(ctx, tx, op, "IN_PROGRESS", "CANCELLED", "completed_at = $2, last_error = $3", now, msg); err != nil {
+			return err
+		}
+		return event("OPERATION_CANCELLED", map[string]any{"reason": "the grant is being removed"})
+	}
+	if err := setOp(ctx, tx, op, "IN_PROGRESS", "FAILED", "completed_at = $2, last_error = $3", now, msg); err != nil {
+		return err
+	}
+	to := map[string]string{"GRANT": "FAILED", "REVOKE": "REVOCATION_FAILED"}[typ]
+	if err := setGrant(ctx, tx, grant, grantStatus, to, ""); err != nil {
+		return err
+	}
+	if details == nil {
+		details = map[string]any{}
+	}
+	details["error"] = msg
+	return event("OPERATION_FAILED", details)
+}
+
+// setOp moves a locked operation, clearing its lease; set may use $2… for args. Staying put is allowed.
 func setOp(ctx context.Context, tx pgx.Tx, id uuid.UUID, from, to, set string, args ...any) error {
-	if !canMove(opMoves, from, to) {
+	if from != to && !canMove(opMoves, from, to) {
 		return fmt.Errorf("operation %s → %s is not allowed", from, to)
 	}
 	_, err := tx.Exec(ctx, "UPDATE operations SET status = '"+to+"', lease_token = NULL, lease_until = NULL, version = version + 1, "+set+
@@ -231,6 +250,25 @@ func setGrant(ctx context.Context, tx pgx.Tx, id uuid.UUID, from, to, set string
 	}
 	_, err := tx.Exec(ctx, "UPDATE grants SET status = $2, version = version + 1"+set+" WHERE id = $1", append([]any{id, to}, args...)...)
 	return err
+}
+
+// cancelIfRetired cancels a grant never sent whose level or tool was retired since its
+// approval (retired before provisioning), and reports whether it did.
+func cancelIfRetired(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, grant, employee uuid.UUID) (bool, error) {
+	// Catalog retirement locks the tool: lock first, then read its status (A9).
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM tools WHERE id = (SELECT tool_id FROM grants WHERE id = $1) FOR SHARE", grant); err != nil {
+		return false, err
+	}
+	var toolStatus, levelStatus string
+	if err := tx.QueryRow(ctx, `SELECT t.status, l.status FROM grants g JOIN tools t ON t.id = g.tool_id
+		JOIN access_levels l ON l.id = g.access_level_id WHERE g.id = $1`, grant).Scan(&toolStatus, &levelStatus); err != nil {
+		return false, err
+	}
+	reason := RetiredReason(toolStatus, levelStatus)
+	if reason == "" {
+		return false, nil
+	}
+	return true, cancelGrant(ctx, tx, now, actor, grant, employee, reason)
 }
 
 // cancelGrant cancels a grant that never reached the tool, with its open operations.

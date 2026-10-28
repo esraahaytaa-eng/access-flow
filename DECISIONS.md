@@ -228,6 +228,14 @@ Revocation, suspension and resume follow the same pattern and labels (see O1, D7
   - **Once a grant operation may have reached the tool, retirement no longer cancels it.** It is completed and verified, so no permission is left in the tool unrecorded; removing it is a normal revocation. The runner's retired check therefore applies only to grant operations never sent.
   - **A grant attempt that fails after removal was requested is cancelled, not retried.** The verified removal takes over, so a retried grant can never re-apply access after the removal.
   - **One lock order** for every fulfillment change: employee, then operations, then grant (approval, revoke, retry and the runner), so they cannot deadlock.
+- *Refinement — [APPROVED 2026-10-28, M7 plan]:* **Manual and Vendor tasks.**
+  - A task is the Manual or Vendor operation itself, in the responsible admin group's queue. **Only active members of the tool's admin group** claim and work it (record the vendor ticket, confirm, report failure); never the grant's employee (F2), and never the initiator of a direct grant or direct revoke (D1). A Super Admin who is not a member cannot work a task; retrying a `FAILED` task stays open to Super Admins and group members.
+  - A task whose claimer is no longer an active member of the group can be taken over by another member. There is no separate release action.
+  - Claiming a grant task never sent checks retirement, as the runner does: a retired level or tool cancels the grant (retired before provisioning).
+  - A retry returns the task to the queue unclaimed and without a ticket reference; the earlier reference stays in the audit history.
+  - `WAITING_VENDOR` is a display status (a Vendor grant task with a recorded ticket), not a stored grant status; the grant status list above is unchanged.
+  - Suspend and resume tasks come with suspension (D7, M9).
+- *Refinement — [APPROVED 2026-10-28, M7 plan]:* **direct-grant notifications (D1).** A direct grant notifies all active InfoSec members, the beneficiary's manager and, when the level requires a Tool Owner step, the tool owner (the bypassed approver). A direct revoke is audited only.
 
 ## Operational rules — [DEFAULT] unless noted
 - **O1. Effective access.** Access is effective from verified activation (API) or confirmed activation (manual/vendor, labelled self-reported) until verified or confirmed removal. This is the basis of point-in-time queries, which show each held grant in one of these states:

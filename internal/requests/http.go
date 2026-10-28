@@ -25,6 +25,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/approvals/{id}/override", s.handleOverride)
 	r.Get("/email-outbox", s.handleOutbox)
 	r.Get("/exceptions", s.handleExceptions)
+	r.Post("/direct-grants", s.handleDirectGrant)
 }
 
 func actor(r *http.Request) auth.Principal {
@@ -66,6 +67,31 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, created, err := s.Submit(r.Context(), actor(r), sub)
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	platform.Respond(w, r, status, req, err)
+}
+
+func (s *Service) handleDirectGrant(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		SubmissionID  *uuid.UUID
+		BeneficiaryID *uuid.UUID
+		AccessLevelID *uuid.UUID
+		Justification *string
+		ExpiresOn     *string
+	}
+	err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
+		return []platform.Field{{Name: "submissionId", Present: in.SubmissionID != nil}, {Name: "beneficiaryId", Present: in.BeneficiaryID != nil},
+			{Name: "accessLevelId", Present: in.AccessLevelID != nil}, {Name: "justification", Present: in.Justification != nil}}
+	})
+	var req Request
+	created := false
+	if err == nil {
+		req, created, err = s.DirectGrant(r.Context(), actor(r), DirectGrantInput{*in.SubmissionID, *in.BeneficiaryID,
+			*in.AccessLevelID, *in.Justification, in.ExpiresOn})
+	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated

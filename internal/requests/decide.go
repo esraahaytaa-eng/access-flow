@@ -299,8 +299,8 @@ func (s *Service) recordAttempt(ctx context.Context, actor auth.Principal, stepI
 	})
 }
 
-// Withdraw cancels a pending item; only its beneficiary or submitter may (O5). Withdrawal
-// of an approved item before provisioning starts comes with provisioning in M6.
+// Withdraw cancels a pending item, or an approved one before work starts on its grant;
+// only its beneficiary or submitter may (O5).
 func (s *Service) Withdraw(ctx context.Context, actor auth.Principal, itemID uuid.UUID, version int, reason string) (Item, error) {
 	reason, err := checkText(reason, "reason", "reason_required")
 	if err != nil {
@@ -321,6 +321,11 @@ func (s *Service) Withdraw(ctx context.Context, actor auth.Principal, itemID uui
 			}
 			if it.version != version {
 				return errVersionConflict
+			}
+			if it.status == "APPROVED" {
+				if err := access.WithdrawGrant(ctx, tx, now, actor.EmployeeID, itemID, reason); err != nil {
+					return err
+				}
 			}
 			if err := closeItem(ctx, tx, now, actor.EmployeeID, it, "WITHDRAWN", reason); err != nil {
 				return err
