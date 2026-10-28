@@ -190,7 +190,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Status:** merged 2026-10-28 with M2 as PR #3 (`fd5001c`).
 - **Review follow-ups (2026-10-28), assigned:**
   - M9: `people.checkManager` reads the manager's status without a lock; once termination exists, take `FOR SHARE` on the manager (or lock both rows) so an employee cannot be given a manager who is being terminated.
-  - Open question for the user before M5 (manager approvals): may HR Managers and Super Admins change their **own** manager? If so, an HR Manager could choose who approves their own requests. Today no approved rule forbids it.
+  - ~~Open question before M5: may HR Managers and Super Admins change their own manager?~~ Decided 2026-10-28: nobody edits their own employee record (DECISIONS.md, employee administration refinement); implemented in M5 Task 1.
   - Open question for the user before M14 (D2): a Super Admin may reset an InfoSec member's password (F4) and sign in as them, so with one Super Admin the "different InfoSec member authorizes" step of D2 can be performed by one person. The reset is audited and ends the target's sessions; M14 should decide on a control (for example: an authorizer whose password was last reset by the proposer cannot authorize).
   - Declined (2026-10-28): `ListEmployees` returns full rows and the handler reduces them to the basic view; its only other caller is the dev fixture as the system. Revisit if another package needs the directory.
 
@@ -241,6 +241,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** Jira Viewer needs only Manager; AWS Admin needs Manager → Tool Owner → InfoSec by three different people; fallback routing is visible; exactly one email per qualifying submission, none for on-behalf by manager.
 - **Required tests:** routing table (manager terminated → manager's manager → InfoSec pool; Tool Owner is beneficiary → InfoSec; nobody eligible → unroutable); beneficiary cannot approve; one person cannot decide two steps; concurrent approvals (`-race`); repeated submission ID returns original; override cannot reverse a rejection; reassignment respects SoD; employee cannot read another's requests.
 - **UI slice:** request form (batch, duration, on-behalf), My Requests, Approval Inbox (approve, reject, override, reassign).
+- **Status:** committed on `feat/catalog-requests` (2026-10-28), not yet pushed; detailed plan `2026-10-28-m5-requests-approvals.md`. Follow-ups are listed under M6 and M9.
 
 ### M6 — API fulfillment end to end, Exceptions
 
@@ -254,6 +255,9 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
   5. Removal: voluntary (O6), manager revoke of direct reports (D5), safe removal against open operations.
   6. Exceptions API (query-based) with failed operations and unroutable approvals; manual retry.
 - **Acceptance criteria:** the full flow runs against the real Mock Tool Service; a failing tool reaches `FAILED` after 5 attempts and appears in Exceptions; manual retry works.
+- **Follow-ups from M5 (2026-10-28), assigned:**
+  - **Duplicate requests after approval, before provisioning:** M5 blocks a second open request per (person, tool) only while an item is `PENDING_APPROVAL`. An `APPROVED` item that is not yet provisioned does not block a new request for the same tool. M6's held-grant check (the grant is created at final approval) must also reject a new request while such a grant or approved item exists, with a test.
+  - Withdrawal of an `APPROVED` item before provisioning starts (O5) is added with provisioning.
 - **Required tests:** full API scenario; backoff schedule; lease expiry re-claims; success response with wrong state is not success; termination-priority ordering; revoke while grant queued / in flight / failed; stricter-wins adds a step before provisioning.
 - **UI slice:** My Access (status, expiry, give up access), manager's team access with revoke, Exceptions (failed ops, retry).
 
@@ -290,6 +294,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
   1. Suspension (D7): login blocked, token invalidated, `SUSPEND` operations, pending requests cancelled, steps / tasks / reviews released or reassigned; reactivation with re-evaluation and `RESUME`.
   2. Termination immediate and scheduled (sweep), cancel / reschedule; overrides pending provisioning and resume; security-revocation exception.
 - **Acceptance criteria:** all D7 effects happen in one transaction per action; terminated employees' removals run first and stay in Exceptions until confirmed.
+- **Follow-up from M5 (2026-10-28), assigned:** re-route pending approval steps whose assignee is suspended or terminated (F2 fallback); until then InfoSec reassigns them (D9).
 - **Required tests:** terminate during queued / in-flight grant; scheduled termination after downtime runs once; expiry during suspension; reactivation skips expired / revoked grants; suspended user's token rejected.
 - **UI slice:** suspend / reactivate / terminate / schedule actions on Employees; security revocations in Exceptions.
 

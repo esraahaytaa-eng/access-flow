@@ -5,6 +5,8 @@ package platform
 import (
 	"fmt"
 	"strconv"
+	"time"
+	_ "time/tzdata" // the distroless image has no zoneinfo
 )
 
 // Config is read from environment variables (A3: no configuration framework).
@@ -17,6 +19,7 @@ type Config struct {
 	BootstrapAdminEmail  string // the initial Super Admin, created once (A4)
 	BootstrapFile        string // where its one-time password is written
 	SeedPassword         string // SEED_PASSWORD: shared local-only password of seeded users (A4)
+	CompanyTimezone      string // COMPANY_TIMEZONE: the zone that dates such as expiry are in (A6)
 }
 
 // LoadConfig reads the configuration through getenv (os.Getenv in production).
@@ -29,6 +32,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		BootstrapAdminEmail:  getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapFile:        getenv("BOOTSTRAP_FILE"),
 		SeedPassword:         getenv("SEED_PASSWORD"),
+		CompanyTimezone:      getenv("COMPANY_TIMEZONE"),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"
@@ -38,6 +42,12 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if cfg.BootstrapFile == "" {
 		cfg.BootstrapFile = "/var/lib/accessflow/bootstrap-admin.txt"
+	}
+	if cfg.CompanyTimezone == "" {
+		cfg.CompanyTimezone = "Europe/Istanbul"
+	}
+	if _, err := time.LoadLocation(cfg.CompanyTimezone); err != nil {
+		return Config{}, fmt.Errorf("COMPANY_TIMEZONE: %w", err)
 	}
 	if v := getenv("COOKIE_SECURE"); v != "" {
 		secure, err := strconv.ParseBool(v)

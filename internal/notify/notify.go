@@ -41,6 +41,16 @@ func ToRole(ctx context.Context, tx pgx.Tx, role, kind, entity string, entityID 
 	return err
 }
 
+// ToEmployee notifies one employee, inside tx.
+func ToEmployee(ctx context.Context, tx pgx.Tx, recipient uuid.UUID, kind, entity string, entityID uuid.UUID, details map[string]any) error {
+	if details == nil {
+		details = map[string]any{}
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO notifications (recipient_id, kind, entity, entity_id, details) VALUES ($1, $2, $3, $4, $5)`,
+		recipient, kind, entity, entityID, details)
+	return err
+}
+
 // List returns the recipient's newest 100 notifications.
 func List(ctx context.Context, pool *pgxpool.Pool, recipient uuid.UUID) ([]Notification, error) {
 	rows, err := pool.Query(ctx, `SELECT id, kind, entity, entity_id, details, created_at, read_at FROM notifications

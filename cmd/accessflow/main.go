@@ -23,6 +23,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
+	"github.com/esraahaytaa-eng/access-flow/internal/requests"
 	"github.com/esraahaytaa-eng/access-flow/internal/webui"
 )
 
@@ -81,9 +82,13 @@ func run(args []string) error {
 		return err
 	}
 
+	loc, err := time.LoadLocation(cfg.CompanyTimezone) // checked by LoadConfig
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(pool, svc, webui.Dist()),
+		Handler:           newRouter(pool, svc, loc, webui.Dist()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
@@ -91,7 +96,7 @@ func run(args []string) error {
 }
 
 // newRouter serves the JSON API under /api and the web app on every other path.
-func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
+func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist fs.FS) http.Handler {
 	// Rejects cross-origin unsafe requests (Sec-Fetch-Site / Origin), on top of the CSRF token (A4).
 	crossOrigin := http.NewCrossOriginProtection()
 	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +105,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
 
 	peopleSvc := people.NewService(pool, svc)
 	catalogSvc := catalog.NewService(pool)
+	requestsSvc := requests.NewService(pool, loc)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
@@ -118,6 +124,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, dist fs.FS) http.Handler {
 				r.Use(svc.RequireSession)
 				peopleSvc.Register(r)
 				catalogSvc.Register(r)
+				requestsSvc.Register(r)
 				notify.Register(r, pool)
 			})
 		})

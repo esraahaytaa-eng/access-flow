@@ -110,6 +110,20 @@ func TestUpdateEmployeeRejects(t *testing.T) {
 	}
 }
 
+// Nobody edits their own record, so nobody chooses who approves their requests (2026-10-28).
+func TestNobodyEditsTheirOwnRecord(t *testing.T) {
+	env := newEnv(t)
+	manager := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
+	for _, role := range []string{"HR_MANAGER", "SUPER_ADMIN"} {
+		me, c := env.user(role)
+		testutil.RequireStatus(t, edit(c, me.ID, map[string]any{"version": 1, "managerId": manager.ID}), http.StatusForbidden, "self_change_forbidden")
+		testutil.RequireStatus(t, edit(c, me.ID, map[string]any{"version": 1, "department": "X"}), http.StatusForbidden, "self_change_forbidden")
+	}
+	if n := env.count("SELECT count(*) FROM audit_events WHERE action = 'EMPLOYEE_UPDATED'"); n != 0 {
+		t.Fatalf("self-edits were audited: %d", n)
+	}
+}
+
 // Two opposite manager changes at once must not both pass the cycle check.
 func TestConcurrentManagerChangesCannotCreateACycle(t *testing.T) {
 	env := newEnv(t)

@@ -9,10 +9,11 @@ import (
 
 // EmployeeSpec describes a test employee; zero values get sensible defaults.
 type EmployeeSpec struct {
-	Email                string   // default: a unique address
-	Status               string   // default: ACTIVE
-	Roles                []string // open role assignments
-	Department, JobTitle string   // default: none
+	Email                string    // default: a unique address
+	Status               string    // default: ACTIVE
+	Roles                []string  // open role assignments
+	Department, JobTitle string    // default: none
+	ManagerID            uuid.UUID // default: none
 	// Password gives the employee the permanent password Password (hash PasswordHash).
 	Password bool
 }
@@ -41,9 +42,13 @@ func CreateEmployee(t testing.TB, db DB, spec EmployeeSpec) Employee {
 		spec.Status = "ACTIVE"
 	}
 	e := Employee{Email: spec.Email}
-	err := db.App.QueryRow(ctx, `INSERT INTO employees (email, full_name, status, department, job_title)
-		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')) RETURNING id`,
-		spec.Email, "Test "+spec.Email, spec.Status, spec.Department, spec.JobTitle).Scan(&e.ID)
+	var manager *uuid.UUID
+	if spec.ManagerID != uuid.Nil {
+		manager = &spec.ManagerID
+	}
+	err := db.App.QueryRow(ctx, `INSERT INTO employees (email, full_name, status, department, job_title, manager_id)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6) RETURNING id`,
+		spec.Email, "Test "+spec.Email, spec.Status, spec.Department, spec.JobTitle, manager).Scan(&e.ID)
 	if err != nil {
 		t.Fatalf("create employee %s: %v", spec.Email, err)
 	}

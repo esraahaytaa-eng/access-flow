@@ -245,12 +245,12 @@ func (s *Service) RemovePackage(ctx context.Context, actor auth.Principal, id uu
 
 func (s *Service) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	tools, err := s.Catalog(r.Context(), actor(r))
-	respond(w, r, http.StatusOK, map[string]any{"tools": tools}, err)
+	platform.Respond(w, r, http.StatusOK, map[string]any{"tools": tools}, err)
 }
 
 func (s *Service) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.ListPackages(r.Context())
-	respond(w, r, http.StatusOK, map[string]any{"entries": entries}, err)
+	platform.Respond(w, r, http.StatusOK, map[string]any{"entries": entries}, err)
 }
 
 func (s *Service) handleAddPackage(w http.ResponseWriter, r *http.Request) {
@@ -258,18 +258,18 @@ func (s *Service) handleAddPackage(w http.ResponseWriter, r *http.Request) {
 		Department, JobTitle *string
 		AccessLevelID        *uuid.UUID
 	}
-	if err := decode(w, r, &in, func() []field {
-		return []field{{"department", in.Department != nil}, {"accessLevelId", in.AccessLevelID != nil}}
+	if err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
+		return []platform.Field{{Name: "department", Present: in.Department != nil}, {Name: "accessLevelId", Present: in.AccessLevelID != nil}}
 	}); err != nil {
 		platform.WriteError(w, r, err)
 		return
 	}
 	e, err := s.AddPackage(r.Context(), actor(r), NewPackage{*in.Department, in.JobTitle, *in.AccessLevelID})
-	respond(w, r, http.StatusCreated, e, err)
+	platform.Respond(w, r, http.StatusCreated, e, err)
 }
 
 func (s *Service) handleRemovePackage(w http.ResponseWriter, r *http.Request) {
-	ids, err := pathIDs(r, "id")
+	ids, err := platform.PathIDs(r, "id")
 	if err == nil {
 		err = s.RemovePackage(r.Context(), actor(r), ids[0])
 	}

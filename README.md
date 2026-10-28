@@ -3,7 +3,7 @@
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
 
-> Status: identity and catalog API (milestones M2–M4). Sign-in, sessions, password change, the initial Super Admin, employees, roles, admin groups, the tool catalog with approval steps, starter packages and in-app notifications work through the API, and the Mock Tool Service applies per-level operations. There are no screens yet (they arrive with the design). Requests, approvals and provisioning arrive in later milestones.
+> Status: identity, catalog, requests and approvals API (milestones M2–M5). Sign-in, sessions, password change, the initial Super Admin, employees, roles, admin groups, the tool catalog with approval steps, starter packages, in-app notifications, access requests and their approvals (routing, decisions, withdrawal, reassignment, Super Admin override, the Mock Email Outbox) work through the API, and the Mock Tool Service applies per-level operations. There are no screens yet (they arrive with the design). An approved item ends `APPROVED`; provisioning arrives with M6.
 
 ## Run
 
@@ -34,6 +34,7 @@ All optional:
 | `BOOTSTRAP_ADMIN_EMAIL` | `admin@accessflow.local` | the initial Super Admin |
 | `BOOTSTRAP_FILE` | `/var/lib/accessflow/bootstrap-admin.txt` | where its one-time password is kept (the `appdata` volume) |
 | `SEED_PASSWORD` | `accessflow-local-demo` (set in `compose.yaml`) | shared password of the development fixture users; local only |
+| `COMPANY_TIMEZONE` | `Europe/Istanbul` | the zone request expiry dates are in; an unknown zone stops startup |
 
 ### Development fixture
 
@@ -66,7 +67,7 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `POST /api/v1/auth/logout` | ends every session of the employee |
 | `GET /api/v1/employees` | the directory: every employee with status, roles, groups and version for Super Admin, HR Manager, InfoSec and Auditor; otherwise active employees with id, email, name, department, job title and manager |
 | `POST /api/v1/employees` | HR Manager or Super Admin: `{email, fullName, department?, jobTitle?, managerId?}` → `201 {employee, temporaryPassword}`; the password is shown once and expires after 72 hours |
-| `PUT /api/v1/employees/{id}` | HR Manager or Super Admin: `{version, managerId, department, jobTitle}`, all four required (null clears; a missing one is `400 field_required`); `409 version_conflict` on a stale version; manager cycles are rejected |
+| `PUT /api/v1/employees/{id}` | HR Manager or Super Admin: `{version, managerId, department, jobTitle}`, all four required (null clears; a missing one is `400 field_required`); `409 version_conflict` on a stale version; manager cycles are rejected; never your own record (`403 self_change_forbidden`), so nobody picks their own approver |
 | `POST /api/v1/employees/{id}/password-reset` | HR Manager or Super Admin → `{temporaryPassword}`; accounts holding Super Admin or InfoSec need a Super Admin; never your own |
 | `POST /api/v1/employees/{id}/roles` · `DELETE …/roles/{role}` | Super Admin: assign or remove `INFOSEC`, `HR_MANAGER`, `AUDITOR`; never your own |
 | `GET /api/v1/admin-groups` · `POST /api/v1/admin-groups` | list (members for the directory roles); create `{name}` (Super Admin) |
@@ -79,8 +80,25 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `POST /api/v1/tools/{id}/retire` · `POST …/levels/{levelId}/retire` | Super Admin: `{version}`; one-way; retired tools and levels are no longer requestable |
 | `GET /api/v1/starter-packages` · `POST` · `DELETE …/{id}` | list; add `{department, jobTitle?, accessLevelId}` or remove an entry (Super Admin). Entries recommend levels; any employee may request any requestable level |
 | `GET /api/v1/notifications` · `POST …/{id}/read` | the signed-in employee's newest 100 notifications; mark one read |
+| `POST /api/v1/requests` | `{submissionId, beneficiaryId?, items: [{accessLevelId, justification, duration}]}`, 1–20 items; `duration` is `{"type": "UNTIL_REVOKED"}` or `{"type": "TEMPORARY", "expiresOn": "YYYY-MM-DD"}` (after today in the company timezone). → `201 {request}`; the same `submissionId` again returns the original (`200`), only to its submitter (`409 submission_id_reused` for anyone else). One invalid item rejects the whole submission (`field` names it, e.g. `items[1].duration`); `409 open_request_exists` when the beneficiary already has an open item for the tool |
+| `GET /api/v1/requests` · `GET …/{id}` | requests the signed-in employee is the beneficiary or submitter of, with items and steps; anyone else's is `404` |
+| `POST /api/v1/request-items/{id}/withdraw` | beneficiary or submitter: `{version, reason}` while the item is pending approval |
+| `GET /api/v1/approvals` | the Approval Inbox: open steps assigned to me, or in the InfoSec pool when I am eligible; each with its item (beneficiary, tool, level, justification, duration, every step) and `openedAt` (waiting since) |
+| `GET /api/v1/approvals/open` | InfoSec, Super Admin: every open step; `unroutable: true` when nobody may decide it |
+| `POST /api/v1/approvals/{id}/approve` · `…/reject` | the assignee or an eligible InfoSec member: `{version}`, reject also `{reason}`. The first decision wins; a late or unauthorized attempt is `409`/`403` and recorded as `APPROVAL_ATTEMPT_REJECTED` |
+| `POST /api/v1/approvals/{id}/reassign` | InfoSec, Super Admin: `{version, assigneeId, reason}`; never to yourself, and never on an item you are the beneficiary, submitter or an earlier approver of; the new assignee must be active, not excluded by separation of duties and, for an InfoSec step, an InfoSec member |
+| `POST /api/v1/approvals/{id}/override` | Super Admin: `{version, reason}`; recorded as `SUPER_ADMIN_OVERRIDE`; notifies InfoSec, the beneficiary's manager and the bypassed assignee |
+| `GET /api/v1/email-outbox` | InfoSec, Super Admin, Auditor: the Mock Email Outbox, newest 100 |
 
 Only active employees receive roles, group memberships or password resets. Removing a role or membership closes it; nothing is deleted. Every change is in the audit log. In this milestone a department or manager change is only recorded; the transfer workflow (DECISIONS.md D5) comes later. Catalog changes are audited the same way; approval-policy changes (a level's steps) also notify every active InfoSec member in the app (DECISIONS.md F2, O2).
+
+**Approval rules** (DECISIONS.md F2, D1, D3, D9, O2, O5):
+- Each level's steps are copied onto the item at submission and decided in order: Manager → Tool Owner (optional) → InfoSec (optional). A step is routed when it opens, and its `routingNote` shows where it went and why.
+- Manager step: the beneficiary's manager → the manager's manager → the InfoSec pool. Tool Owner step: the owner → the InfoSec pool. InfoSec step: the pool of active InfoSec members.
+- Separation of duties: the beneficiary, the submitter and anyone who already decided a step on the item never decide another step on it. When the beneficiary's direct manager submits, the Manager step is `APPROVED_BY_SUBMISSION`.
+- A rejection is final for that item; other items of the submission continue. A pool step with no eligible member is listed as unroutable and is resolved by reassignment or a Super Admin override.
+- One email in the Mock Email Outbox per submission whose Manager step went to a person; none when the manager submitted, none to InfoSec. Nothing is ever approved by email.
+- One open item per person and tool, whatever the level.
 
 Sessions last 30 minutes, are renewed while in use, and end after at most 12 hours. Role, status and logout changes apply on the next request.
 
@@ -127,6 +145,7 @@ internal/audit      append-only audit writer
 internal/auth       sign-in, sessions, passwords, initial Super Admin
 internal/people     employees, roles, admin groups
 internal/catalog    tools, access levels and approval steps, starter packages
+internal/requests   access requests, approval routing and decisions, Mock Email Outbox
 internal/notify     in-app notifications
 internal/access     Mock Tool Service client (grants and operations arrive later)
 internal/mocktools  Mock Tool Service handlers and migrations
@@ -143,4 +162,5 @@ deploy/postgres     database and user setup, run on first start
 - There is no login rate limiting beyond the lockout (DECISIONS.md A4): 5 wrong passwords lock an account for 15 minutes, so anyone who knows an email can keep that account locked. Every attempt is audited.
 - One `app` instance is assumed (A2). Initial Super Admin creation is safe across processes (advisory lock), but running several instances is not tested.
 - `app` keeps the migration (owner) connection string in its environment for its whole lifetime, although it uses it only at startup. Separating it would need a one-shot migration service; with fixed local credentials it adds no protection here.
+- Pending steps are not re-routed when their assignee is later suspended or terminated (that comes with the leaver workflow, M9); until then InfoSec reassigns them. An approved item is not yet provisioned (M6), and a second request for a tool whose item is approved but not yet provisioned is not blocked until grants exist (M6).
 - The Mock Tool Service has no authentication: it is reachable only on the internal Docker network (DECISIONS.md A2). It is a stand-in for real tools, not a model of their security.
