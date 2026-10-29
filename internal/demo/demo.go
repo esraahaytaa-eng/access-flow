@@ -26,19 +26,19 @@ import (
 type Account struct {
 	Key   string `json:"key"`
 	Email string `json:"email"`
-	Role  string `json:"role"` // the role it demonstrates, in Turkish
+	Role  string `json:"role"` // the role it demonstrates (English, like the demo sign-in labels)
 }
 
 // Accounts are the documented demo sign-ins, one per main role. The Super Admin is the
 // initial Super Admin (auth.Bootstrap).
 var Accounts = []Account{
-	{"admin", "admin@accessflow.local", "Süper Yönetici"},
-	{"infosec", "selin.aydin@accessflow.local", "Bilgi Güvenliği"},
-	{"hr", "ayse.demir@accessflow.local", "İK Yöneticisi"},
-	{"auditor", "gizem.arslan@accessflow.local", "Denetçi"},
-	{"manager", "burak.sahin@accessflow.local", "Yönetici"},
-	{"owner", "can.ozturk@accessflow.local", "Araç sahibi ve BT Operasyon"},
-	{"employee", "deniz.kara@accessflow.local", "Çalışan"},
+	{"admin", "admin@accessflow.local", "Super Admin"},
+	{"infosec", "selin.aydin@accessflow.local", "Information Security"},
+	{"hr", "ayse.demir@accessflow.local", "HR Manager"},
+	{"auditor", "gizem.arslan@accessflow.local", "Auditor"},
+	{"manager", "burak.sahin@accessflow.local", "Manager"},
+	{"owner", "can.ozturk@accessflow.local", "Tool Owner & IT Operations"},
+	{"employee", "deniz.kara@accessflow.local", "Employee"},
 }
 
 // AdminName is the demo Super Admin's name.
@@ -96,24 +96,34 @@ type person struct {
 
 // The company; managers come before their reports. The initial Super Admin ("admin") exists.
 var company = []person{
-	{"selin.aydin", "Selin Aydın", "Bilgi Güvenliği", "Bilgi Güvenliği Uzmanı", "admin", []string{"INFOSEC"}},
-	{"emre.kaya", "Emre Kaya", "Bilgi Güvenliği", "Bulut Güvenlik Mühendisi", "admin", []string{"INFOSEC"}},
-	{"ayse.demir", "Ayşe Demir", "İnsan Kaynakları", "İK Yöneticisi", "admin", []string{"HR_MANAGER"}},
-	{"gizem.arslan", "Gizem Arslan", "İç Denetim", "İç Denetçi", "admin", []string{"AUDITOR"}},
-	{"can.ozturk", "Can Öztürk", "Bilgi Teknolojileri", "BT Operasyon Lideri", "admin", nil},
-	{"burak.sahin", "Burak Şahin", "Ürün Geliştirme", "Mühendislik Yöneticisi", "admin", nil},
-	{"deniz.kara", "Deniz Kara", "Ürün Geliştirme", "Yazılım Geliştirici", "burak.sahin", nil},
-	{"elif.celik", "Elif Çelik", "Ürün Geliştirme", "Kıdemli Yazılım Geliştirici", "burak.sahin", nil},
-	{"mert.acar", "Mert Acar", "Ürün Geliştirme", "DevOps Mühendisi", "burak.sahin", nil},
-	{"zeynep.yildiz", "Zeynep Yıldız", "Ürün Geliştirme", "Ürün Tasarımcısı", "burak.sahin", nil},
-	{"hakan.koc", "Hakan Koç", "Finans", "Finans Müdürü", "admin", nil},
-	{"ece.polat", "Ece Polat", "Finans", "Bordro Uzmanı", "hakan.koc", nil},
-	{"levent.uysal", "Levent Uysal", "Finans", "Muhasebe Uzmanı", "hakan.koc", nil},
-	{"serkan.tas", "Serkan Taş", "Satış", "Satış Müdürü", "admin", nil},
-	{"leyla.ekinci", "Leyla Ekinci", "Satış", "Satış Temsilcisi", "serkan.tas", nil},
-	{"oya.sezer", "Oya Sezer", "Satış", "Kurumsal Satış Temsilcisi", "serkan.tas", nil},
-	{"tuna.erdem", "Tuna Erdem", "Satış", "Satış Asistanı", "serkan.tas", nil},
+	{"selin.aydin", "Selin Aydın", "Information Security", "Security Analyst", "admin", []string{"INFOSEC"}},
+	{"emre.kaya", "Emre Kaya", "Information Security", "Cloud Security Engineer", "admin", []string{"INFOSEC"}},
+	{"ayse.demir", "Ayşe Demir", "Human Resources", "HR Manager", "admin", []string{"HR_MANAGER"}},
+	{"gizem.arslan", "Gizem Arslan", "Compliance", "Auditor", "admin", []string{"AUDITOR"}},
+	{"can.ozturk", "Can Öztürk", "IT Operations", "IT Operations Lead", "admin", nil},
+	{"burak.sahin", "Burak Şahin", "Engineering", "Engineering Manager", "admin", nil},
+	{"deniz.kara", "Deniz Kara", "Engineering", "Backend Developer", "burak.sahin", nil},
+	{"elif.celik", "Elif Çelik", "Engineering", "Senior Backend Developer", "burak.sahin", nil},
+	{"mert.acar", "Mert Acar", "Engineering", "DevOps Engineer", "burak.sahin", nil},
+	{"zeynep.yildiz", "Zeynep Yıldız", "Engineering", "Product Designer", "burak.sahin", nil},
+	{"hakan.koc", "Hakan Koç", "Finance", "Finance Manager", "admin", nil},
+	{"ece.polat", "Ece Polat", "Finance", "Payroll Specialist", "hakan.koc", nil},
+	{"levent.uysal", "Levent Uysal", "Finance", "Accountant", "hakan.koc", nil},
+	{"serkan.tas", "Serkan Taş", "Sales", "Sales Manager", "admin", nil},
+	{"leyla.ekinci", "Leyla Ekinci", "Sales", "Sales Representative", "serkan.tas", nil},
+	{"oya.sezer", "Oya Sezer", "Sales", "Enterprise Account Executive", "serkan.tas", nil},
+	{"tuna.erdem", "Tuna Erdem", "Sales", "Sales Assistant", "serkan.tas", nil},
 }
+
+// The company catalog (M17): English names, as a company defines them; the UI stays Turkish.
+var (
+	departments = []string{"Engineering", "Human Resources", "Information Security", "Compliance", "Finance", "Sales",
+		"IT Operations", "Management"}
+	positions = []string{"Backend Developer", "Senior Backend Developer", "Frontend Developer", "DevOps Engineer",
+		"Product Designer", "Engineering Manager", "HR Manager", "Security Analyst", "Cloud Security Engineer", "Auditor",
+		"IT Operations Lead", "Finance Manager", "Payroll Specialist", "Accountant", "Sales Manager", "Sales Representative",
+		"Enterprise Account Executive", "Sales Assistant"}
+)
 
 type group struct {
 	name    string
@@ -121,8 +131,8 @@ type group struct {
 }
 
 var groups = []group{
-	{"BT Operasyon", []string{"can.ozturk", "emre.kaya"}},
-	{"Tedarikçi Masası", []string{"hakan.koc", "ayse.demir"}},
+	{"IT Operations", []string{"can.ozturk", "emre.kaya"}},
+	{"Vendor Desk", []string{"hakan.koc", "ayse.demir"}},
 }
 
 type level struct {
@@ -137,16 +147,16 @@ type tool struct {
 
 // One or more tools per fulfillment method, with the F2 examples.
 var tools = []tool{
-	{"Jira", "API", "can.ozturk", "BT Operasyon", []level{{"Kullanıcı", false, false}, {"Yönetici", true, true}}},
-	{"GitHub", "MANUAL", "can.ozturk", "BT Operasyon", []level{{"Geliştirici", true, false}}},
-	{"AWS Konsolu", "API", "emre.kaya", "BT Operasyon", []level{{"Salt okunur", true, false}, {"Yönetici", true, true}}},
-	{"Figma", "MANUAL", "zeynep.yildiz", "BT Operasyon", []level{{"Editör", false, false}}},
-	{"Salesforce", "API", "serkan.tas", "BT Operasyon", []level{{"Satış Temsilcisi", true, false}}},
-	{"Bordro Portalı", "VENDOR", "ayse.demir", "Tedarikçi Masası", []level{{"Kullanıcı", true, false}}},
+	{"Jira", "API", "can.ozturk", "IT Operations", []level{{"User", false, false}, {"Admin", true, true}}},
+	{"GitHub", "MANUAL", "can.ozturk", "IT Operations", []level{{"Developer", true, false}}},
+	{"AWS Console", "API", "emre.kaya", "IT Operations", []level{{"ReadOnly", true, false}, {"Admin", true, true}}},
+	{"Figma", "MANUAL", "zeynep.yildiz", "IT Operations", []level{{"Editor", false, false}}},
+	{"Salesforce", "API", "serkan.tas", "IT Operations", []level{{"Sales User", true, false}}},
+	{"Payroll Portal", "VENDOR", "ayse.demir", "Vendor Desk", []level{{"User", true, false}}},
 }
 
-// starter is the Ürün Geliştirme starter package.
-var starter = [][2]string{{"Jira", "Kullanıcı"}, {"GitHub", "Geliştirici"}}
+// starter is the Engineering starter package.
+var starter = [][2]string{{"Jira", "User"}, {"GitHub", "Developer"}}
 
 const domain = "@accessflow.local"
 
@@ -201,6 +211,13 @@ func (s *seeder) people(ctx context.Context, adminEmail string, passwords map[st
 		return fmt.Errorf("demo: initial Super Admin %s: %w", adminEmail, err)
 	}
 	s.ids["admin"] = admin
+	for list, names := range map[string][]string{"departments": departments, "job-positions": positions} {
+		for _, n := range names {
+			if _, err := s.People.AddEntry(ctx, people.SystemActor, list, n); err != nil {
+				return fmt.Errorf("define %s %s: %w", list, n, err)
+			}
+		}
+	}
 	known := map[string]string{} // demo account email → password
 	for _, a := range Accounts {
 		known[a.Email] = passwords[a.Key]
@@ -260,7 +277,7 @@ func (s *seeder) catalog(ctx context.Context) error {
 			s.levels[t.name+"/"+l.name] = lvl.ID
 			for _, p := range starter {
 				if p == [2]string{t.name, l.name} {
-					if _, err := s.Catalog.AddPackage(ctx, people.SystemActor, catalog.NewPackage{Department: "Ürün Geliştirme", AccessLevelID: lvl.ID}); err != nil {
+					if _, err := s.Catalog.AddPackage(ctx, people.SystemActor, catalog.NewPackage{Department: "Engineering", AccessLevelID: lvl.ID}); err != nil {
 						return fmt.Errorf("starter package %s/%s: %w", t.name, l.name, err)
 					}
 				}

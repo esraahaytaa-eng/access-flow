@@ -1,15 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api/client";
-import { useAdminGroups, useAdminHealth, useEmployees, useNominations, useReviews, useStarterPackages, useTools } from "../api/queries";
-import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage } from "../api/types";
+import { api, ApiError, saveFile } from "../api/client";
+import { useAdminGroups, useAdminHealth, useCompanyCatalog, useEmployees, useNominations, useReviews, useStarterPackages, useTools } from "../api/queries";
+import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage, WorkbookPlan, WorkbookProblem, WorkbookResult } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
   Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, Input, KeyValueList, Modal, PageHeader, Person, Select, TableSkeleton, Tabs, Textarea, useAction,
 } from "../ui/components";
 import { formatDate, formatDateTime, relativeTime } from "../ui/format";
-import { departmentsOf, managerOptions } from "./Employees";
+import { catalogOptions, managerOptions } from "./Employees";
 
 type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "mail" | "system";
 const assignable: AssignRoleBody["role"][] = ["INFOSEC", "HR_MANAGER", "AUDITOR"];
@@ -223,7 +223,7 @@ function GroupCard({ group, employees, sub, onRemove }: { group: AdminGroup; emp
 function PackagesTab() {
   const qc = useQueryClient();
   const packages = useStarterPackages();
-  const employees = (useEmployees().data ?? []) as Employee[];
+  const catalog = useCompanyCatalog().data;
   const tools = (useTools().data ?? []).filter((t) => t.status !== "RETIRED");
   const [form, setForm] = useState({ department: "", jobTitle: "", levelId: "" });
   const [remove, setRemove] = useState<StarterPackage | null>(null);
@@ -238,11 +238,10 @@ function PackagesTab() {
     <div className="stack">
       <Card title="Başlangıç paketine ekle" sub="Yeni çalışanlara departman ve unvana göre önerilen erişimler. Öneri bağlayıcı değildir; talepler normal onaydan geçer.">
         <div className="form-grid">
-          <Field label="Departman" required><Input list="settings-departments" value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} /></Field>
-          <Field label="Unvan" hint="Boş bırakılırsa tüm departmana uygulanır."><Input value={form.jobTitle} onChange={(e) => setForm({ ...form, jobTitle: e.target.value })} /></Field>
+          <Field label="Departman" required><Select value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="Departman seçin" options={catalogOptions(catalog?.departments)} /></Field>
+          <Field label="Unvan" hint="Boş bırakılırsa tüm departmana uygulanır."><Select value={form.jobTitle} onChange={(e) => setForm({ ...form, jobTitle: e.target.value })} placeholder="Tüm departman" options={catalogOptions(catalog?.jobPositions)} /></Field>
           <Field label="Araç ve seviye" required className="full"><Select value={form.levelId} onChange={(e) => setForm({ ...form, levelId: e.target.value })} placeholder="Seçin" options={levelOptions} /></Field>
         </div>
-        <datalist id="settings-departments">{departmentsOf(employees).map((d) => <option key={d} value={d} />)}</datalist>
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}><Button variant="primary" loading={busy} disabled={!form.department.trim() || !form.levelId} onClick={add}>Ekle</Button></div>
       </Card>
       {packages.isPending ? <TableSkeleton /> : rows.length === 0 ? <div className="card"><EmptyState icon="box" title="Başlangıç paketi tanımlı değil" /></div> : (
@@ -327,8 +326,113 @@ function ReviewScheduleTab() {
   );
 }
 
-const rejectionText = { unknown_tool: "bilinmeyen araç", unknown_level: "bilinmeyen seviye", api_tool: "API aracı; mevcut erişimler araç servisinden okunur", invalid_row: "geçersiz satır" };
+const rejectionText = { unknown_tool: "bilinmeyen araç", unknown_level: "bilinmeyen seviye", api_tool: "API aracı; Excel ile veya araç servisinden aktarın", invalid_row: "geçersiz satır" };
 const csvExample = "eposta;arac;seviye;hesap\nayse.demir@sirket.com;Figma;Editör;\n";
+
+const workbookReasons: Record<string, string> = {
+  invalid_workbook: "Dosya okunamadı; şifresiz bir .xlsx dosyası yükleyin",
+  macros_not_allowed: "Makro içeren dosyalar kabul edilmez",
+  formula_not_allowed: "Formül kabul edilmez; değeri yazı olarak girin",
+  missing_sheet: "Sayfa eksik",
+  invalid_header: "Sütun başlığı şablondakinden farklı",
+  too_many_rows: "Satır sınırı aşıldı",
+  empty_workbook: "Dosyada aktarılacak satır yok",
+  sample_row: "Örnek satır; silin veya gerçek veriyle değiştirin",
+  field_required: "Zorunlu alan boş",
+  invalid_email: "Geçersiz e-posta adresi",
+  invalid_text: "Geçersiz metin",
+  duplicate_employee: "Aynı çalışan dosyada tekrar ediyor",
+  conflicting_employee: "Aynı e-posta farklı bilgilerle tekrar ediyor",
+  unknown_department: "Tanımlı olmayan departman",
+  retired_department: "Kullanımdan kaldırılmış departman",
+  unknown_job_position: "Tanımlı olmayan unvan",
+  retired_job_position: "Kullanımdan kaldırılmış unvan",
+  unknown_manager: "Yönetici bulunamadı",
+  inactive_manager: "Yönetici aktif değil",
+  self_manager: "Çalışan kendi yöneticisi olamaz",
+  manager_cycle: "Yönetici zinciri döngü oluşturuyor",
+  invalid_fulfillment_method: "Geçersiz karşılama yöntemi",
+  invalid_approval_steps: "Geçersiz onay adımları",
+  unknown_owner: "Araç sahibi bulunamadı",
+  inactive_owner: "Araç sahibi aktif değil",
+  unknown_admin_group: "Tanımlı olmayan yönetim grubu",
+  conflicting_tool: "Aynı aracın satırları farklı bilgiler içeriyor",
+  duplicate_level: "Aynı seviye tekrar ediyor",
+  retired_tool: "Kullanımdan kaldırılmış araç",
+  retired_level: "Kullanımdan kaldırılmış seviye",
+  unknown_employee: "Çalışan bulunamadı; Employees sayfasına ekleyin",
+  unknown_tool: "Araç bulunamadı; Tools sayfasına ekleyin",
+  unknown_level: "Seviye bulunamadı; Tools sayfasına ekleyin",
+  api_account_mismatch: "API araçlarında hesap, çalışanın e-postası olmalı",
+  duplicate_access: "Aynı erişim tekrar ediyor",
+  conflicting_access: "Aynı hesap birden fazla çalışana yazılmış",
+  employee_differs: "Kayıtlı bilgiden farklı; mevcut kayıt değiştirilmez",
+  employee_not_active: "Çalışan aktif değil; kayıt değiştirilmez",
+  tool_differs: "Kayıtlı araç bilgisinden farklı; mevcut kayıt değiştirilmez",
+  level_differs: "Kayıtlı onay adımlarından farklı; mevcut kayıt değiştirilmez",
+  employee_terminated: "Ayrılmış çalışan; erişim aktarılır ve hemen kaldırma başlatılır",
+  previously_removed: "Bu erişim daha önce aktarılıp kaldırılmış; yeniden eklenmez",
+  held_by_other: "Bu hesap başka bir çalışana aktarılmış; atlanır",
+};
+
+function ProblemTable({ rows }: { rows: WorkbookProblem[] }) {
+  return (
+    <div className="table-wrap">
+      <table className="table">
+        <thead><tr><th>Sayfa</th><th>Satır</th><th>Sütun</th><th>Değer</th><th>Sorun</th><th>Beklenen</th></tr></thead>
+        <tbody>
+          {rows.map((p, k) => (
+            <tr key={k}>
+              <td>{p.sheet ?? "—"}</td><td>{p.row ?? "—"}</td><td>{p.column ?? "—"}</td><td>{p.value || "—"}</td>
+              <td>{workbookReasons[p.reason] ?? p.reason}{p.otherRow ? ` (satır ${p.otherRow})` : ""}</td><td>{p.expected || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WorkbookCard({ onImported }: { onImported: (r: ImportReport) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [plan, setPlan] = useState<WorkbookPlan | null>(null);
+  const [run, busy] = useAction();
+  const choose = (f: File | undefined) => { setFile(f ?? null); setPlan(null); };
+  const preview = () => run(() => api.post<WorkbookPlan>("/imports/workbook/preview", file!)).then((r) => r.ok && setPlan(r.res));
+  const submit = async () => {
+    const r = await run(() => api.post<WorkbookResult>(`/imports/workbook?fileName=${encodeURIComponent(file!.name)}`, file!), { success: "Excel içe aktarıldı" });
+    if (r.ok) { setPlan(null); setFile(null); onImported(r.res.report); return; }
+    // The data changed since the preview: show the server's fresh findings.
+    if (r.err instanceof ApiError && r.err.body?.plan) setPlan(r.err.body.plan as WorkbookPlan);
+  };
+  const download = () => run(() => api.download("/imports/workbook/template")).then((r) => r.ok && saveFile(r.res, `accessflow-onboarding-${new Date().toISOString().slice(0, 10)}.xlsx`));
+  const s = plan?.summary;
+  return (
+    <Card title="Excel ile toplu aktarım" sub="Çalışanlar, araçlar ve mevcut erişimler tek dosyada aktarılır. Önce önizleyin; dosyada sorun varsa hiçbir şey kaydedilmez. Mevcut kayıtlar değiştirilmez."
+      actions={<Button onClick={download}>Excel şablonunu indir</Button>}>
+      <div className="stack">
+        <div className="row-wrap">
+          <input type="file" accept=".xlsx" aria-label="Excel dosyası" onChange={(e) => choose(e.target.files?.[0])} />
+          <Button disabled={!file} loading={busy} onClick={preview}>Önizle</Button>
+          <Button variant="primary" disabled={!file || !plan || plan.problems.length > 0} loading={busy} onClick={submit}>Excel’i içe aktar</Button>
+        </div>
+        {s && (
+          <div className="row-wrap" style={{ gap: 8 }}>
+            <Badge tone="green">{s.employeesNew} yeni çalışan</Badge><Badge tone="outline">{s.employeesExisting} mevcut çalışan</Badge>
+            <Badge tone="green">{s.toolsNew} yeni araç</Badge><Badge tone="green">{s.levelsNew} yeni seviye</Badge>
+            <Badge tone="outline">{s.toolsExisting + s.levelsExisting} mevcut araç/seviye</Badge>
+            <Badge tone="green">{s.accessNew} yeni erişim</Badge><Badge tone="outline">{s.accessExisting} zaten aktarılmış erişim</Badge>
+          </div>
+        )}
+        {plan && plan.owners.length > 0 && (
+          <div className="small"><div className="muted">Yeni araç sahipleri (Araç Sahibi rolü atanır):</div>{plan.owners.map((o) => <div key={o.tool}>{o.tool} → {o.ownerEmail}</div>)}</div>
+        )}
+        {plan && plan.problems.length > 0 && <><Callout tone="danger" title={`${plan.problems.length} sorun; düzeltip yeniden yükleyin`}>Dosyadaki hiçbir satır aktarılmaz.</Callout><ProblemTable rows={plan.problems} /></>}
+        {plan && plan.warnings.length > 0 && <><Callout tone="warn" title={`${plan.warnings.length} uyarı`}>Uyarılar aktarımı engellemez.</Callout><ProblemTable rows={plan.warnings} /></>}
+      </div>
+    </Card>
+  );
+}
 
 function ImportsTab() {
   const qc = useQueryClient();
@@ -349,6 +453,7 @@ function ImportsTab() {
   };
   return (
     <div className="stack">
+      <WorkbookCard onImported={(r) => done({ ok: true, res: r })} />
       <Card title="API araçlarının mevcut erişimleri" sub="Mock Araç Servisi’ndeki hesaplar okunur ve kurumsal e-posta ile çalışanlara eşleştirilir. Aynı erişim ikinci kez aktarılmaz.">
         <Button variant="primary" loading={busy} onClick={() => run(() => api.post<ImportReport>("/imports/mock", {}), { success: "İçe aktarma tamamlandı" }).then(done)}>Araç servisinden içe aktar</Button>
       </Card>
@@ -377,10 +482,13 @@ function ImportsTab() {
 function ImportReportCard({ report: r, highlight }: { report: ImportReport; highlight?: boolean }) {
   const { timezone } = useSession();
   return (
-    <Card title={r.source === "MOCK" ? "Araç servisi" : r.fileName ?? "CSV"} sub={`${formatDateTime(r.importedAt, timezone)} · ${r.importedBy.fullName}`} style={highlight ? { borderColor: "var(--accent-line)" } : undefined}>
+    <Card title={r.source === "MOCK" ? "Araç servisi" : `${r.source === "WORKBOOK" ? "Excel" : "CSV"} · ${r.fileName}`} sub={`${formatDateTime(r.importedAt, timezone)} · ${r.importedBy.fullName}`} style={highlight ? { borderColor: "var(--accent-line)" } : undefined}>
       <div className="stack-sm">
         <div className="row-wrap" style={{ gap: 8 }}>
+          {r.created && <Badge tone="green">{r.created.employees} çalışan · {r.created.tools} araç · {r.created.levels} seviye oluşturuldu</Badge>}
           <Badge tone="green">{r.imported} erişim aktarıldı</Badge>
+          {r.verified !== undefined && <Badge tone="outline">{r.verified} bildirilen erişim araçta doğrulandı</Badge>}
+          {r.unverified !== undefined && <Badge tone={r.unverified ? "amber" : "outline"}>{r.unverified} bildirilen API erişimi araçta bulunmadı</Badge>}
           <Badge tone="outline">{r.skipped} atlandı (zaten var)</Badge>
           <Badge tone={r.rejected.length ? "red" : "outline"}>{r.rejected.length} satır reddedildi</Badge>
           <Badge tone={r.orphans ? "amber" : "outline"}>{r.orphans} sahipsiz hesap</Badge>

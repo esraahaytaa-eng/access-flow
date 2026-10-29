@@ -79,6 +79,7 @@ function notificationText(n: Notification, timeZone: string): string {
   const d = n.details as Record<string, unknown>;
   switch (n.kind) {
     case "APPROVAL_POLICY_CHANGED": return `${d.tool} · ${d.level} seviyesinin onay adımları değişti.`;
+    case "APPROVAL_POLICIES_IMPORTED": return `Excel içe aktarımıyla ${d.tools} araç ve ${d.levels} erişim seviyesinin onay adımları tanımlandı (${d.fileName}).`;
     case "DIRECT_GRANT": return `${d.tool} · ${d.level} için doğrudan erişim verildi (${formatDate(d.expiresOn as string, timeZone)} tarihine kadar).`;
     case "SUPER_ADMIN_OVERRIDE": return "Bir onay adımı Süper Yönetici tarafından geçersiz kılındı.";
     case "APPROVAL_ASSIGNED": return `Size bir onay adımı atandı${d.reason ? `: ${d.reason}` : "."}`;
@@ -183,7 +184,7 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
       <div className="main">
         <header className="topbar">
           <Button variant="ghost" icon="menu" className="menu-btn" aria-label="Menüyü aç" onClick={() => setNavOpen(true)} />
-          {demo && <Badge tone="amber" dot title="Yerel demo: belgelenmiş demo hesapları ve örnek veriler">Demo ortamı</Badge>}
+          {demo && <Badge tone="amber" dot title="Yerel demo: belgelenmiş demo hesapları ve örnek veriler">Demo Environment</Badge>}
           <div className="spacer" />
           <Button variant="primary" size="sm" icon="plus" onClick={() => navigate("/request-new")}>Erişim talep et</Button>
           <NotificationsMenu />

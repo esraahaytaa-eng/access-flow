@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
-import { useEmployees } from "../api/queries";
+import { useCompanyCatalog, useEmployees } from "../api/queries";
 import type { Employee, EmployeeWithPassword, Grant, GrantsResponse, PasswordResetResponse } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
@@ -12,7 +12,7 @@ import {
 import { ExpiryCell, GrantBadges } from "../ui/domain";
 import { addDays, formatDate, formatDateTime, todayIn, zonedInstant } from "../ui/format";
 import { statusBadge } from "../ui/status";
-import { departmentsOf, managerOptions, PasswordResult } from "./Employees";
+import { catalogOptions, managerOptions, PasswordResult } from "./Employees";
 
 type ModalName = "pw" | "transfer" | "suspend" | "reactivate" | "terminate" | "cancelTerm" | "rehire" | null;
 
@@ -126,6 +126,7 @@ function TransferModal({ emp, employees, grants, onClose, onDone }: { emp: Emplo
   const [managerId, setManagerId] = useState(emp.managerId ?? "");
   const [title, setTitle] = useState(emp.jobTitle ?? "");
   const [reason, setReason] = useState("");
+  const catalog = useCompanyCatalog().data;
   const [keep, setKeep] = useState<Record<string, { keep: boolean; justification: string }>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [run, busy] = useAction();
@@ -161,11 +162,10 @@ function TransferModal({ emp, employees, grants, onClose, onDone }: { emp: Emplo
       footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} disabled={!hasChange} onClick={submit}>{teamChanged ? "Transferi onayla" : "Kaydet"}</Button></>}>
       <div className="stack">
         <div className="form-grid">
-          <Field label="Yeni departman"><Input list="transfer-departments" value={dept} onChange={(e) => setDept(e.target.value)} /></Field>
+          <Field label="Yeni departman"><Select value={dept} onChange={(e) => setDept(e.target.value)} placeholder="Departman yok" options={catalogOptions(catalog?.departments, emp.department)} /></Field>
           <Field label="Yeni yönetici"><Select value={managerId} onChange={(e) => setManagerId(e.target.value)} placeholder="Yönetici yok (en üst düzey)" options={managerOptions(employees, emp.id)} /></Field>
-          <Field label="Unvan" error={errors.title} className="full"><Input value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+          <Field label="Unvan" error={errors.title} className="full"><Select value={title} invalid={!!errors.title} onChange={(e) => setTitle(e.target.value)} placeholder="Unvan seçin" options={catalogOptions(catalog?.jobPositions, emp.jobTitle)} /></Field>
         </div>
-        <datalist id="transfer-departments">{departmentsOf(employees).map((d) => <option key={d} value={d} />)}</datalist>
         {!teamChanged && hasChange && <Callout>Yalnızca unvan değişikliği erişimleri etkilemez; denetim kaydına işlenir.</Callout>}
         {teamChanged && (
           <>
@@ -259,6 +259,7 @@ function RehireModal({ emp, employees, onClose, onDone }: { emp: Employee; emplo
   const [form, setForm] = useState({ managerId: "", department: emp.department ?? "", jobTitle: emp.jobTitle ?? "", reason: "" });
   const [error, setError] = useState("");
   const [created, setCreated] = useState<EmployeeWithPassword | null>(null);
+  const catalog = useCompanyCatalog().data;
   const [run, busy] = useAction();
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const submit = async () => {
@@ -275,11 +276,10 @@ function RehireModal({ emp, employees, onClose, onDone }: { emp: Employee; emplo
       footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} onClick={submit}>Yeniden işe al</Button></>}>
       <div className="form-grid">
         <Field label="Yönetici"><Select value={form.managerId} onChange={set("managerId")} placeholder="Yönetici yok (en üst düzey)" options={managerOptions(employees, emp.id)} /></Field>
-        <Field label="Departman"><Input list="rehire-departments" value={form.department} onChange={set("department")} /></Field>
-        <Field label="Unvan" className="full"><Input value={form.jobTitle} onChange={set("jobTitle")} /></Field>
+        <Field label="Departman"><Select value={form.department} onChange={set("department")} placeholder="Departman yok" options={catalogOptions(catalog?.departments, emp.department)} /></Field>
+        <Field label="Unvan" className="full"><Select value={form.jobTitle} onChange={set("jobTitle")} placeholder="Unvan yok" options={catalogOptions(catalog?.jobPositions, emp.jobTitle)} /></Field>
         <Field label="Gerekçe" required error={error} className="full"><Textarea rows={2} value={form.reason} onChange={set("reason")} placeholder="Örn. Aynı pozisyona geri döndü" /></Field>
       </div>
-      <datalist id="rehire-departments">{departmentsOf(employees).map((d) => <option key={d} value={d} />)}</datalist>
     </Modal>
   );
 }

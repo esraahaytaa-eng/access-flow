@@ -3,6 +3,7 @@ package people
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -156,18 +157,12 @@ func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in N
 
 	var created Employee
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		if in.ManagerID != nil {
-			if err := checkManager(ctx, tx, *in.ManagerID); err != nil {
-				return err
-			}
-		}
-		var id uuid.UUID
 		seeded := in.SeedPassword != ""
-		err := tx.QueryRow(ctx, `INSERT INTO employees (email, full_name, department, job_title, manager_id, seeded)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, email, name, department, jobTitle, in.ManagerID, seeded).Scan(&id)
-		if isUniqueViolation(err) {
-			return errEmailTaken
+		var extra map[string]any
+		if seeded {
+			extra = map[string]any{"seed": true}
 		}
+		id, err := insertEmployee(ctx, tx, actor, email, name, department, jobTitle, in.ManagerID, seeded, extra)
 		if err != nil {
 			return err
 		}
@@ -177,14 +172,6 @@ func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in N
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary, expires_at)
 			VALUES ($1, $2, $3, $4)`, id, hash, temporary, expires); err != nil {
-			return err
-		}
-		details := map[string]any{"email": email, "fullName": name, "department": department, "jobTitle": jobTitle, "managerId": in.ManagerID}
-		if seeded {
-			details["seed"] = true
-		}
-		if err := audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "EMPLOYEE_CREATED", Entity: "employee",
-			EntityID: &id, SubjectID: &id, Details: details}); err != nil {
 			return err
 		}
 		created, err = GetEmployee(ctx, tx, id)
@@ -197,6 +184,58 @@ func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in N
 		password = ""
 	}
 	return created, password, nil
+}
+
+// ImportEmployee creates an active employee in the caller's transaction (the onboarding
+// import, M17), with CreateEmployee's checks but **no credential**: nobody can sign in as
+// them until HR issues a one-time password with the reset (F4). No role is assigned.
+func ImportEmployee(ctx context.Context, tx pgx.Tx, actor auth.Principal, in NewEmployee, details map[string]any) (uuid.UUID, error) {
+	if !canManageEmployees(actor) {
+		return uuid.Nil, platform.ErrForbidden
+	}
+	email, err := auth.NormalizeEmail(in.Email)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	name, err := cleanName(in.FullName)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	department, err := CleanText(in.Department, "department")
+	if err != nil {
+		return uuid.Nil, err
+	}
+	jobTitle, err := CleanText(in.JobTitle, "jobTitle")
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return insertEmployee(ctx, tx, actor, email, name, department, jobTitle, in.ManagerID, false, details)
+}
+
+// insertEmployee checks the placement and manager, inserts the employee and audits it.
+func insertEmployee(ctx context.Context, tx pgx.Tx, actor auth.Principal, email, name string, department, jobTitle *string,
+	manager *uuid.UUID, seeded bool, extra map[string]any) (uuid.UUID, error) {
+	if err := CheckPlacement(ctx, tx, nil, nil, department, jobTitle); err != nil {
+		return uuid.Nil, err
+	}
+	if manager != nil {
+		if err := checkManager(ctx, tx, *manager); err != nil {
+			return uuid.Nil, err
+		}
+	}
+	var id uuid.UUID
+	err := tx.QueryRow(ctx, `INSERT INTO employees (email, full_name, department, job_title, manager_id, seeded)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, email, name, department, jobTitle, manager, seeded).Scan(&id)
+	if isUniqueViolation(err) {
+		return uuid.Nil, errEmailTaken
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	details := map[string]any{"email": email, "fullName": name, "department": department, "jobTitle": jobTitle, "managerId": manager}
+	maps.Copy(details, extra)
+	return id, audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "EMPLOYEE_CREATED", Entity: "employee",
+		EntityID: &id, SubjectID: &id, Details: details})
 }
 
 // checkManager requires an existing, active manager.
@@ -286,6 +325,9 @@ func (s *Service) UpdateEmployee(ctx context.Context, actor auth.Principal, id u
 		if SameText(cur.JobTitle, jobTitle) {
 			updated = cur
 			return nil
+		}
+		if err := CheckPlacement(ctx, tx, cur.Department, cur.JobTitle, department, jobTitle); err != nil {
+			return err
 		}
 		if err := SetPlacement(ctx, tx, id, cur.ManagerID, cur.Department, jobTitle); err != nil {
 			return err

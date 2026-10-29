@@ -31,7 +31,10 @@ export const auditActionLabel: Record<string, string> = {
   REVIEW_ESCALATED: "İnceleme Bilgi Güvenliğine eskale edildi (gün 14)", REVIEW_KEPT: "İnceleme kararı: korunsun", REVIEW_REVOKED: "İnceleme kararı: kaldırılsın",
   REVIEW_AUTO_REVOKED: "Yanıtlanmadığı için kaldırıldı (gün 21)", REVIEW_FINDING_OPENED: "Açık inceleme bulgusu (gün 21)",
   REVIEW_ITEM_CLOSED: "İnceleme kalemi kapandı", REVIEW_CAMPAIGN_CLOSED: "İnceleme kampanyası kapandı",
-  ACCESS_IMPORTED: "Mevcut erişimler içe aktarıldı", GRANT_IMPORTED: "Mevcut erişim içe aktarıldı", ORPHAN_DISMISSED: "Sahipsiz hesap bulgusu kapatıldı",
+  ACCESS_IMPORTED: "Mevcut erişimler içe aktarıldı", GRANT_IMPORTED: "Mevcut erişim içe aktarıldı",
+  GRANT_VERIFIED_BY_TOOL: "İçe aktarılan erişim araçtan doğrulandı",
+  DEPARTMENT_CREATED: "Departman tanımlandı", DEPARTMENT_RETIRED: "Departman kullanımdan kaldırıldı",
+  JOB_POSITION_CREATED: "Pozisyon tanımlandı", JOB_POSITION_RETIRED: "Pozisyon kullanımdan kaldırıldı", ORPHAN_DISMISSED: "Sahipsiz hesap bulgusu kapatıldı",
   SWEEP_RAN: "Zamanlanmış işler çalıştı",
 };
 
@@ -48,11 +51,11 @@ export const auditGroups: { value: string; label: string; actions: string[] }[] 
     "PASSWORD_RESET", "PASSWORD_CHANGED", "LOGIN_SUCCEEDED", "LOGIN_FAILED", "LOGIN_LOCKED", "LOGOUT"] },
   { value: "config", label: "Yapılandırma ve roller", actions: ["TOOL_CREATED", "TOOL_UPDATED", "TOOL_RETIRED", "ACCESS_LEVEL_CREATED", "ACCESS_LEVEL_UPDATED",
     "ACCESS_LEVEL_RETIRED", "STARTER_PACKAGE_ENTRY_ADDED", "STARTER_PACKAGE_ENTRY_REMOVED", "ROLE_ASSIGNED", "ROLE_REMOVED", "ADMIN_GROUP_CREATED",
-    "ADMIN_GROUP_MEMBER_ADDED", "ADMIN_GROUP_MEMBER_REMOVED", "SUPER_ADMIN_NOMINATED", "SUPER_ADMIN_NOMINATION_AUTHORIZED",
+    "DEPARTMENT_CREATED", "DEPARTMENT_RETIRED", "JOB_POSITION_CREATED", "JOB_POSITION_RETIRED", "ADMIN_GROUP_MEMBER_ADDED", "ADMIN_GROUP_MEMBER_REMOVED", "SUPER_ADMIN_NOMINATED", "SUPER_ADMIN_NOMINATION_AUTHORIZED",
     "SUPER_ADMIN_NOMINATION_DECLINED", "SUPER_ADMIN_NOMINATION_CANCELLED", "SUPER_ADMIN_NOMINATION_EXPIRED", "ADMIN_RECOVERY_REQUIRED", "ADMIN_RECOVERED"] },
   { value: "reviews", label: "İncelemeler ve bulgular", actions: ["REVIEW_CAMPAIGN_STARTED", "REVIEW_REMINDERS_SENT", "REVIEW_ESCALATED", "REVIEW_KEPT",
     "REVIEW_REVOKED", "REVIEW_AUTO_REVOKED", "REVIEW_FINDING_OPENED", "REVIEW_ITEM_CLOSED", "REVIEW_CAMPAIGN_CLOSED", "ACCESS_IMPORTED", "GRANT_IMPORTED",
-    "ORPHAN_DISMISSED"] },
+    "GRANT_VERIFIED_BY_TOOL", "ORPHAN_DISMISSED"] },
 ];
 
 // detailsText flattens an event's details for the table and the CSV: "key: value · …".

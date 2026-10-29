@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
-  AdminGroupsResponse, AdminHealth, ApprovalsResponse, BasicEmployee, CatalogResponse, DemoResponse, Employee, EmployeesResponse, Exceptions,
+  AdminGroupsResponse, AdminHealth, ApprovalsResponse, BasicEmployee, CatalogResponse, CompanyCatalog, DemoResponse, Employee, EmployeesResponse, Exceptions,
   FulfillmentTasksResponse, GrantsResponse, NominationsResponse, NotificationsResponse, RequestsResponse, ReviewPage, StarterPackagesResponse,
 } from "./types";
 
@@ -16,6 +16,7 @@ export const useRequests = () => useQuery({ queryKey: ["requests"], queryFn: () 
 export const useMyGrants = () => useQuery({ queryKey: ["access"], queryFn: () => api.get<GrantsResponse>("/access").then((r) => r.grants) });
 export const useTeamGrants = () => useQuery({ queryKey: ["access", "team"], queryFn: () => api.get<GrantsResponse>("/access/team").then((r) => r.grants) });
 export const useAdminGroups = () => useQuery({ queryKey: ["admin-groups"], queryFn: () => api.get<AdminGroupsResponse>("/admin-groups").then((r) => r.groups) });
+export const useCompanyCatalog = () => useQuery({ queryKey: ["company-catalog"], queryFn: () => api.get<CompanyCatalog>("/company-catalog") });
 export const useStarterPackages = () => useQuery({ queryKey: ["starter-packages"], queryFn: () => api.get<StarterPackagesResponse>("/starter-packages").then((r) => r.entries) });
 
 export const useNominations = (enabled = true) => useQuery({ queryKey: ["nominations"], enabled, queryFn: () => api.get<NominationsResponse>("/super-admin-nominations").then((r) => r.nominations) });

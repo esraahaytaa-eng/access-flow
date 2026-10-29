@@ -45,6 +45,8 @@ func CreateEmployee(t testing.TB, db DB, spec EmployeeSpec) Employee {
 		spec.Status = "ACTIVE"
 	}
 	e := Employee{Email: spec.Email}
+	DefineDepartments(t, db, spec.Department)
+	DefinePositions(t, db, spec.JobTitle)
 	var manager *uuid.UUID
 	if spec.ManagerID != uuid.Nil {
 		manager = &spec.ManagerID
@@ -67,6 +69,24 @@ func CreateEmployee(t testing.TB, db DB, spec EmployeeSpec) Employee {
 		}
 	}
 	return e
+}
+
+// DefineDepartments adds active catalog departments (M17); existing and empty names are skipped.
+func DefineDepartments(t testing.TB, db DB, names ...string) { define(t, db, "departments", names) }
+
+// DefinePositions adds active catalog job positions; existing and empty names are skipped.
+func DefinePositions(t testing.TB, db DB, names ...string) { define(t, db, "job_positions", names) }
+
+func define(t testing.TB, db DB, table string, names []string) {
+	t.Helper()
+	for _, n := range names {
+		if n == "" {
+			continue
+		}
+		if _, err := db.App.Exec(context.Background(), "INSERT INTO "+table+" (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", n); err != nil {
+			t.Fatalf("define %s %q: %v", table, n, err)
+		}
+	}
 }
 
 // CreateGroup inserts an admin group with a unique name.

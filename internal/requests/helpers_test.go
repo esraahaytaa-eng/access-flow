@@ -49,6 +49,8 @@ func (p person) principal(roles ...string) auth.Principal {
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	db := testutil.NewDB(t)
+	testutil.DefineDepartments(t, db, "Platform", "Engineering")
+	testutil.DefinePositions(t, db, "Engineer")
 	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
 	if err != nil {
 		t.Fatal(err)

@@ -2,8 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
-import { useEmployees, useStarterPackages } from "../api/queries";
-import type { Employee, EmployeeStatus, EmployeeWithPassword } from "../api/types";
+import { useCompanyCatalog, useEmployees, useStarterPackages } from "../api/queries";
+import type { CatalogEntry, Employee, EmployeeStatus, EmployeeWithPassword } from "../api/types";
 import { errorMessage } from "../i18n/errors";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
@@ -15,12 +15,20 @@ import { statusBadge } from "../ui/status";
 
 const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
 
-/** Departments are free text in the API; offer the ones already in use. */
+/** The departments employees hold (for the directory filter, retired ones included). */
 export const departmentsOf = (employees: Employee[]) => [...new Set(employees.map((e) => e.department).filter((d): d is string => !!d))].sort((a, b) => a.localeCompare(b, "tr"));
 
 export const managerOptions = (employees: Employee[], except?: string) =>
   employees.filter((e) => e.status === "ACTIVE" && e.id !== except).sort((a, b) => a.fullName.localeCompare(b.fullName, "tr"))
     .map((e) => ({ value: e.id, label: e.jobTitle ? `${e.fullName} — ${e.jobTitle}` : e.fullName }));
+
+// catalogOptions are the active catalog entries; a retired current value stays selectable
+// so an edit never drops it silently (holders keep retired entries, F3).
+export function catalogOptions(entries: CatalogEntry[] | undefined, current?: string | null) {
+  const options = (entries ?? []).filter((e) => e.active).map((e) => ({ value: e.name, label: e.name }));
+  if (current && !options.some((o) => o.value === current)) options.unshift({ value: current, label: `${current} (kullanımdan kaldırıldı)` });
+  return options;
+}
 
 export function EmployeesPage() {
   const navigate = useNavigate();
@@ -31,6 +39,7 @@ export function EmployeesPage() {
   const [status, setStatus] = useState<EmployeeStatus | "ALL">("ACTIVE");
   const [dept, setDept] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const count = (s: EmployeeStatus) => employees.filter((e) => e.status === s).length;
   const nameOf = (id: string | null) => employees.find((e) => e.id === id)?.fullName;
   const rows = employees
@@ -40,7 +49,8 @@ export function EmployeesPage() {
   return (
     <>
       <PageHeader title="Çalışanlar" sub="İşe girişler, ekip değişiklikleri, askıya alma ve işten çıkışlar. Her değişiklik erişimlere otomatik yansır ve kayda geçer."
-        actions={<Button variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Yeni çalışan</Button>} />
+        actions={<><Button onClick={() => setCatalogOpen(true)}>Departmanlar ve unvanlar</Button><Button variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Yeni çalışan</Button></>} />
+      {catalogOpen && <CatalogModal onClose={() => setCatalogOpen(false)} />}
       <div className="toolbar">
         <SearchBox value={q} onChange={setQ} placeholder="Ad, e-posta veya unvan ara" />
         <Segmented<EmployeeStatus | "ALL"> label="Durum" value={status} onChange={setStatus}
@@ -81,6 +91,7 @@ type Form = { fullName: string; email: string; jobTitle: string; department: str
 
 function CreateEmployeeModal({ employees, onClose }: { employees: Employee[]; onClose: () => void }) {
   const qc = useQueryClient();
+  const catalog = useCompanyCatalog().data;
   const [form, setForm] = useState<Form>({ fullName: "", email: "", jobTitle: "", department: "", managerId: "" });
   const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({});
   const [created, setCreated] = useState<EmployeeWithPassword | null>(null);
@@ -110,14 +121,56 @@ function CreateEmployeeModal({ employees, onClose }: { employees: Employee[]; on
       <div className="form-grid">
         <Field label="Ad soyad" required error={errors.fullName}><Input value={form.fullName} invalid={!!errors.fullName} onChange={set("fullName")} placeholder="Örn. Kaan Uslu" /></Field>
         <Field label="E-posta" required error={errors.email}><Input type="email" value={form.email} invalid={!!errors.email} onChange={set("email")} placeholder="kaan.uslu@accessflow.com.tr" /></Field>
-        <Field label="Unvan" required error={errors.jobTitle}><Input value={form.jobTitle} invalid={!!errors.jobTitle} onChange={set("jobTitle")} placeholder="Örn. Yazılım Mühendisi" /></Field>
-        <Field label="Departman" required error={errors.department}><Input list="departments" value={form.department} invalid={!!errors.department} onChange={set("department")} /></Field>
+        <Field label="Unvan" required error={errors.jobTitle}><Select value={form.jobTitle} invalid={!!errors.jobTitle} onChange={set("jobTitle")} placeholder="Unvan seçin" options={catalogOptions(catalog?.jobPositions)} /></Field>
+        <Field label="Departman" required error={errors.department}><Select value={form.department} invalid={!!errors.department} onChange={set("department")} placeholder="Departman seçin" options={catalogOptions(catalog?.departments)} /></Field>
         <Field label="Yönetici" error={errors.managerId} hint="Yönetici, çalışanın taleplerinde ilk onaylayıcıdır.">
           <Select value={form.managerId} onChange={set("managerId")} placeholder="Yönetici yok (en üst düzey)" options={managerOptions(employees)} />
         </Field>
       </div>
-      <datalist id="departments">{departmentsOf(employees).map((d) => <option key={d} value={d} />)}</datalist>
     </Modal>
+  );
+}
+
+// CatalogModal is where HR defines the company's departments and job titles (M17): exact
+// names, added and retired, never deleted. They grant nothing.
+function CatalogModal({ onClose }: { onClose: () => void }) {
+  const catalog = useCompanyCatalog();
+  return (
+    <Modal open wide onClose={onClose} title="Departmanlar ve unvanlar" desc="Şirketin kullandığı adlar, yazıldığı gibi saklanır. Yetki vermezler; başlangıç paketlerini belirler. Kaldırılan bir ad, onu taşıyan çalışanlarda kalır ama yeni atamalarda kullanılamaz."
+      footer={<Button onClick={onClose}>Kapat</Button>}>
+      {catalog.isPending ? <TableSkeleton rows={3} /> : (
+        <div className="form-grid">
+          <CatalogList title="Departmanlar" list="departments" entries={catalog.data?.departments ?? []} />
+          <CatalogList title="Unvanlar" list="job-positions" entries={catalog.data?.jobPositions ?? []} />
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function CatalogList({ title, list, entries }: { title: string; list: "departments" | "job-positions"; entries: CatalogEntry[] }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [run, busy] = useAction();
+  const refresh = () => qc.invalidateQueries({ queryKey: ["company-catalog"] });
+  return (
+    <div className="stack-sm">
+      <div className="section-title">{title}</div>
+      <ul className="stack-sm" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {entries.map((e) => (
+          <li key={e.id} className="row" style={{ justifyContent: "space-between" }}>
+            <span className={e.active ? undefined : "muted"}>{e.name}{!e.active && " (kullanımdan kaldırıldı)"}</span>
+            {e.active && <Button size="sm" variant="danger-ghost" aria-label={`${e.name} kaldır`} loading={busy}
+              onClick={() => run(() => api.post(`/company-catalog/${list}/${e.id}/retire`), { success: `${e.name} kullanımdan kaldırıldı` }).then((r) => { if (r.ok) refresh(); })}>Kaldır</Button>}
+          </li>
+        ))}
+      </ul>
+      <div className="row">
+        <Input aria-label={`Yeni ${title.toLowerCase()} adı`} value={name} onChange={(e) => setName(e.target.value)} placeholder="Örn. Engineering" />
+        <Button disabled={!name.trim()} loading={busy}
+          onClick={() => run(() => api.post(`/company-catalog/${list}`, { name }), { success: `${name.trim()} eklendi` }).then((r) => { if (r.ok) { setName(""); refresh(); } })}>Ekle</Button>
+      </div>
+    </div>
   );
 }
 

@@ -41,6 +41,12 @@ type ImportReport struct {
 	Terminated int        `json:"terminated"` // accounts of terminated employees, removal started
 	Skipped    int        `json:"skipped"`    // imported before, or already granted in AccessFlow
 	Rejected   []Rejected `json:"rejected"`
+	// Tool read only: reported grants it found in the tool, and reported API grants of the
+	// tools it read that the tool does not hold (M17).
+	Verified   *int `json:"verified,omitempty"`
+	Unverified *int `json:"unverified,omitempty"`
+	// Workbook only: the employees, tools and levels it created (M17).
+	Created map[string]int `json:"created,omitempty"`
 }
 
 // Rejected is a row the import could not place: unknown_tool, unknown_level, api_tool
@@ -53,11 +59,11 @@ type Rejected struct {
 	Reason  string `json:"reason"`
 }
 
-// holding is one (tool, account, level) to import; email matches the employee.
-type holding struct {
-	email, account string
-	tool, level    uuid.UUID
-	method         string
+// Holding is one (tool, account, level) to import; Email matches the employee.
+type Holding struct {
+	Email, Account string
+	Tool, Level    uuid.UUID
+	Method         string
 }
 
 // ImportMock imports the accounts the Mock Tool Service holds for every active API tool.
@@ -79,7 +85,7 @@ func (s *Service) ImportMock(ctx context.Context, actor auth.Principal) (ImportR
 	if err != nil {
 		return ImportReport{}, err
 	}
-	var holdings []holding
+	var holdings []Holding
 	rejected := []Rejected{}
 	for i, p := range pairs {
 		if i > 0 && pairs[i-1].Tool == p.Tool {
@@ -97,7 +103,7 @@ func (s *Service) ImportMock(ctx context.Context, actor auth.Principal) (ImportR
 					rejected = append(rejected, Rejected{Account: a.Account, Tool: p.Name, Level: l.Level, Reason: "unknown_level"})
 					continue
 				}
-				holdings = append(holdings, holding{a.Account, a.Account, p.Tool, level, "API"})
+				holdings = append(holdings, Holding{a.Account, a.Account, p.Tool, level, "API"})
 			}
 		}
 	}
@@ -147,7 +153,7 @@ func (s *Service) ImportCSV(ctx context.Context, actor auth.Principal, fileName,
 	if err != nil {
 		return ImportReport{}, err
 	}
-	var holdings []holding
+	var holdings []Holding
 	rejected := []Rejected{}
 	for {
 		rec, err := r.Read()
@@ -191,7 +197,7 @@ func (s *Service) ImportCSV(ctx context.Context, actor auth.Principal, fileName,
 			reject("unknown_level")
 			continue
 		}
-		holdings = append(holdings, holding{email, account, catalog[j].Tool, *catalog[j].Level, catalog[j].Method})
+		holdings = append(holdings, Holding{email, account, catalog[j].Tool, *catalog[j].Level, catalog[j].Method})
 	}
 	if len(holdings) == 0 && len(rejected) == 0 {
 		return ImportReport{}, errInvalidCSV
@@ -199,13 +205,10 @@ func (s *Service) ImportCSV(ctx context.Context, actor auth.Principal, fileName,
 	return s.importHoldings(ctx, actor, "CSV", &fileName, holdings, rejected)
 }
 
-// importHoldings records each new holding as an IMPORTED_BASELINE grant, in one transaction
-// with the import report (D10). A holding imported before, or already granted through
-// AccessFlow, is skipped. No approval or activation date is invented. A terminated
-// employee's account is removed at once and a suspended employee's suspended; an account
-// matching no employee is an orphan for InfoSec.
+// importHoldings records the holdings and the import report in one transaction (D10),
+// one import at a time.
 func (s *Service) importHoldings(ctx context.Context, actor auth.Principal, source string, fileName *string,
-	holdings []holding, rejected []Rejected) (ImportReport, error) {
+	holdings []Holding, rejected []Rejected) (ImportReport, error) {
 	report := ImportReport{ID: uuid.Must(uuid.NewV7()), Source: source, FileName: fileName,
 		ImportedBy: Person{actor.EmployeeID, actor.FullName}, Rejected: rejected}
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
@@ -213,65 +216,125 @@ func (s *Service) importHoldings(ctx context.Context, actor auth.Principal, sour
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", ImportLockKey); err != nil {
 			return err
 		}
-		for _, h := range holdings {
-			var employee *uuid.UUID
-			var status string
-			err := tx.QueryRow(ctx, "SELECT id, status FROM employees WHERE lower(email) = lower($1) FOR UPDATE", h.email).Scan(&employee, &status)
-			if errors.Is(err, pgx.ErrNoRows) {
-				employee, err = nil, nil // an orphan account
-			}
-			if err != nil {
-				return err
-			}
-			var skip bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM grants WHERE import_id IS NOT NULL AND tool_id = $1
-				AND lower(account) = lower($2) AND access_level_id = $3)
-				OR EXISTS (SELECT 1 FROM grants WHERE employee_id = $4 AND access_level_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED'))`,
-				h.tool, h.account, h.level, employee).Scan(&skip); err != nil {
-				return err
-			}
-			if skip {
-				report.Skipped++
-				continue
-			}
-			var grant uuid.UUID
-			if err := tx.QueryRow(ctx, `INSERT INTO grants (employee_id, tool_id, access_level_id, method, status, import_id, account, created_at)
-				VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7) RETURNING id`,
-				employee, h.tool, h.level, h.method, report.ID, h.account, now).Scan(&grant); err != nil {
-				return err
-			}
-			report.Imported++
-			if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "GRANT_IMPORTED", Entity: "grant", EntityID: &grant,
-				SubjectID: employee, Details: map[string]any{"importId": report.ID, "source": source, "account": h.account,
-					"approver": "unknown: existed before AccessFlow", "orphan": employee == nil}}); err != nil {
-				return err
-			}
-			switch {
-			case employee == nil:
-				report.Orphans++
-			case status == "TERMINATED":
-				report.Terminated++
-				err = requestRemoval(ctx, tx, now, &actor.EmployeeID, grant, *employee, "TERMINATION", "account of a terminated employee")
-			case status == "SUSPENDED":
-				err = suspendIfSuspended(ctx, tx, now, grant, *employee)
-			}
-			if err != nil {
-				return err
-			}
+		if err := RecordHoldings(ctx, tx, now, actor, &report, holdings); err != nil {
+			return err
 		}
-		raw, err := json.Marshal(report)
+		if source == "MOCK" {
+			// Reported API access of the tools read that the tool does not hold.
+			var unverified int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM grants g JOIN tools t ON t.id = g.tool_id
+				WHERE g.import_id IS NOT NULL AND g.tool_verified_at IS NULL AND g.status IN ('ACTIVE', 'SUSPENDED')
+				  AND t.fulfillment_method = 'API' AND t.status = 'ACTIVE'`).Scan(&unverified); err != nil {
+				return err
+			}
+			report.Unverified = &unverified
+		}
+		return SaveReport(ctx, tx, actor, &report)
+	})
+	return report, err
+}
+
+// RecordHoldings records each new holding as an IMPORTED_BASELINE grant, in the caller's
+// transaction, which holds ImportLockKey (D10). A holding imported before, or already
+// granted through AccessFlow, is skipped. No approval or activation date is invented, and
+// no operation is sent: the tool already holds the access. A terminated employee's account
+// is removed at once and a suspended employee's suspended; an account matching no employee
+// is an orphan for InfoSec. A tool read (source MOCK) also verifies the grants it records
+// and the reported ones it finds (M17).
+func RecordHoldings(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, report *ImportReport, holdings []Holding) error {
+	read := report.Source == "MOCK"
+	if read && report.Verified == nil {
+		report.Verified = new(int)
+	}
+	var verifiedAt *time.Time
+	if read {
+		verifiedAt = &now
+	}
+	for _, h := range holdings {
+		var employee *uuid.UUID
+		var status string
+		err := tx.QueryRow(ctx, "SELECT id, status FROM employees WHERE lower(email) = lower($1) FOR UPDATE", h.Email).Scan(&employee, &status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			employee, err = nil, nil // an orphan account
+		}
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO imports (id, source, file_name, imported_by, imported_at, report) VALUES ($1, $2, $3, $4, $5, $6)`,
-			report.ID, source, fileName, actor.EmployeeID, now, raw); err != nil {
+		var imported *uuid.UUID
+		var verified, held bool
+		if err := tx.QueryRow(ctx, `SELECT id, tool_verified_at IS NOT NULL OR status NOT IN ('ACTIVE', 'SUSPENDED') FROM grants
+			WHERE import_id IS NOT NULL AND tool_id = $1 AND lower(account) = lower($2) AND access_level_id = $3`,
+			h.Tool, h.Account, h.Level).Scan(&imported, &verified); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "ACCESS_IMPORTED", Entity: "import", EntityID: &report.ID,
-			Details: map[string]any{"source": source, "fileName": fileName, "imported": report.Imported, "orphans": report.Orphans,
-				"skipped": report.Skipped, "rejected": len(rejected)}})
-	})
-	return report, err
+		if imported == nil {
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM grants WHERE employee_id = $1 AND access_level_id = $2
+				AND status NOT IN ('REVOKED', 'CANCELLED'))`, employee, h.Level).Scan(&held); err != nil {
+				return err
+			}
+		}
+		if imported != nil || held {
+			report.Skipped++
+			if read && imported != nil && !verified {
+				if err := verifyGrant(ctx, tx, now, actor, *imported); err != nil {
+					return err
+				}
+				*report.Verified++
+			}
+			continue
+		}
+		var grant uuid.UUID
+		if err := tx.QueryRow(ctx, `INSERT INTO grants (employee_id, tool_id, access_level_id, method, status, import_id, account, created_at, tool_verified_at)
+			VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7, $8) RETURNING id`,
+			employee, h.Tool, h.Level, h.Method, report.ID, h.Account, now, verifiedAt).Scan(&grant); err != nil {
+			return err
+		}
+		report.Imported++
+		if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "GRANT_IMPORTED", Entity: "grant", EntityID: &grant,
+			SubjectID: employee, Details: map[string]any{"importId": report.ID, "source": report.Source, "account": h.Account,
+				"approver": "unknown: existed before AccessFlow", "orphan": employee == nil, "toolVerified": read}}); err != nil {
+			return err
+		}
+		switch {
+		case employee == nil:
+			report.Orphans++
+		case status == "TERMINATED":
+			report.Terminated++
+			err = requestRemoval(ctx, tx, now, &actor.EmployeeID, grant, *employee, "TERMINATION", "account of a terminated employee")
+		case status == "SUSPENDED":
+			err = suspendIfSuspended(ctx, tx, now, grant, *employee)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyGrant marks a reported baseline grant as found in the tool.
+func verifyGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, grant uuid.UUID) error {
+	var employee *uuid.UUID
+	if err := tx.QueryRow(ctx, "UPDATE grants SET tool_verified_at = $2 WHERE id = $1 RETURNING employee_id", grant, now).Scan(&employee); err != nil {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "GRANT_VERIFIED_BY_TOOL", Entity: "grant",
+		EntityID: &grant, SubjectID: employee})
+}
+
+// SaveReport writes the import report and its ACCESS_IMPORTED event, last in the import's
+// transaction (the grants reference it, deferred).
+func SaveReport(ctx context.Context, tx pgx.Tx, actor auth.Principal, report *ImportReport) error {
+	raw, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO imports (id, source, file_name, imported_by, imported_at, report) VALUES ($1, $2, $3, $4, $5, $6)`,
+		report.ID, report.Source, report.FileName, actor.EmployeeID, report.ImportedAt, raw); err != nil {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "ACCESS_IMPORTED", Entity: "import", EntityID: &report.ID,
+		Details: map[string]any{"source": report.Source, "fileName": report.FileName, "imported": report.Imported, "orphans": report.Orphans,
+			"skipped": report.Skipped, "rejected": len(report.Rejected), "created": report.Created}})
 }
 
 // Imports lists the import reports, newest first, for Super Admins and InfoSec.

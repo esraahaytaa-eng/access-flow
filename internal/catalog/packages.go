@@ -12,6 +12,7 @@ import (
 
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -185,6 +186,9 @@ func (s *Service) AddPackage(ctx context.Context, actor auth.Principal, in NewPa
 	}
 	var entry PackageEntry
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		if err := people.CheckPlacement(ctx, tx, nil, nil, &dept, title); err != nil {
+			return err
+		}
 		var toolID uuid.UUID // a level never moves to another tool
 		err := tx.QueryRow(ctx, "SELECT tool_id FROM access_levels WHERE id = $1", in.AccessLevelID).Scan(&toolID)
 		if errors.Is(err, pgx.ErrNoRows) {

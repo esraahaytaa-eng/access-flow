@@ -25,19 +25,24 @@ func NewClient(t testing.TB, srv *httptest.Server) *Client {
 	return &Client{T: t, Srv: srv, HTTP: &http.Client{Jar: jar}, CSRF: true}
 }
 
-// Response is a decoded JSON response.
+// Response is a response, decoded when it is JSON.
 type Response struct {
 	Status int
 	Body   map[string]any
 	Header http.Header
+	Raw    []byte
 }
 
 func (c *Client) Do(method, path string, body any) Response {
 	c.T.Helper()
 	var r io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
+	switch b := body.(type) {
+	case nil:
+	case []byte: // a file, sent as is
 		r = bytes.NewReader(b)
+	default:
+		raw, _ := json.Marshal(body)
+		r = bytes.NewReader(raw)
 	}
 	req, _ := http.NewRequest(method, c.Srv.URL+path, r)
 	if c.CSRF {
@@ -51,7 +56,8 @@ func (c *Client) Do(method, path string, body any) Response {
 	}
 	defer resp.Body.Close()
 	out := Response{Status: resp.StatusCode, Header: resp.Header}
-	_ = json.NewDecoder(resp.Body).Decode(&out.Body)
+	out.Raw, _ = io.ReadAll(resp.Body)
+	_ = json.Unmarshal(out.Raw, &out.Body)
 	return out
 }
 

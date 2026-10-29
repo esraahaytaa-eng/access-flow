@@ -280,6 +280,8 @@ export type Grant = {
   retainedOnTransfer: { at: string; justification: string } | null;
   /** Existed before AccessFlow; approver unknown (D10). */
   imported: boolean;
+  /** When the tool read found this imported grant in the tool; null when only a spreadsheet reported it. */
+  toolVerifiedAt: string | null;
   version: number;
   createdAt: string;
 };
@@ -366,6 +368,7 @@ export type FulfillmentTasksResponse = { tasks: FulfillmentTask[] };
 
 export type NotificationKind =
   | "APPROVAL_POLICY_CHANGED"
+  | "APPROVAL_POLICIES_IMPORTED"
   | "DIRECT_GRANT"
   | "SUPER_ADMIN_OVERRIDE"
   | "APPROVAL_ASSIGNED"
@@ -444,7 +447,7 @@ export type ImportRejection = { line?: number; account: string; tool: string; le
 
 export type ImportReport = {
   id: string;
-  source: "MOCK" | "CSV";
+  source: "MOCK" | "CSV" | "WORKBOOK";
   fileName: string | null;
   importedBy: Person;
   importedAt: string;
@@ -453,6 +456,9 @@ export type ImportReport = {
   terminated: number;
   skipped: number;
   rejected: ImportRejection[];
+  verified?: number; // tool read: reported grants it found in the tool
+  unverified?: number; // tool read: reported API grants the tool does not hold
+  created?: { employees: number; tools: number; levels: number }; // workbook
 };
 
 export type ImportsResponse = { imports: ImportReport[] };
@@ -466,7 +472,7 @@ export type Orphan = {
   method: FulfillmentMethod;
   account: string;
   status: GrantStatus;
-  source: "MOCK" | "CSV";
+  source: "MOCK" | "CSV" | "WORKBOOK";
   fileName: string | null;
   importedAt: string;
   version: number;
@@ -542,3 +548,30 @@ export type AdminHealth = { activeSuperAdmins: number; infosecMembers: number; r
 export interface DemoResponse {
   accounts: { key: string; email: string; role: string }[];
 }
+
+// ---- Company catalog and onboarding workbook (M17) --------------------------------
+
+export type CatalogEntry = { id: string; name: string; active: boolean };
+export type CompanyCatalog = { departments: CatalogEntry[]; jobPositions: CatalogEntry[] };
+
+export type WorkbookProblem = {
+  sheet?: "Employees" | "Tools" | "Existing Access";
+  row?: number;
+  column?: string;
+  value?: string;
+  reason: string;
+  expected?: string;
+  otherRow?: number;
+};
+
+export type WorkbookPlan = {
+  summary: {
+    employeesNew: number; employeesExisting: number; toolsNew: number; toolsExisting: number;
+    levelsNew: number; levelsExisting: number; accessNew: number; accessExisting: number;
+  };
+  owners: { tool: string; ownerEmail: string }[];
+  problems: WorkbookProblem[];
+  warnings: WorkbookProblem[];
+};
+
+export type WorkbookResult = { plan: WorkbookPlan; report: ImportReport };

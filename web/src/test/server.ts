@@ -8,7 +8,7 @@ export function fakeServer(routes: Record<string, Handler | unknown>) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
     const method = init.method ?? "GET";
     const path = url.replace("/api/v1", "");
-    const body = init.body ? JSON.parse(init.body as string) : undefined;
+    const body = init.body instanceof Blob ? { file: (init.body as File).name ?? "blob" } : init.body ? JSON.parse(init.body as string) : undefined;
     calls.push({ method, path, body });
     const route = routes[`${method} ${path}`];
     const out = typeof route === "function" ? (route as Handler)(body) : route === undefined ? { status: 404, body: { error: "not_found" } } : { body: route };

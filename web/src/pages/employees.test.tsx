@@ -12,7 +12,9 @@ afterEach(() => vi.unstubAllGlobals());
 const hr = principal({ employee: { id: "hr", email: "hr@x.co", fullName: "Ayşe İK", roles: ["HR_MANAGER"] } }) as never;
 const manager = employee({ id: "m1", fullName: "Burak Manager", managerId: null, department: "Ürün", jobTitle: "Lider" });
 const manager2 = employee({ id: "m2", fullName: "Selin Lead", managerId: null, department: "Platform", jobTitle: "Lider" });
-const dir = (...extra: unknown[]) => ({ "GET /employees": { employees: [manager, manager2, employee(), ...extra] }, "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] }, "GET /starter-packages": { entries: [] } });
+const entry = (name: string, active = true) => ({ id: name, name, active });
+const catalog = { departments: [entry("Ürün"), entry("Platform"), entry("Eski Birim", false)], jobPositions: [entry("Mühendis"), entry("Analist"), entry("Kıdemli Analist"), entry("Lider")] };
+const dir = (...extra: unknown[]) => ({ "GET /employees": { employees: [manager, manager2, employee(), ...extra] }, "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] }, "GET /starter-packages": { entries: [] }, "GET /company-catalog": catalog });
 const detail = (routes: Record<string, unknown>) => renderPage(<EmployeeDetailPage />, { path: "/employees/e2", pattern: "/employees/:id", session: hr }) && routes;
 const dialog = (name: string) => within(screen.getByRole("dialog", { name }));
 
@@ -24,12 +26,28 @@ describe("employees", () => {
     const d = dialog("Yeni çalışan");
     await userEvent.type(d.getByLabelText(/Ad soyad/), "Kaan Uslu");
     await userEvent.type(d.getByLabelText(/E-posta/), "kaan@x.co");
-    await userEvent.type(d.getByLabelText(/Unvan/), "Mühendis");
-    await userEvent.type(d.getByLabelText(/Departman/), "Ürün");
+    expect(within(d.getByLabelText(/Departman/)).queryByText("Eski Birim")).toBeNull(); // retired entries are not offered
+    await userEvent.selectOptions(d.getByLabelText(/Unvan/), "Mühendis");
+    await userEvent.selectOptions(d.getByLabelText(/Departman/), "Ürün");
     await userEvent.selectOptions(d.getByLabelText(/Yönetici/), "m1");
     await userEvent.click(d.getByRole("button", { name: "Çalışanı oluştur" }));
     expect(await screen.findByText("Tmp-Secret-123456")).toBeTruthy();
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ email: "kaan@x.co", fullName: "Kaan Uslu", department: "Ürün", jobTitle: "Mühendis", managerId: "m1" });
+  });
+
+  it("manages departments and job positions in the company catalog", async () => {
+    const calls = fakeServer({ ...dir(), "POST /company-catalog/departments": () => ({ status: 201, body: entry("Finans") }),
+      "POST /company-catalog/job-positions/Lider/retire": entry("Lider", false) });
+    renderPage(<EmployeesPage />, { session: hr });
+    await userEvent.click(await screen.findByRole("button", { name: "Departmanlar ve unvanlar" }));
+    const d = dialog("Departmanlar ve unvanlar");
+    expect(await d.findByText("Eski Birim (kullanımdan kaldırıldı)")).toBeTruthy();
+    expect(d.queryByRole("button", { name: "Eski Birim kaldır" })).toBeNull();
+    await userEvent.type(d.getByLabelText("Yeni departmanlar adı"), "Finans");
+    await userEvent.click(d.getAllByRole("button", { name: "Ekle" })[0]);
+    await userEvent.click(d.getByRole("button", { name: "Lider kaldır" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([
+      ["/company-catalog/departments", { name: "Finans" }], ["/company-catalog/job-positions/Lider/retire", undefined]]));
   });
 
   it("filters the directory by status", async () => {
@@ -115,10 +133,18 @@ describe("employee detail", () => {
     detail({});
     await userEvent.click(await screen.findByRole("button", { name: "Transfer" }));
     const d = dialog("Deniz Kara · ekip değişikliği");
-    await userEvent.clear(d.getByLabelText(/Unvan/));
-    await userEvent.type(d.getByLabelText(/Unvan/), "Kıdemli Analist");
+    await userEvent.selectOptions(d.getByLabelText(/Unvan/), "Kıdemli Analist");
     await userEvent.click(d.getByRole("button", { name: "Kaydet" }));
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ version: 5, managerId: "m1", department: "Ürün", jobTitle: "Kıdemli Analist" }));
+  });
+
+  it("keeps a retired current value selectable when transferring", async () => {
+    fakeServer({ ...dir(), "GET /employees": { employees: [manager, employee({ department: "Eski Birim" })] }, "GET /employees/e2/grants": { grants: [] } });
+    renderPage(<EmployeeDetailPage />, { path: "/employees/e2", pattern: "/employees/:id", session: hr });
+    await userEvent.click(await screen.findByRole("button", { name: "Transfer" }));
+    const select = dialog("Deniz Kara · ekip değişikliği").getByLabelText(/Yeni departman/) as HTMLSelectElement;
+    expect(select.value).toBe("Eski Birim");
+    expect(within(select).getByText("Eski Birim (kullanımdan kaldırıldı)")).toBeTruthy();
   });
 
   it("blocks transfer and termination until the access list has loaded", async () => {

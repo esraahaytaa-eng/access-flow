@@ -50,11 +50,11 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (p: Principal) => void }
         {demo && (
           <section className="login-demo" aria-labelledby="login-demo-title">
             <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2 id="login-demo-title">Demo hesapları</h2>
-              <Badge tone="amber" dot>Demo ortamı</Badge>
+              <h2 id="login-demo-title">Demo Accounts</h2>
+              <Badge tone="amber" dot>Demo Environment</Badge>
             </div>
-            <p className="faint small">Bir hesap seçin; parolalar README dosyasındadır.</p>
-            <ul role="list" aria-label="Demo hesapları">
+            <p className="faint small">Select an account. Passwords are listed in the README.</p>
+            <ul role="list" aria-label="Demo Accounts">
               {demo.accounts.map((a) => (
                 <li key={a.key}>
                   <button type="button" onClick={() => pick(a.email)}>

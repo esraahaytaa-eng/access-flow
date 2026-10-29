@@ -8,8 +8,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 const signedOut = { "GET /auth/me": () => ({ status: 401, body: { error: "authentication_required" } }) };
 const demo = { accounts: [
-  { key: "admin", email: "admin@accessflow.local", role: "Süper Yönetici" },
-  { key: "employee", email: "deniz.kara@accessflow.local", role: "Çalışan" },
+  { key: "admin", email: "admin@accessflow.local", role: "Super Admin" },
+  { key: "employee", email: "deniz.kara@accessflow.local", role: "Employee" },
 ] };
 
 describe("sign-in page", () => {
@@ -18,7 +18,7 @@ describe("sign-in page", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Oturum açın" })).toBeTruthy();
     expect(screen.queryByText(/Doğru kişiye/)).toBeNull();
-    expect(screen.queryByText("Demo hesapları")).toBeNull();
+    expect(screen.queryByText("Demo Accounts")).toBeNull();
   });
 
   it("checks the fields before calling the server", async () => {
@@ -33,8 +33,9 @@ describe("sign-in page", () => {
   it("in demo mode lists the demo accounts, fills the e-mail on click and shows no password", async () => {
     fakeServer({ ...signedOut, "GET /demo": demo });
     render(<App />);
-    const list = await screen.findByRole("list", { name: "Demo hesapları" });
-    expect(within(list).getByText("Süper Yönetici")).toBeTruthy();
+    const list = await screen.findByRole("list", { name: "Demo Accounts" });
+    expect(within(list).getByText("Super Admin")).toBeTruthy();
+    expect(screen.getByText("Select an account. Passwords are listed in the README.")).toBeTruthy();
     await userEvent.click(within(list).getByRole("button", { name: /deniz\.kara@accessflow\.local/ }));
     expect((screen.getByLabelText("E-posta") as HTMLInputElement).value).toBe("deniz.kara@accessflow.local");
     expect(screen.getByLabelText("Parola")).toBe(document.activeElement);
@@ -47,13 +48,13 @@ describe("sign-in page", () => {
       "GET /approvals": { approvals: [] }, "GET /notifications": { notifications: [] }, "GET /requests": { requests: [] }, "GET /access": { grants: [] },
     });
     render(<App />);
-    expect(await screen.findByText("Demo ortamı")).toBeTruthy();
+    expect(await screen.findByText("Demo Environment")).toBeTruthy();
   });
 
   it("marks the forced password change as demo in demo mode", async () => {
     fakeServer({ "GET /auth/me": principal({ mustChangePassword: true }), "GET /demo": demo });
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Parolanızı değiştirin" })).toBeTruthy();
-    expect(await screen.findByText("Demo ortamı")).toBeTruthy();
+    expect(await screen.findByText("Demo Environment")).toBeTruthy();
   });
 });

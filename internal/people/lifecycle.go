@@ -191,6 +191,9 @@ func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID
 		if owns {
 			return errOwnsTools
 		}
+		if err := CheckPlacement(ctx, tx, e.Department, e.JobTitle, department, jobTitle); err != nil {
+			return err
+		}
 		if in.ManagerID != nil {
 			if err := CheckNewManager(ctx, tx, id, *in.ManagerID); err != nil {
 				return err

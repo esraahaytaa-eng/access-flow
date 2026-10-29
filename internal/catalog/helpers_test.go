@@ -25,6 +25,8 @@ type testEnv struct {
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 	db := testutil.NewDB(t)
+	testutil.DefineDepartments(t, db, "Engineering", "Finance", "QA")
+	testutil.DefinePositions(t, db, "Backend Developer")
 	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
 	if err != nil {
 		t.Fatal(err)

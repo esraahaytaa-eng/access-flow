@@ -31,7 +31,7 @@ Every known limitation of the current version, with the decision it follows from
 - Person-level actions (suspend, reactivate, transfer, rehire, terminate, schedule) are serialized by one database lock; they are rare HR actions, so they simply wait for each other.
 - An approved extension cannot be withdrawn (it is already in force); give the access up with revoke instead.
 - Withdrawing an approved item sets its `closed_at` to the withdrawal time; the approval time stays in its steps and the audit log.
-- The UI is Turkish only (DECISIONS.md A7). It loads the Geist font from Google Fonts; offline, the browser falls back to a system font.
+- The UI is Turkish only (DECISIONS.md A7), apart from the English demo sign-in labels; names in the company catalog are shown as defined. It loads the Geist font from Google Fonts; offline, the browser falls back to a system font.
 - Saving a tool in the UI sends one call per change (the tool, then each level); if one fails, the earlier ones stay saved and the page shows the error.
 - A review round (quarterly start, day steps) runs in one transaction; a campaign of many thousands of grants would hold it longer. Lists show the first 2000 review items and 500 orphans.
 - A quarterly campaign does not start while a manual one runs; it starts when that one closes, later in the quarter.
@@ -39,6 +39,16 @@ Every known limitation of the current version, with the decision it follows from
 - A level the tool itself holds suspended for an active employee is imported as `ACTIVE`; AccessFlow does not resume it.
 - The mock import reads the tool's accounts before its transaction; an account removed from the tool in that moment can still be imported as held, until a review or orphan action removes it.
 - An import records what the tool really holds, so an employee may end up with two levels of one tool (D4 is enforced for requests, not for imported reality); a review or a level change resolves it.
+- **Onboarding workbook (M17).**
+  - Access reported in the workbook (or a CSV) is believed as reported. For API tools the tool read verifies it later and counts what the tool does not hold; for Manual and Vendor tools nothing can verify it, so the certification campaign is the first check. A removal of a reported API grant the tool does not hold completes harmlessly (the tool answers "no change"); a suspension of it fails and appears in Exceptions.
+  - For an API tool, Existing Access accepts only an empty account or the employee's email, because the tool read matches API accounts by email.
+  - Existing Access has no Tool or Level dropdowns (a tool can be defined in the same file); the preview names the problem and the defined values.
+  - Re-importing never updates existing employees, tools, levels or approval steps; differences are warnings, and changes go through the normal screens.
+  - Departments, job positions and admin groups cannot be renamed; retire and create instead. The workbook only names admin groups; their members are added in the UI. Imported employees have no password until HR resets it.
+  - The file is at most 2 MiB with at most 1,000 employee, 2,000 tool-level and 5,000 access rows. Formulas, macros and encrypted files are refused. The import runs in one transaction and waits for, or blocks, the other access imports.
+  - Unknown employees in Existing Access are rejected, not reported as orphans; orphan accounts come from the tool read or the account CSV.
+  - An import holds share locks on every employee and tool while it runs, so sign-ins and approvals wait for it; it is a rare rollout action.
+  - The tool read's `unverified` count covers every active API tool; a tool created by a workbook import that commits while a read waits is counted although that read did not reach it. Run the read again.
 - A dismissed orphan account stays `ACTIVE` with no owner and is not part of later review campaigns (D8 reviews employees' grants); the dismissal and its reason stay in the audit log.
 - New system reasons or routing notes added in the backend need a Turkish text in `web/src/i18n/reasons.ts`; until then the UI shows the English text.
 - The UI has no screens for lists the API does not offer yet: decided approvals, closed tasks and the direct-grant log.
@@ -50,7 +60,7 @@ Every known limitation of the current version, with the decision it follows from
 
 ## Planned changes
 
-- **Employee CSV onboarding (M17, planned, not implemented yet).** Today HR creates employees one at a time in the UI. M17 adds company-defined department and job-position catalogs and a validated CSV import of active employees (with preview and audit), followed by the existing access import; see [`docs/plans/`](plans/).
+None.
 
 ## Out of scope
 

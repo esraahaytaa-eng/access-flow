@@ -144,7 +144,7 @@ func TestStarterPackageAdministration(t *testing.T) {
 		t.Fatalf("department = %v; want trimmed", r.Body["department"])
 	}
 	testutil.RequireStatus(t, admin.Do("POST", "/api/v1/starter-packages", map[string]any{"department": "ENGINEERING",
-		"accessLevelId": viewer["id"]}), 409, "package_entry_exists")
+		"accessLevelId": viewer["id"]}), 400, "unknown_department") // exact catalog names (M17)
 	testutil.RequireStatus(t, admin.Do("POST", "/api/v1/starter-packages", map[string]any{"department": "Engineering",
 		"accessLevelId": old["id"]}), 409, "level_not_requestable")
 	testutil.RequireStatus(t, admin.Do("POST", "/api/v1/starter-packages", map[string]any{"department": " ",

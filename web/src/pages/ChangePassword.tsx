@@ -50,7 +50,7 @@ export function ForcedPasswordChange({ onChanged, onSignOut }: { onChanged: (p: 
   return (
     <div className="login">
       <main className="login-box">
-        <div className="login-brand"><Logo size={30} /><span>AccessFlow</span>{demo && <Badge tone="amber" dot>Demo ortamı</Badge>}</div>
+        <div className="login-brand"><Logo size={30} /><span>AccessFlow</span>{demo && <Badge tone="amber" dot>Demo Environment</Badge>}</div>
         <div className="login-card">
           <h1>Parolanızı değiştirin</h1>
           <p className="muted">Devam etmeden önce geçici parolanızı değiştirmeniz gerekiyor.</p>

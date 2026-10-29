@@ -16,15 +16,15 @@ Open http://localhost:8080 (health: `GET /api/v1/health`). No other setup is nee
 |---|---|---|
 | `admin@accessflow.local` | `Demo-Admin-2026` | Super Admin (Okan Yılmaz) |
 | `selin.aydin@accessflow.local` | `Demo-InfoSec-2026` | InfoSec |
-| `ayse.demir@accessflow.local` | `Demo-HR-2026` | HR Manager, owner of the vendor-fulfilled Bordro Portalı |
+| `ayse.demir@accessflow.local` | `Demo-HR-2026` | HR Manager, owner of the vendor-fulfilled Payroll Portal |
 | `gizem.arslan@accessflow.local` | `Demo-Auditor-2026` | Auditor |
 | `burak.sahin@accessflow.local` | `Demo-Manager-2026` | Manager of the product team |
 | `can.ozturk@accessflow.local` | `Demo-Owner-2026` | Tool Owner (Jira, GitHub), IT Operations admin group |
 | `deniz.kara@accessflow.local` | `Demo-Employee-2026` | Employee |
 
-Each account has its own password (`DEMO_PASSWORDS` in `compose.yaml`). The sign-in page lists the accounts without passwords (a click fills the e-mail), and every page shows a "Demo ortamı" badge. The other demo employees have random passwords nobody knows.
+Each account has its own password (`DEMO_PASSWORDS` in `compose.yaml`). The sign-in page lists the accounts without passwords (a click fills the e-mail), and every page shows a "Demo Environment" badge. Demo labels and catalog names are in English; the rest of the UI is Turkish. The other demo employees have random passwords nobody knows.
 
-**Demo data.** On first start the server builds a small company through the real services, at real time, as the people whose role each action needs (DECISIONS.md D12): 18 employees in seven departments, six tools covering API, Manual and Vendor fulfillment, and requests in every state, from approvals waiting at each step to a failed task, imported legacy access with orphan accounts, a suspended and a terminated employee, and a running quarterly review. Nothing time-dependent is faked; overdue reminders and review findings appear when their real time comes.
+**Demo data.** On first start the server builds a small company through the real services, at real time, as the people whose role each action needs (DECISIONS.md D12): 18 employees, a company catalog of eight departments and 18 job positions, six tools covering API, Manual and Vendor fulfillment, and requests in every state, from approvals waiting at each step to a failed task, imported legacy access with orphan accounts, a suspended and a terminated employee, and a running quarterly review. Nothing time-dependent is faked; overdue reminders and review findings appear when their real time comes.
 
 The seed runs once, on a database that holds only the demo Super Admin, and later starts change nothing. If the log says `demo seed: the database holds data from an interrupted start or an earlier version`, start a separate project with its own fresh volumes, which leaves your existing data untouched:
 
@@ -44,7 +44,8 @@ Deleting the main project's data instead (`docker compose down -v`) is destructi
 - **Granting and removing:** API tools are changed and verified automatically with retries; Manual and Vendor tools get tracked tasks for their admin groups. Access is removed on expiry, on transfer (pre-selected for removal) and on termination (removed first); suspension is reversible.
 - **Reviews:** a quarterly campaign per tool owner with a reminder on day 7, InfoSec escalation on day 14 and automatic action on day 21.
 - **Proof:** an append-only audit log, point-in-time access for any date with its approvers, and evidence reports for Audit.
-- **Existing access:** imported from the tools as baseline grants (no approval invented); unmatched accounts become orphan findings for InfoSec.
+- **Onboarding:** HR keeps a catalog of departments and job positions. A Super Admin imports employees (without passwords or roles), tools with their levels and approval steps, and existing access from one Excel workbook: download the template, preview, then import all or nothing. Existing records are never overwritten.
+- **Existing access:** imported as baseline grants (no approval invented) from the workbook, an account CSV or the Mock Tool Service read, which also verifies reported API access; unmatched accounts become orphan findings for InfoSec.
 
 ## Architecture
 
@@ -64,12 +65,13 @@ cmd/mocktools       Mock Tool Service
 internal/platform   config, DB pool and transactions, migrations, HTTP helpers
 internal/audit      append-only audit writer
 internal/auth       sign-in, sessions, passwords, initial Super Admin
-internal/people     employees, roles, admin groups, Super Admin succession
+internal/people     employees, department and job-position catalog, roles, admin groups, Super Admin succession
 internal/catalog    tools, access levels and approval steps, starter packages
 internal/requests   access requests, approval routing and decisions, Mock Email Outbox
 internal/notify     in-app notifications
 internal/access     grants, operations, the runner, fulfillment tasks, expiry, baseline import, orphans, the Mock Tool Service client
 internal/reviews    access review campaigns, decisions, the day-7/14/21 steps and findings
+internal/onboarding Excel onboarding workbook: template, parsing, validation, all-or-nothing import
 internal/explorer   audit explorer: events, point-in-time access and evidence reports (read-only)
 internal/sweeps     the scheduled jobs loop (expiry, scheduled terminations, review steps)
 internal/mocktools  Mock Tool Service handlers and migrations
@@ -137,7 +139,7 @@ This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory P
 
 - A local case-study setup: fixed database credentials in `compose.yaml`, one `app` instance, plain HTTP on port 8080 (put HTTPS in front and set `COOKIE_SECURE=true` for real use).
 - No real tool connectors: API tools are reached through the Mock Tool Service; Manual and Vendor evidence is self-reported by the admin who confirms it.
-- Employees are created one at a time by HR; CSV onboarding of employees is planned (M17), not implemented yet. Existing tool access can already be imported from CSV.
+- Workbook-reported access is believed as reported: the API tool read verifies it later; Manual and Vendor access is first checked by the certification campaign. Re-imports never update existing employees or tools.
 - No SSO and no real e-mail: HR hands over one-time passwords; notifications are in the app.
 - The UI is Turkish only.
 

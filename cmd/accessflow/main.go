@@ -24,6 +24,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/demo"
 	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
+	"github.com/esraahaytaa-eng/access-flow/internal/onboarding"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 	"github.com/esraahaytaa-eng/access-flow/internal/requests"
@@ -178,6 +179,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 				notify.Register(r, pool)
 				reviews.NewService(pool).Register(r)
 				explorer.NewService(pool, loc).Register(r)
+				onboarding.NewService(pool).Register(r)
 			})
 		})
 	})

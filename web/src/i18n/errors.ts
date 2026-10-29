@@ -3,6 +3,13 @@ import { ApiError } from "../api/client";
 // Turkish text for every API error code (A7: the API returns codes, never display text).
 // internal/webui/errors_test.go checks that each code the backend returns is listed here.
 export const errorMessages: Record<string, string> = {
+  unknown_department: "Bu departman tanımlı değil; tam olarak tanımlandığı gibi yazın.",
+  retired_department: "Bu departman kullanımdan kaldırıldı; yeni atamalarda kullanılamaz.",
+  unknown_job_position: "Bu unvan tanımlı değil; tam olarak tanımlandığı gibi yazın.",
+  retired_job_position: "Bu unvan kullanımdan kaldırıldı; yeni atamalarda kullanılamaz.",
+  name_taken: "Bu ad zaten tanımlı (büyük/küçük harf farkı da aynı ad sayılır).",
+  workbook_invalid: "Excel dosyasında hatalar var; hiçbir şey içe aktarılmadı.",
+  file_too_large: "Dosya çok büyük (en fazla 2 MB).",
   access_exists: "Bu araç için zaten açık bir erişiminiz var.",
   admin_group_not_found: "Yönetim grubu bulunamadı.",
   already_assigned: "Adım zaten bu kişiye atanmış.",
@@ -116,6 +123,8 @@ export const errorMessages: Record<string, string> = {
 };
 
 export function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return errorMessages[err.code] ?? errorMessages.internal_error;
-  return errorMessages.internal_error;
+  if (!(err instanceof ApiError)) return errorMessages.internal_error;
+  const text = errorMessages[err.code] ?? errorMessages.internal_error;
+  // The server names the configured value when the input differs only in spelling (M17).
+  return typeof err.body?.expected === "string" ? `${text} Tanımlı değer: “${err.body.expected}”.` : text;
 }
