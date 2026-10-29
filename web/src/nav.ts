@@ -1,5 +1,5 @@
 // Who sees which page (design/ spec 2.2). Convenience only: the server enforces every permission.
-import { exceptionCount, useApprovals, useEmployees, useExceptions, useTasks, useTools } from "./api/queries";
+import { exceptionCount, useApprovals, useEmployees, useExceptions, useReviews, useTasks, useTools } from "./api/queries";
 import { useSession } from "./session";
 
 export function useRoleFlags() {
@@ -14,6 +14,7 @@ export function useRoleFlags() {
     manager, owner, superAdmin, infosec, hr, auditor,
     approvals: manager || owner || infosec || superAdmin || approvals.length > 0,
     tasks: adminGroups.length > 0,
+    reviews: owner || infosec || superAdmin || auditor,
     exceptions: infosec || superAdmin || auditor,
     employees: hr || superAdmin,
     admin: superAdmin,
@@ -26,5 +27,7 @@ export function useNavCounts(flags: RoleFlags) {
   const approvals = useApprovals().data?.length ?? 0;
   const tasks = useTasks(flags.tasks).data?.filter((t) => t.canAct).length ?? 0;
   const ex = useExceptions(flags.exceptions).data;
-  return { approvals, tasks, exceptions: ex ? exceptionCount(ex) : 0 };
+  const { me } = useSession();
+  const reviews = useReviews(flags.reviews).data?.items.filter((i) => i.reviewerId === me.id && !i.decision && !i.closedReason).length ?? 0;
+  return { approvals, tasks, reviews, exceptions: ex ? exceptionCount(ex) : 0 };
 }

@@ -11,6 +11,8 @@ const systemReasons: Record<string, string> = {
   expired: "Süresi doldu",
   superseded: "Yeni bir işlemle geçersiz kaldı",
   "level change": "Seviye değişikliği",
+  REVOKED_NO_REVIEW: "Erişim incelemesinde yanıtlanmadı; kaldırıldı",
+  "account of a terminated employee": "İşten ayrılan çalışanın hesabı",
 };
 
 export const reasonText = (reason: string) => systemReasons[reason] ?? reason;

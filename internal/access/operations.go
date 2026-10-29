@@ -39,10 +39,10 @@ type Operation struct {
 
 func operations(ctx context.Context, pool *pgxpool.Pool, where string, args ...any) ([]Operation, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT o.id, g.id, o.type, e.id, e.full_name, t.name, l.name, o.status, o.attempts, o.last_error,
+		SELECT o.id, g.id, o.type, `+holder+`, coalesce(e.full_name, g.account), t.name, l.name, o.status, o.attempts, o.last_error,
 		       CASE WHEN o.status = 'FAILED' THEN o.completed_at END,
 		       o.version, o.created_at
-		FROM operations o JOIN grants g ON g.id = o.grant_id JOIN employees e ON e.id = g.employee_id
+		FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
 		WHERE `+where+` ORDER BY o.priority, o.created_at LIMIT 200`, args...) // shortcut: first 200 only; page when more fail at once
 	if err != nil {
@@ -113,7 +113,7 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 		var grant, employee uuid.UUID
 		var method string
 		var isMember bool
-		err := tx.QueryRow(ctx, `SELECT g.id, g.employee_id, g.method, `+member("$2")+`
+		err := tx.QueryRow(ctx, `SELECT g.id, `+holder+`, g.method, `+member("$2")+`
 			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN tools t ON t.id = g.tool_id WHERE o.id = $1`,
 			id, actor.EmployeeID).Scan(&grant, &employee, &method, &isMember)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -138,7 +138,7 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			Scan(&typ, &status, &current); err != nil {
 			return err
 		}
-		if err := stillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
 			return err
 		}
 		var employeeStatus string

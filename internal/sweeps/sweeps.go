@@ -1,5 +1,5 @@
-// Package sweeps runs the scheduled business jobs (O8, A6): in M8, temporary access
-// expiry (D6); in M9, scheduled terminations (D7). Each job is idempotent and catches up
+// Package sweeps runs the scheduled business jobs (O8, A6): temporary access expiry (D6),
+// scheduled terminations (D7) and the access review steps (D8). Each job is idempotent and catches up
 // after downtime.
 package sweeps
 
@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
+	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 )
 
 // Sweeps runs the jobs about once a minute.
@@ -51,5 +52,9 @@ func (s *Sweeps) RunOnce(ctx context.Context) error {
 	if n > 0 {
 		slog.Info("scheduled terminations run", "employees", n)
 	}
-	return errors.Join(expiryErr, err)
+	n, reviewErr := reviews.RunDue(ctx, s.pool, s.loc)
+	if n > 0 {
+		slog.Info("access review steps run", "changes", n)
+	}
+	return errors.Join(expiryErr, err, reviewErr)
 }

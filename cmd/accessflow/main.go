@@ -26,6 +26,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 	"github.com/esraahaytaa-eng/access-flow/internal/requests"
+	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 	"github.com/esraahaytaa-eng/access-flow/internal/sweeps"
 	"github.com/esraahaytaa-eng/access-flow/internal/webui"
 )
@@ -91,7 +92,8 @@ func run(args []string) error {
 	}
 	// One runner and one sweeps loop (A2: one instance); they stop with ctx and finish
 	// before the pool closes.
-	runner := access.NewRunner(pool, access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second))
+	tools := access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second)
+	runner := access.NewRunner(pool, tools)
 	var wg sync.WaitGroup
 	wg.Go(func() { runner.Run(ctx) })
 	wg.Go(func() { sweeps.New(pool, loc, requests.TerminateDue).Run(ctx) })
@@ -100,7 +102,7 @@ func run(args []string) error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(pool, svc, loc, webui.Dist()),
+		Handler:           newRouter(pool, svc, loc, tools, webui.Dist()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
@@ -108,7 +110,7 @@ func run(args []string) error {
 }
 
 // newRouter serves the JSON API under /api and the web app on every other path.
-func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist fs.FS) http.Handler {
+func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools *access.HTTPToolClient, dist fs.FS) http.Handler {
 	// Rejects cross-origin unsafe requests (Sec-Fetch-Site / Origin), on top of the CSRF token (A4).
 	crossOrigin := http.NewCrossOriginProtection()
 	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +120,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist f
 	peopleSvc := people.NewService(pool, svc)
 	catalogSvc := catalog.NewService(pool)
 	requestsSvc := requests.NewService(pool, loc)
-	accessSvc := access.NewService(pool)
+	accessSvc := access.NewService(pool, tools)
 
 	r := chi.NewRouter()
 	r.Route("/api", func(r chi.Router) {
@@ -140,6 +142,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, dist f
 				requestsSvc.Register(r)
 				accessSvc.Register(r)
 				notify.Register(r, pool)
+				reviews.NewService(pool).Register(r)
 			})
 		})
 	})

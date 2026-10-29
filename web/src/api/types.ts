@@ -278,6 +278,8 @@ export type Grant = {
   /** A SUSPEND or RESUME not yet verified or confirmed. */
   suspension: "SUSPENSION_REQUESTED" | "SUSPENSION_FAILED" | "RESUME_REQUESTED" | "RESUME_FAILED" | null;
   retainedOnTransfer: { at: string; justification: string } | null;
+  /** Existed before AccessFlow; approver unknown (D10). */
+  imported: boolean;
   version: number;
   createdAt: string;
 };
@@ -324,6 +326,10 @@ export type Exceptions = {
   /** Open removals of terminated employees. */
   securityRevocations: Operation[];
   staleGrants: Operation[];
+  /** Review items day 21 left unanswered (D8). */
+  reviewFindings: ReviewItem[];
+  /** Imported accounts matching no employee (D10). */
+  orphanAccounts: Orphan[];
 };
 
 /** A Manual or Vendor operation in its admin group's queue. */
@@ -339,9 +345,13 @@ export type FulfillmentTask = {
   tool: string;
   accessLevelId: string;
   level: string;
+  /** An orphan account's task names the account in place of a person (id is the nil UUID). */
   employee: Person;
-  requestId: string;
-  itemId: string;
+  /** The account to act on in the tool. */
+  account: string;
+  /** null for an imported grant. */
+  requestId: string | null;
+  itemId: string | null;
   ticketRef: string | null;
   claimedBy: Person | null;
   /** false on the viewer's own grant or a direct action they initiated. */
@@ -359,7 +369,10 @@ export type NotificationKind =
   | "DIRECT_GRANT"
   | "SUPER_ADMIN_OVERRIDE"
   | "APPROVAL_ASSIGNED"
-  | "GRANTS_RETAINED_ON_TRANSFER";
+  | "GRANTS_RETAINED_ON_TRANSFER"
+  | "REVIEW_STARTED"
+  | "REVIEW_REMINDER"
+  | "REVIEW_ESCALATED";
 
 export type Notification = {
   id: string;
@@ -374,3 +387,85 @@ export type Notification = {
 };
 
 export type NotificationsResponse = { notifications: Notification[] };
+
+// ---- Access reviews (D8) -------------------------------------------------------------
+
+export type ReviewFlag = "RETAINED_ON_TRANSFER" | "EARLIER_POLICY" | "DIRECT_GRANT" | "OVERRIDE" | "SUSPENDED" | "IMPORTED_BASELINE";
+
+export type ReviewCampaign = {
+  id: string;
+  kind: "QUARTERLY" | "MANUAL";
+  quarter: string | null;
+  startedAt: string;
+  /** null: started by the quarterly schedule. */
+  startedBy: Person | null;
+  remindedAt: string | null;
+  escalatedAt: string | null;
+  closedAt: string | null;
+};
+
+export type ReviewItem = {
+  id: string;
+  campaignId: string;
+  campaignStartedAt: string;
+  grantId: string;
+  employee: { id: string; fullName: string; jobTitle: string | null; status: EmployeeStatus };
+  toolId: string;
+  tool: string;
+  accessLevelId: string;
+  level: string;
+  grantStatus: GrantStatus;
+  expiresOn: string | null;
+  effectiveFrom: string | null;
+  /** null: the InfoSec pool. */
+  reviewerId: string | null;
+  reviewerName: string | null;
+  routingNote: string | null;
+  requiresInfosec: boolean;
+  flags: ReviewFlag[];
+  decision: "KEEP" | "REVOKE" | null;
+  decidedBy: Person | null;
+  decidedAt: string | null;
+  decisionReason: string | null;
+  late: boolean;
+  findingAt: string | null;
+  closedReason: "REVOKED_NO_REVIEW" | "ALREADY_REMOVED" | null;
+  closedAt: string | null;
+  version: number;
+};
+
+export type ReviewPage = { campaign: ReviewCampaign | null; items: ReviewItem[] };
+
+// ---- Baseline import and orphan accounts (D10) ------------------------------------------
+
+export type ImportRejection = { line?: number; account: string; tool: string; level: string; reason: "unknown_tool" | "unknown_level" | "api_tool" | "invalid_row" };
+
+export type ImportReport = {
+  id: string;
+  source: "MOCK" | "CSV";
+  fileName: string | null;
+  importedBy: Person;
+  importedAt: string;
+  imported: number;
+  orphans: number;
+  terminated: number;
+  skipped: number;
+  rejected: ImportRejection[];
+};
+
+export type ImportsResponse = { imports: ImportReport[] };
+
+export type Orphan = {
+  id: string;
+  toolId: string;
+  tool: string;
+  accessLevelId: string;
+  level: string;
+  method: FulfillmentMethod;
+  account: string;
+  status: GrantStatus;
+  source: "MOCK" | "CSV";
+  fileName: string | null;
+  importedAt: string;
+  version: number;
+};

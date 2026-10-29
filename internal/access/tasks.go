@@ -49,36 +49,37 @@ const waitsForEarlier = `EXISTS (SELECT 1 FROM operations x WHERE x.grant_id = o
 
 // Task is a Manual or Vendor operation in its admin group's queue (O4, O7).
 type Task struct {
-	ID            uuid.UUID `json:"id"`
-	GrantID       uuid.UUID `json:"grantId"`
-	Type          string    `json:"type"`
-	Status        string    `json:"status"`
-	Method        string    `json:"method"`
-	GroupID       uuid.UUID `json:"groupId"`
-	Group         string    `json:"group"`
-	ToolID        uuid.UUID `json:"toolId"`
-	Tool          string    `json:"tool"`
-	AccessLevelID uuid.UUID `json:"accessLevelId"`
-	Level         string    `json:"level"`
-	Employee      Person    `json:"employee"`
-	RequestID     uuid.UUID `json:"requestId"`
-	ItemID        uuid.UUID `json:"itemId"`
-	TicketRef     *string   `json:"ticketRef"`
-	ClaimedBy     *Person   `json:"claimedBy"`
-	CanAct        bool      `json:"canAct"` // false on the actor's own grant (F2) or direct action (D1)
-	Version       int       `json:"version"`
-	CreatedAt     time.Time `json:"createdAt"`
+	ID            uuid.UUID  `json:"id"`
+	GrantID       uuid.UUID  `json:"grantId"`
+	Type          string     `json:"type"`
+	Status        string     `json:"status"`
+	Method        string     `json:"method"`
+	GroupID       uuid.UUID  `json:"groupId"`
+	Group         string     `json:"group"`
+	ToolID        uuid.UUID  `json:"toolId"`
+	Tool          string     `json:"tool"`
+	AccessLevelID uuid.UUID  `json:"accessLevelId"`
+	Level         string     `json:"level"`
+	Employee      Person     `json:"employee"`  // an orphan account (D10): uuid.Nil, named by its account
+	Account       string     `json:"account"`   // the account to act on in the tool
+	RequestID     *uuid.UUID `json:"requestId"` // nil for an imported grant (D10)
+	ItemID        *uuid.UUID `json:"itemId"`
+	TicketRef     *string    `json:"ticketRef"`
+	ClaimedBy     *Person    `json:"claimedBy"`
+	CanAct        bool       `json:"canAct"` // false on the actor's own grant (F2) or direct action (D1)
+	Version       int        `json:"version"`
+	CreatedAt     time.Time  `json:"createdAt"`
 }
 
 // tasks lists the Manual and Vendor operations matching where; $1 is the actor.
 func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, args ...any) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT o.id, g.id, o.type, o.status, g.method, ag.id, ag.name, t.id, t.name, l.id, l.name, e.id, e.full_name,
-		       i.request_id, i.id, o.ticket_ref, c.id, c.full_name,
-		       g.employee_id <> $1 AND NOT `+initiates("$1")+`, o.version, o.created_at
-		FROM operations o JOIN grants g ON g.id = o.grant_id JOIN employees e ON e.id = g.employee_id
+		SELECT o.id, g.id, o.type, o.status, g.method, ag.id, ag.name, t.id, t.name, l.id, l.name, `+holder+`,
+		       coalesce(e.full_name, g.account), coalesce(g.account, e.email), i.request_id, i.id, o.ticket_ref, c.id, c.full_name,
+		       g.employee_id IS DISTINCT FROM $1 AND NOT `+initiates("$1")+`, o.version, o.created_at
+		FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id
 		JOIN tools t ON t.id = g.tool_id JOIN admin_groups ag ON ag.id = t.admin_group_id
-		JOIN access_levels l ON l.id = g.access_level_id JOIN request_items i ON i.id = g.request_item_id
+		JOIN access_levels l ON l.id = g.access_level_id LEFT JOIN request_items i ON i.id = g.request_item_id
 		LEFT JOIN employees c ON c.id = o.claimed_by
 		WHERE g.method <> 'API' AND `+where+` ORDER BY o.priority, o.created_at, o.id LIMIT 200`, // shortcut: first 200 only; page when a group falls further behind
 		append([]any{actor}, args...)...)
@@ -90,7 +91,7 @@ func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, args
 		var claimer *uuid.UUID
 		var claimerName *string
 		err := row.Scan(&t.ID, &t.GrantID, &t.Type, &t.Status, &t.Method, &t.GroupID, &t.Group, &t.ToolID, &t.Tool,
-			&t.AccessLevelID, &t.Level, &t.Employee.ID, &t.Employee.FullName, &t.RequestID, &t.ItemID, &t.TicketRef,
+			&t.AccessLevelID, &t.Level, &t.Employee.ID, &t.Employee.FullName, &t.Account, &t.RequestID, &t.ItemID, &t.TicketRef,
 			&claimer, &claimerName, &t.CanAct, &t.Version, &t.CreatedAt)
 		if claimer != nil {
 			t.ClaimedBy = &Person{ID: *claimer, FullName: *claimerName}
@@ -124,7 +125,7 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		var t lockedTask
 		var isMember, initiator bool
-		err := tx.QueryRow(ctx, `SELECT g.id, g.employee_id, g.method, `+member("$2")+`, `+initiates("$2")+`
+		err := tx.QueryRow(ctx, `SELECT g.id, `+holder+`, g.method, `+member("$2")+`, `+initiates("$2")+`
 			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN tools t ON t.id = g.tool_id
 			WHERE o.id = $1 AND g.method <> 'API'`, id, actor.EmployeeID).Scan(&t.grant, &t.employee, &t.method, &isMember, &initiator)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -146,7 +147,7 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE id = $1 FOR UPDATE", id); err != nil {
 			return err
 		}
-		if err := stillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `SELECT o.type, o.status, o.version, o.ticket_ref, o.claimed_by IS NOT DISTINCT FROM $2,
@@ -170,7 +171,8 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 
 // stillActive re-checks the actor under the caller's locks: the session was checked before
 // them, and a suspension or termination committing meanwhile ends their authority (D7).
-func stillActive(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
+// StillActive re-checks the actor under the caller's locks (D7).
+func StillActive(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
 	var status string
 	if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", actor).Scan(&status); err != nil {
 		return err

@@ -44,7 +44,9 @@ func (s *Service) Change(ctx context.Context, actor auth.Principal, grantID uuid
 	kind := "LEVEL_CHANGE"
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		var employee, heldLevel uuid.UUID // neither ever changes
-		err := tx.QueryRow(ctx, "SELECT employee_id, access_level_id FROM grants WHERE id = $1", grantID).Scan(&employee, &heldLevel)
+		// An orphan account has no employee to change it for.
+		err := tx.QueryRow(ctx, "SELECT employee_id, access_level_id FROM grants WHERE id = $1 AND employee_id IS NOT NULL",
+			grantID).Scan(&employee, &heldLevel)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return platform.ErrNotFound
 		}

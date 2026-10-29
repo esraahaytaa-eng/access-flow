@@ -1,26 +1,28 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
-import { useAdminGroups, useEmployees, useStarterPackages, useTools } from "../api/queries";
-import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, Role, StarterPackage } from "../api/types";
+import { useAdminGroups, useEmployees, useReviews, useStarterPackages, useTools } from "../api/queries";
+import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
-  Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, Input, Modal, PageHeader, Person, Select, TableSkeleton, Tabs, useAction,
+  Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, Input, KeyValueList, Modal, PageHeader, Person, Select, TableSkeleton, Tabs, Textarea, useAction,
 } from "../ui/components";
-import { formatDateTime, relativeTime } from "../ui/format";
+import { formatDate, formatDateTime, relativeTime } from "../ui/format";
 import { departmentsOf, managerOptions } from "./Employees";
 
-type Tab = "roles" | "groups" | "packages" | "mail";
+type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "mail";
 const assignable: AssignRoleBody["role"][] = ["INFOSEC", "HR_MANAGER", "AUDITOR"];
 
 export function SettingsPage() {
   const [tab, setTab] = useState<Tab>("roles");
   return (
     <>
-      <PageHeader title="Yönetim ayarları" sub="Ayrıcalıklı roller, yönetim grupları, başlangıç paketleri ve e-posta kutusu." />
-      <Tabs value={tab} onChange={setTab} tabs={[{ value: "roles", label: "Roller" }, { value: "groups", label: "Yönetim grupları" }, { value: "packages", label: "Başlangıç paketleri" }, { value: "mail", label: "E-posta kutusu" }]} />
-      {tab === "roles" ? <RolesTab /> : tab === "groups" ? <GroupsTab /> : tab === "packages" ? <PackagesTab /> : <MailboxTab />}
+      <PageHeader title="Yönetim ayarları" sub="Ayrıcalıklı roller, yönetim grupları, başlangıç paketleri, inceleme takvimi, içe aktarma ve e-posta kutusu." />
+      <Tabs value={tab} onChange={setTab} tabs={[{ value: "roles", label: "Roller" }, { value: "groups", label: "Yönetim grupları" }, { value: "packages", label: "Başlangıç paketleri" },
+        { value: "reviews", label: "İnceleme takvimi" }, { value: "imports", label: "İçe aktarma" }, { value: "mail", label: "E-posta kutusu" }]} />
+      {tab === "roles" ? <RolesTab /> : tab === "groups" ? <GroupsTab /> : tab === "packages" ? <PackagesTab /> : tab === "reviews" ? <ReviewScheduleTab />
+        : tab === "imports" ? <ImportsTab /> : <MailboxTab />}
     </>
   );
 }
@@ -224,5 +226,105 @@ function MailboxTab() {
         <p style={{ whiteSpace: "pre-wrap" }}>{open?.body}</p>
       </Modal>
     </div>
+  );
+}
+
+function ReviewScheduleTab() {
+  const { timezone } = useSession();
+  const qc = useQueryClient();
+  const reviews = useReviews();
+  const [confirm, setConfirm] = useState(false);
+  const campaign = reviews.data?.campaign;
+  const waiting = (reviews.data?.items ?? []).filter((i) => i.campaignId === campaign?.id && !i.decision && !i.closedReason).length;
+  return (
+    <div className="stack">
+      <Card title="Çeyreklik inceleme takvimi">
+        <KeyValueList items={[
+          ["Sıklık", "Her takvim çeyreğinin başında otomatik"],
+          ["Kapsam", "Tüm aktif ve askıdaki erişimler (süreli ve kaldırılana kadar)"],
+          ["Gün 7", "Yanıtlanmamış her kalem için incelemeciye tek hatırlatma"],
+          ["Gün 14", "Yanıtlanmamış kalemler Bilgi Güvenliğine eskale edilir"],
+          ["Gün 21", "Bilgi Güvenliği onaylı seviyelerde yanıtlanmamış erişimler kaldırılır; diğerleri açık bulgu olur"],
+        ]} />
+      </Card>
+      <Card title="Ek kampanya" sub="Gerektiğinde (örneğin büyük bir içe aktarmadan sonra) kampanyayı elle başlatabilirsiniz.">
+        {reviews.isPending ? <TableSkeleton rows={1} /> : campaign ? (
+          <Callout tone="info" title="Aktif kampanya var">{formatDate(campaign.startedAt, timezone)} tarihinde başladı · {waiting} kalem yanıt bekliyor. Aktif kampanya sürerken yenisi başlatılamaz.</Callout>
+        ) : <Button variant="primary" onClick={() => setConfirm(true)}>Kampanyayı şimdi başlat</Button>}
+      </Card>
+      <ConfirmDialog open={confirm} onClose={() => setConfirm(false)} title="Yeni inceleme kampanyası başlatılsın mı?" confirmLabel="Başlat" success="Kampanya başlatıldı"
+        desc="Tüm aktif erişimler anlık olarak kampanyaya alınır ve araç sahiplerine bildirim gönderilir. Açık bulgusu olan kalemler eklenmez."
+        onConfirm={async () => { await api.post("/reviews/campaigns", {}); qc.invalidateQueries({ queryKey: ["reviews"] }); }} />
+    </div>
+  );
+}
+
+const rejectionText = { unknown_tool: "bilinmeyen araç", unknown_level: "bilinmeyen seviye", api_tool: "API aracı; mevcut erişimler araç servisinden okunur", invalid_row: "geçersiz satır" };
+const csvExample = "eposta;arac;seviye;hesap\nayse.demir@sirket.com;Figma;Editör;\n";
+
+function ImportsTab() {
+  const qc = useQueryClient();
+  const imports = useQuery({ queryKey: ["imports"], queryFn: () => api.get<ImportsResponse>("/imports").then((r) => r.imports) });
+  const [content, setContent] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [last, setLast] = useState<ImportReport | null>(null);
+  const [run, busy] = useAction();
+  const done = (r: { ok: boolean; res?: ImportReport }) => {
+    if (!r.ok || !r.res) return;
+    setLast(r.res);
+    qc.invalidateQueries();
+  };
+  const readFile = (file: File | undefined) => {
+    if (!file) return;
+    setFileName(file.name);
+    file.text().then(setContent);
+  };
+  return (
+    <div className="stack">
+      <Card title="API araçlarının mevcut erişimleri" sub="Mock Araç Servisi’ndeki hesaplar okunur ve kurumsal e-posta ile çalışanlara eşleştirilir. Aynı erişim ikinci kez aktarılmaz.">
+        <Button variant="primary" loading={busy} onClick={() => run(() => api.post<ImportReport>("/imports/mock", {}), { success: "İçe aktarma tamamlandı" }).then(done)}>Araç servisinden içe aktar</Button>
+      </Card>
+      <Card title="Manuel ve tedarikçi araçları için CSV içe aktarma" sub="Sütunlar: eposta; arac; seviye; hesap. Hesap boşsa e-posta adresi kullanılır.">
+        <div className="stack">
+          <div className="row-wrap">
+            <input type="file" accept=".csv,text/csv" aria-label="CSV dosyası" onChange={(e) => readFile(e.target.files?.[0])} />
+            {fileName && <span className="muted small">{fileName}</span>}
+          </div>
+          <Field label="İçerik" hint="Bilinmeyen araç veya seviye içeren satırlar reddedilir ve raporda listelenir.">
+            <Textarea rows={6} value={content} onChange={(e) => setContent(e.target.value)} placeholder={csvExample} style={{ fontFamily: "var(--mono)", fontSize: 12.5 }} />
+          </Field>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <Button variant="primary" disabled={!content.trim()} loading={busy}
+              onClick={() => run(() => api.post<ImportReport>("/imports/csv", { fileName: fileName || "yapistirilan_veri.csv", content }), { success: "İçe aktarma tamamlandı" }).then(done)}>İçe aktar</Button>
+          </div>
+        </div>
+      </Card>
+      {last && <ImportReportCard report={last} highlight />}
+      <div className="section-title" style={{ marginTop: 8 }}>Önceki içe aktarmalar</div>
+      {imports.isPending ? <TableSkeleton rows={2} /> : (imports.data ?? []).filter((r) => r.id !== last?.id).map((r) => <ImportReportCard key={r.id} report={r} />)}
+    </div>
+  );
+}
+
+function ImportReportCard({ report: r, highlight }: { report: ImportReport; highlight?: boolean }) {
+  const { timezone } = useSession();
+  return (
+    <Card title={r.source === "MOCK" ? "Araç servisi" : r.fileName ?? "CSV"} sub={`${formatDateTime(r.importedAt, timezone)} · ${r.importedBy.fullName}`} style={highlight ? { borderColor: "var(--accent-line)" } : undefined}>
+      <div className="stack-sm">
+        <div className="row-wrap" style={{ gap: 8 }}>
+          <Badge tone="green">{r.imported} erişim aktarıldı</Badge>
+          <Badge tone="outline">{r.skipped} atlandı (zaten var)</Badge>
+          <Badge tone={r.rejected.length ? "red" : "outline"}>{r.rejected.length} satır reddedildi</Badge>
+          <Badge tone={r.orphans ? "amber" : "outline"}>{r.orphans} sahipsiz hesap</Badge>
+          <Badge tone={r.terminated ? "amber" : "outline"}>{r.terminated} ayrılan çalışan hesabı</Badge>
+        </div>
+        {r.rejected.length > 0 && (
+          <ul className="small" style={{ margin: "6px 0 0", paddingLeft: 18, color: "var(--red)" }}>
+            {r.rejected.map((x, k) => <li key={k}>{x.line ? `Satır ${x.line}: ` : `${x.account}: `}{x.tool} · {x.level} — {rejectionText[x.reason]}</li>)}
+          </ul>
+        )}
+        {(r.orphans > 0 || r.terminated > 0) && <p className="hint">Sahipsiz hesaplar Bilgi Güvenliğinin incelemesi için İstisnalar’a eklendi. Ayrılan çalışanlara ait hesaplar için kaldırma hemen başlatıldı. Aktarılan erişimler “kaldırılana kadar” olarak kaydedilir ve onaylayanı bilinmez.</p>}
+      </div>
+    </Card>
   );
 }

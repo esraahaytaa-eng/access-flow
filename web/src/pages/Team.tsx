@@ -72,7 +72,7 @@ function MemberDrawer({ employee, grants, onClose }: { employee: BasicEmployee; 
             <div className="between" style={{ alignItems: "flex-start" }}>
               <div className="stack-sm" style={{ gap: 6 }}>
                 <ToolCell tool={g.tool} level={g.level} sub={<>Bitiş: <ExpiryCell grant={g} /></>} />
-                <div className="row-wrap" style={{ gap: 6 }}><GrantBadges grant={g} />{g.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>}</div>
+                <div className="row-wrap" style={{ gap: 6 }}><GrantBadges grant={g} />{g.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>}{g.imported && <Tag>İçe aktarılan</Tag>}</div>
               </div>
               {removable(g) && <Button size="sm" variant="danger-ghost" onClick={() => setRevoke(g)}>Kaldır</Button>}
             </div>

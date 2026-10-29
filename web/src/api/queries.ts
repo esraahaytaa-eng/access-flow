@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
   AdminGroupsResponse, ApprovalsResponse, BasicEmployee, CatalogResponse, Employee, EmployeesResponse, Exceptions,
-  FulfillmentTasksResponse, GrantsResponse, NotificationsResponse, RequestsResponse, StarterPackagesResponse,
+  FulfillmentTasksResponse, GrantsResponse, NotificationsResponse, RequestsResponse, ReviewPage, StarterPackagesResponse,
 } from "./types";
 
 export const useEmployees = () => useQuery({ queryKey: ["employees"], queryFn: () => api.get<EmployeesResponse>("/employees").then((r) => r.employees as (Employee | BasicEmployee)[]) });
@@ -18,5 +18,8 @@ export const useTeamGrants = () => useQuery({ queryKey: ["access", "team"], quer
 export const useAdminGroups = () => useQuery({ queryKey: ["admin-groups"], queryFn: () => api.get<AdminGroupsResponse>("/admin-groups").then((r) => r.groups) });
 export const useStarterPackages = () => useQuery({ queryKey: ["starter-packages"], queryFn: () => api.get<StarterPackagesResponse>("/starter-packages").then((r) => r.entries) });
 
+export const useReviews = (enabled = true) => useQuery({ queryKey: ["reviews"], enabled, queryFn: () => api.get<ReviewPage>("/reviews") });
+
 export const exceptionCount = (x: Exceptions) =>
-  x.failedOperations.length + x.unroutableSteps.length + x.overlaps.length + x.suspensionGaps.length + x.securityRevocations.length + x.staleGrants.length;
+  x.failedOperations.length + x.unroutableSteps.length + x.overlaps.length + x.suspensionGaps.length + x.securityRevocations.length + x.staleGrants.length +
+  x.reviewFindings.length + x.orphanAccounts.length;

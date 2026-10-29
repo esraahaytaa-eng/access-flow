@@ -2,6 +2,7 @@ package requests
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,18 +14,21 @@ import (
 
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
+	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
 // world serves the real auth, request and notification routes over an organization:
 // skip manages mgr, who manages dev; owner owns every tool; is1 and is2 are InfoSec.
 type world struct {
-	t   *testing.T
-	db  testutil.DB
-	svc *Service
-	srv *httptest.Server
+	t       *testing.T
+	db      testutil.DB
+	svc     *Service
+	srv     *httptest.Server
+	toolsLn net.Listener // where startTools serves the Mock Tool Service
 
 	dev, mgr, skip, owner, is1, is2, admin  person
 	jiraViewer, jiraAdmin, awsAdmin, github uuid.UUID // levels
@@ -52,6 +56,11 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	svc := NewService(db.App, istanbul)
+	toolsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { toolsLn.Close() })
 	r := chi.NewRouter()
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Mount("/auth", authSvc.Routes())
@@ -59,13 +68,15 @@ func newWorld(t *testing.T) *world {
 			r.Use(authSvc.RequireSession)
 			svc.Register(r)
 			people.NewService(db.App, authSvc).Register(r)
-			access.NewService(db.App).Register(r)
+			access.NewService(db.App, access.NewHTTPToolClient("http://"+toolsLn.Addr().String(), 5*time.Second)).Register(r)
 			notify.Register(r, db.App)
+			catalog.NewService(db.App).Register(r)
+			reviews.NewService(db.App).Register(r)
 		})
 	})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	w := &world{t: t, db: db, svc: svc, srv: srv}
+	w := &world{t: t, db: db, svc: svc, srv: srv, toolsLn: toolsLn}
 	w.skip = w.person(testutil.EmployeeSpec{})
 	w.mgr = w.person(testutil.EmployeeSpec{ManagerID: w.skip.ID})
 	w.dev = w.person(testutil.EmployeeSpec{ManagerID: w.mgr.ID, Department: "Engineering"})

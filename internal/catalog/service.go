@@ -318,7 +318,7 @@ func (s *Service) UpdateLevel(ctx context.Context, actor auth.Principal, toolID,
 		return Level{}, err
 	}
 	var level Level
-	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, _ time.Time) error {
+	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		tool, err := lockTool(ctx, tx, toolID)
 		if err != nil {
 			return err
@@ -362,6 +362,13 @@ func (s *Service) UpdateLevel(ctx context.Context, actor auth.Principal, toolID,
 		}
 		if !stepsChanged {
 			return nil
+		}
+		// F2: a step added after approval; the next access review decides these grants individually.
+		if in.RequiresToolOwner && !cur.RequiresToolOwner || in.RequiresInfosec && !cur.RequiresInfosec {
+			if _, err := tx.Exec(ctx, `UPDATE grants SET earlier_policy_at = $2 WHERE access_level_id = $1 AND earlier_policy_at IS NULL
+				AND status IN ('PROVISIONING', 'PENDING_FULFILLMENT', 'ACTIVE', 'FAILED', 'SUSPENDED')`, id, now); err != nil {
+				return err
+			}
 		}
 		return notifyPolicy(ctx, tx, tool, level, cur.Steps)
 	})

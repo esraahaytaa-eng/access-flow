@@ -12,10 +12,15 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
-// Service serves grants: removal, My Access and Team Access.
-type Service struct{ pool *pgxpool.Pool }
+// Service serves grants: removal, My Access and Team Access, baseline imports and orphans.
+type Service struct {
+	pool  *pgxpool.Pool
+	tools *HTTPToolClient // read by the baseline import (D10)
+}
 
-func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
+func NewService(pool *pgxpool.Pool, tools *HTTPToolClient) *Service {
+	return &Service{pool: pool, tools: tools}
+}
 
 // Register adds the grant routes to r, which must already require a session.
 func (s *Service) Register(r chi.Router) {
@@ -33,6 +38,11 @@ func (s *Service) Register(r chi.Router) {
 		return s.Confirm(ctx, a, id, v)
 	}))
 	r.Post("/fulfillment-tasks/{id}/fail", s.taskRoute("reason", s.Fail))
+	r.Post("/imports/mock", s.handleImportMock)
+	r.Post("/imports/csv", s.handleImportCSV)
+	r.Get("/imports", s.handleImports)
+	r.Post("/orphans/{id}/revoke", s.orphanRoute(s.RevokeOrphan))
+	r.Post("/orphans/{id}/dismiss", s.orphanRoute(s.DismissOrphan))
 }
 
 func actor(r *http.Request) auth.Principal {
@@ -131,4 +141,50 @@ func (s *Service) handleRetry(w http.ResponseWriter, r *http.Request) {
 		op, err = s.Retry(r.Context(), actor(r), ids[0], *in.Version)
 	}
 	platform.Respond(w, r, http.StatusOK, op, err)
+}
+
+func (s *Service) handleImportMock(w http.ResponseWriter, r *http.Request) {
+	var rep ImportReport
+	err := platform.DecodeJSON(w, r, &struct{}{})
+	if err == nil {
+		rep, err = s.ImportMock(r.Context(), actor(r))
+	}
+	platform.Respond(w, r, http.StatusCreated, rep, err)
+}
+
+func (s *Service) handleImportCSV(w http.ResponseWriter, r *http.Request) {
+	var in struct{ FileName, Content *string }
+	err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
+		return []platform.Field{{Name: "fileName", Present: in.FileName != nil}, {Name: "content", Present: in.Content != nil}}
+	})
+	var rep ImportReport
+	if err == nil {
+		rep, err = s.ImportCSV(r.Context(), actor(r), *in.FileName, *in.Content)
+	}
+	platform.Respond(w, r, http.StatusCreated, rep, err)
+}
+
+func (s *Service) handleImports(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Imports(r.Context(), actor(r))
+	platform.Respond(w, r, http.StatusOK, map[string]any{"imports": list}, err)
+}
+
+func (s *Service) orphanRoute(do func(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (Orphan, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ids, err := platform.PathIDs(r, "id")
+		var in struct {
+			Version *int
+			Reason  *string
+		}
+		if err == nil {
+			err = platform.DecodeRequired(w, r, &in, func() []platform.Field {
+				return []platform.Field{{Name: "version", Present: in.Version != nil}, {Name: "reason", Present: in.Reason != nil}}
+			})
+		}
+		var o Orphan
+		if err == nil {
+			o, err = do(r.Context(), actor(r), ids[0], *in.Version, *in.Reason)
+		}
+		platform.Respond(w, r, http.StatusOK, o, err)
+	}
 }

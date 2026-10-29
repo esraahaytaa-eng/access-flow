@@ -88,9 +88,10 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 		found = true
 		next := claimed{op: id, token: uuid.New()}
 		var neverSent bool
-		if err := tx.QueryRow(ctx, `SELECT o.type, o.attempts + 1, o.first_attempt_at IS NULL, g.id, g.employee_id, e.email,
+		// The account is the employee's email, or the identifier an import found (D10).
+		if err := tx.QueryRow(ctx, `SELECT o.type, o.attempts + 1, o.first_attempt_at IS NULL, g.id, `+holder+`, coalesce(g.account, e.email),
 			       g.tool_id, g.access_level_id
-			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN employees e ON e.id = g.employee_id WHERE o.id = $1`, id).
+			FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id WHERE o.id = $1`, id).
 			Scan(&next.typ, &next.attempts, &neverSent, &next.grant, &next.employee, &next.account, &next.tool, &next.level); err != nil {
 			return err
 		}
@@ -182,6 +183,9 @@ func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 		return fail(ctx, tx, now, nil, c.op, c.grant, c.employee, c.typ, grantStatus, msg, map[string]any{"attempts": c.attempts})
 	})
 }
+
+// holder is a grant's employee, or uuid.Nil for an orphan account (D10).
+const holder = "coalesce(g.employee_id, '00000000-0000-0000-0000-000000000000'::uuid)"
 
 // lockGrant locks a grant and returns its status.
 func lockGrant(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {

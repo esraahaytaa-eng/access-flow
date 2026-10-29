@@ -102,7 +102,15 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `POST /api/v1/grants/{id}/change` | the grant's employee or their current direct manager (D3), on an `ACTIVE` grant not yet due: `{submissionId, accessLevelId, justification, duration}`. The held level is an `EXTENSION` (only of a temporary grant, to a later date or Until Revoked, else `400 not_an_extension`); another level of the same tool is a `LEVEL_CHANGE` (`400 level_of_another_tool`, `level_not_requestable`). Approved under the requested level's current steps; one item per request. `409 grant_not_active`, `change_in_progress` (a level change of this grant is already approved), `open_request_exists`; anyone else gets `404`. A repeated `submissionId` returns the original (`200`) |
 | `GET /api/v1/fulfillment-tasks` | the open Manual and Vendor tasks of my admin groups, leavers' removals first, then other removals and suspensions, then grants and resumes, each oldest first: type (`GRANT`/`REVOKE`/`SUSPEND`/`RESUME`), status, method, group, tool, level, employee, request and item, ticket, claimer, `createdAt`; `canAct: false` on my own grant or a direct action I started. A task is listed once every older task of the same grant has ended |
 | `POST /api/v1/fulfillment-tasks/{id}/claim` · `…/ticket` · `…/confirm` · `…/fail` | an active member of the tool's admin group, never the grant's employee or a direct action's initiator (`403 separation_of_duties`); a Super Admin who is not a member cannot work a task. `{version}`; ticket also `{ticketRef}` (Vendor only, ≤ 100 characters), fail also `{reason}`. Claim takes a queued task (`409 task_claimed` if another member holds it) or takes over one whose claimer left the group or is no longer active; claiming a grant task whose level or tool was retired cancels it (`409 level_retired`). Only the claimer records the ticket, confirms or fails (`403 not_claimer`). Confirm gives `ACTIVE / SELF_REPORTED` (or `REVOKED / SELF_REPORTED`); a Vendor task needs its ticket (`409 ticket_required`), and with a ticket the grant shows `WAITING_VENDOR`. Fail sends the task to Exceptions. A repeat returns the current state; a stale version is `409 version_conflict` |
-| `GET /api/v1/exceptions` | InfoSec, Super Admin, Auditor: `FAILED` operations (tool, level, employee, attempts, last error, `failedAt`), unroutable approval steps, and `overlaps`: level changes whose old level is still held because its removal failed at least once (tool, employee, old and new level and grant, the removal's status and last error), until the removal is verified or confirmed; `suspensionGaps`: `SUSPEND` operations of suspended employees that failed at least once, until verified or confirmed; `securityRevocations`: every open removal of a terminated employee, until verified or confirmed, even after a rehire; `staleGrants`: the open removal of every grant that activated after its transfer removal was requested, until verified or confirmed |
+| `GET /api/v1/exceptions` | InfoSec, Super Admin, Auditor: `FAILED` operations (tool, level, employee, attempts, last error, `failedAt`), unroutable approval steps, and `overlaps`: level changes whose old level is still held because its removal failed at least once (tool, employee, old and new level and grant, the removal's status and last error), until the removal is verified or confirmed; `suspensionGaps`: `SUSPEND` operations of suspended employees that failed at least once, until verified or confirmed; `securityRevocations`: every open removal of a terminated employee, until verified or confirmed, even after a rehire; `staleGrants`: the open removal of every grant that activated after its transfer removal was requested, until verified or confirmed; `reviewFindings`: review items day 21 left unanswered, until decided or their grant ends; `orphanAccounts`: imported accounts matching no employee, until revoked or dismissed |
+| `GET /api/v1/reviews` | the active review campaign (`null` when none) and its items: Super Admin, InfoSec and Auditor see all, everyone else the items they review; plus the open findings of earlier campaigns. Each item has the employee, tool, level, reviewer (`null`: the InfoSec pool, with `routingNote`), `requiresInfosec` (from the campaign start), `flags`, decision, `late`, `findingAt`, `closedReason` and `version` |
+| `POST /api/v1/reviews/campaigns` | Super Admin: `{}` → `201` the campaign, started now (`409 campaign_active` while one runs). Snapshots every `ACTIVE` and `SUSPENDED` grant except those with an open finding, and notifies each reviewer once |
+| `POST /api/v1/review-items/{id}/decide` | `{decision: "KEEP" \| "REVOKE", reason, version}`; `REVOKE` needs a reason (`400 reason_required`) and starts the normal removal (reason `REVIEW`). The reviewer decides; InfoSec decides pool items and, after day 14, any item; a Super Admin may only revoke (`403 super_admin_keep_forbidden`); never your own access (`403 separation_of_duties`); others `403 not_reviewer`. `409 version_conflict`, `review_item_closed`. A decision on an open finding is `late` |
+| `POST /api/v1/review-items/bulk-keep` | `{items: [{id, version}]}` → `{kept, skipped}`: keeps what the caller may keep; skips items whose level requires InfoSec, flagged items, changed or closed ones |
+| `POST /api/v1/imports/mock` | Super Admin: `{}` → `201` the import report: every account the Mock Tool Service holds in an active API tool, as `IMPORTED_BASELINE` grants (`502 tool_unavailable` imports nothing) |
+| `POST /api/v1/imports/csv` | Super Admin: `{fileName, content}`, `content` semicolon-separated with the header `eposta;arac;seviye;hesap` (an empty `hesap` is the email) for Manual and Vendor tools → `201` the report; a bad header, an unterminated quote or no rows is `400 invalid_csv`. Rows with an unknown tool or level, an API tool, or missing fields are listed in `rejected` with their line |
+| `GET /api/v1/imports` | Super Admin, InfoSec, Auditor: the reports, newest first: `imported`, `orphans`, `terminated`, `skipped`, `rejected` |
+| `POST /api/v1/orphans/{id}/revoke` · `…/dismiss` | InfoSec: `{reason, version}`; revoke starts the normal removal (reason `ORPHAN`), dismiss closes the finding and leaves the account. `409 version_conflict`, `orphan_closed` |
 | `POST /api/v1/operations/{id}/retry` | Super Admin or a member of the tool's admin group, never on their own grant (`403 separation_of_duties`): `{version}` on a `FAILED` operation starts a new round of 5 attempts with the same operation ID; a Manual or Vendor task returns to the queue unclaimed and without its ticket (the old reference stays in the audit log). A `SUSPEND` whose employee is no longer suspended, or a `RESUME` whose employee is no longer active, is `409 operation_superseded` |
 
 Only active employees receive roles, group memberships or password resets. Removing a role or membership closes it; nothing is deleted. Every change is in the audit log. A manager or department change is a transfer (below). Catalog changes are audited the same way; approval-policy changes (a level's steps) also notify every active InfoSec member in the app (DECISIONS.md F2, O2).
@@ -147,6 +155,17 @@ Only active employees receive roles, group memberships or password resets. Remov
 - `EMPLOYEE_TRANSFERRED` records the old and new manager, department and job title, the kept grants with their justifications and the removed ones (`revoked` includes grants never sent to the tool, which are cancelled outright). `EMPLOYEE_REHIRED` records the old and new placement.
 - A former manager is rehired only once their reports have been transferred to someone else, and a former tool owner only once a Super Admin has given their tools an active owner (termination does not change tool ownership; meanwhile their Tool Owner steps go to the InfoSec pool).
 - A rehire reactivates the same record with a new password and a reason; grants, roles, admin group memberships and requests stay closed, and leaver removals still open keep running and stay listed. New access goes through the normal request flow.
+
+**Access reviews** (DECISIONS.md D8, F2):
+- A campaign starts at the beginning of each calendar quarter in the company timezone (the sweep, once per quarter, from the first quarter after installation; not while another campaign runs), or when a Super Admin starts one, e.g. the certification campaign after an import (D10). One campaign runs at a time.
+- At the start every `ACTIVE` and `SUSPENDED` grant becomes an item, with the level's InfoSec requirement at that moment. The tool owner reviews; the owner's own access, and items whose owner is inactive or a Super Admin, go to the InfoSec pool. Nobody decides on their own access.
+- Day 7: one reminder per unanswered item (pool items to every InfoSec member). Day 14: escalation; InfoSec may then decide every item. Day 21: an unanswered item whose level required InfoSec at the start is revoked (`REVOKED_NO_REVIEW`); every other one stays active as an open finding in Exceptions, decided late on the review page and never added to a later campaign. Each step runs once, also after downtime, and the campaign closes.
+- Keep never extends expiry. Bulk Keep skips levels requiring InfoSec and flagged items (retained on transfer, approved under an earlier policy, direct grant, override, suspended, imported). An item whose grant is revoked or cancelled closes as already removed.
+- Adding a step to a level flags its open grants "approved under earlier policy" until a review decision.
+
+**Baseline import and orphan accounts** (DECISIONS.md D10):
+- Accounts are matched to employees by email, case-insensitively. Each (tool, account, level) is imported once; one already granted through AccessFlow is skipped. Imported grants are `ACTIVE`, Until Revoked, with no request, approval or `effectiveFrom`, and keep the tool's account identifier, which removals use.
+- A terminated employee's account is removed at once (reason `TERMINATION`); a suspended employee's is suspended. An account matching nobody is an orphan for InfoSec: revoke through the normal removal or dismiss with a reason. Imports run one at a time; every grant and the import are audited.
 
 Sessions last 30 minutes, are renewed while in use, and end after at most 12 hours. Role, status and logout changes apply on the next request.
 
@@ -195,8 +214,9 @@ internal/people     employees, roles, admin groups
 internal/catalog    tools, access levels and approval steps, starter packages
 internal/requests   access requests, approval routing and decisions, Mock Email Outbox
 internal/notify     in-app notifications
-internal/access     grants, operations, the runner, fulfillment tasks, expiry, the Mock Tool Service client
-internal/sweeps     the scheduled jobs loop (expiry)
+internal/access     grants, operations, the runner, fulfillment tasks, expiry, baseline import, orphans, the Mock Tool Service client
+internal/reviews    access review campaigns, decisions, the day-7/14/21 steps and findings
+internal/sweeps     the scheduled jobs loop (expiry, scheduled terminations, review steps)
 internal/mocktools  Mock Tool Service handlers and migrations
 internal/devfixture development employees, groups and tools (opt-in)
 internal/webui      embedded web build and SPA fallback
@@ -237,6 +257,22 @@ deploy/postgres     database and user setup, run on first start
 - Withdrawing an approved item sets its `closed_at` to the withdrawal time; the approval time stays in its steps and the audit log.
 - The UI is Turkish only (DECISIONS.md A7). It loads the Geist font from Google Fonts; offline, the browser falls back to a system font.
 - Saving a tool in the UI sends one call per change (the tool, then each level); if one fails, the earlier ones stay saved and the page shows the error.
+- A review round (quarterly start, day steps) runs in one transaction; a campaign of many thousands of grants would hold it longer. Lists show the first 2000 review items and 500 orphans.
+- A quarterly campaign does not start while a manual one runs; it starts when that one closes, later in the quarter.
+- The CSV import is sent as one request body (at most 64 KiB, about a thousand rows); split larger files.
+- A level the tool itself holds suspended for an active employee is imported as `ACTIVE`; AccessFlow does not resume it.
+- The mock import reads the tool's accounts before its transaction; an account removed from the tool in that moment can still be imported as held, until a review or orphan action removes it.
+- An import records what the tool really holds, so an employee may end up with two levels of one tool (D4 is enforced for requests, not for imported reality); a review or a level change resolves it.
+- A dismissed orphan account stays `ACTIVE` with no owner and is not part of later review campaigns (D8 reviews employees' grants); the dismissal and its reason stay in the audit log.
 - New system reasons or routing notes added in the backend need a Turkish text in `web/src/i18n/reasons.ts`; until then the UI shows the English text.
 - The UI has no screens for lists the API does not offer yet: decided approvals, closed tasks and the direct-grant log.
 - The Mock Tool Service has no authentication: it is reachable only on the internal Docker network (DECISIONS.md A2). It is a stand-in for real tools, not a model of their security.
+
+## Possible future enhancements
+
+Not planned in any milestone; listed so the scope stays explicit.
+
+- Bulk onboarding of active employees from a CSV file (today HR creates employees one by one).
+- Self-service account activation instead of a temporary password handed over by HR.
+
+SSO stays out of scope.

@@ -27,6 +27,9 @@ func Record(ctx context.Context, tx pgx.Tx, e Event) error {
 	if details == nil {
 		details = map[string]any{}
 	}
+	if e.SubjectID != nil && *e.SubjectID == uuid.Nil {
+		e.SubjectID = nil // an orphan account (D10): no employee
+	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO audit_events (actor_id, action, entity_type, entity_id, subject_employee_id, reason, details)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7)`,

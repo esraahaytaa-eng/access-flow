@@ -27,7 +27,10 @@ func (w *world) startTools() *tools {
 	w.t.Helper()
 	mock := testutil.NewMockToolsDB(w.t, mocktools.Migrations)
 	faults := testutil.NewFaults(mocktools.Handler(mock))
-	srv := httptest.NewServer(faults)
+	srv := httptest.NewUnstartedServer(faults)
+	srv.Listener.Close()
+	srv.Listener = w.toolsLn // the address the import routes call
+	srv.Start()
 	w.t.Cleanup(srv.Close)
 	return &tools{mock, faults, access.NewRunner(w.db.App, access.NewHTTPToolClient(srv.URL, 5*time.Second))}
 }
