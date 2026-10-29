@@ -120,6 +120,20 @@ func TestRehireRefusedWithDirectReports(t *testing.T) {
 	}
 }
 
+// A rehired tool owner never takes back their tools' approvals: a Super Admin reassigns
+// them first (A5, 2026-10-29).
+func TestRehireRefusedWhileOwningTools(t *testing.T) {
+	w := newWorld(t)
+	hr := w.hr()
+	w.mustLifecycle(hr, w.owner.ID, "terminate") // still owns every tool
+	testutil.RequireStatus(t, w.rehire(hr, w.owner.ID, w.skip.ID, w.version(w.owner.ID)), http.StatusConflict, "owns_tools")
+	if w.count("SELECT count(*) FROM employees WHERE id = $1 AND status = 'TERMINATED'", w.owner.ID) != 1 || w.audits("EMPLOYEE_REHIRED") != 0 {
+		t.Fatal("refused rehire changed something")
+	}
+	w.exec("UPDATE tools SET owner_id = $1 WHERE owner_id = $2", w.skip.ID, w.owner.ID) // as PUT /tools/{id} by a Super Admin
+	testutil.RequireStatus(t, w.rehire(hr, w.owner.ID, w.skip.ID, w.version(w.owner.ID)), http.StatusOK, "")
+}
+
 // Leaver removals keep running and stay visible after a rehire; other removals are not
 // leaver removals (D7, O7).
 func TestRehireKeepsLeaverRemovalsVisible(t *testing.T) {

@@ -59,6 +59,7 @@
    - Rejected: re-opening the decided step (rewrites history, A9); keeping the old approval (unreviewed access could activate).
 2. **Rehire of a former manager (approved 2026-10-29, after the code review).** A rehire is refused (`409 has_direct_reports`) while anyone not terminated still reports to the person; HR transfers those reports first. Otherwise the rehired manager would silently take back their former reports' Manager steps, team view and revoke rights. Recorded in DECISIONS.md A5 (refinement, M10 review). Test: `TestRehireRefusedWithDirectReports`.
 3. **A transfer with nothing to review (approved 2026-10-29, after the code review).** "Revoke everything" (cancel every pending request) applies only when the transfer removed at least one grant. A person with no reviewable grants keeps their requests, which follow call 4's manager rules (re-route a pending Manager step, cancel what the previous manager approved; nothing on a department-only transfer). This amends call 4. Recorded in DECISIONS.md D5 (refinement, M10 review). Test: `TestTransferWithoutGrantsKeepsRequests`.
+4. **Rehire of a former tool owner (approved 2026-10-29, after the merge-safety review).** A rehire is refused (`409 owns_tools`) while the person still owns any tool; a Super Admin reassigns those tools to an active owner first. Recorded in DECISIONS.md A5 (refinement, M10 merge review). Test: `TestRehireRefusedWhileOwningTools`.
 
 ## My calls (approved with the plan unless you object)
 

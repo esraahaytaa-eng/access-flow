@@ -24,6 +24,7 @@ const LifecycleLockKey int64 = 0x0D7_11FE
 var (
 	errLastSuperAdmin   = platform.NewError(http.StatusConflict, "last_super_admin")
 	errHasDirectReports = platform.NewError(http.StatusConflict, "has_direct_reports")
+	errOwnsTools        = platform.NewError(http.StatusConflict, "owns_tools")
 	// ErrEmployeeStatus refuses a person-level action on an employee in the wrong status.
 	ErrEmployeeStatus = platform.NewError(http.StatusConflict, "employee_status")
 )
@@ -194,6 +195,15 @@ func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID
 		}
 		if reports {
 			return errHasDirectReports
+		}
+		// Nor their tools' Tool Owner approvals: a Super Admin reassigns them first. A tool
+		// owner must be active (checkOwner), so none is assigned meanwhile.
+		var owns bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM tools WHERE owner_id = $1)", id).Scan(&owns); err != nil {
+			return err
+		}
+		if owns {
+			return errOwnsTools
 		}
 		if in.ManagerID != nil {
 			if err := CheckNewManager(ctx, tx, id, *in.ManagerID); err != nil {
