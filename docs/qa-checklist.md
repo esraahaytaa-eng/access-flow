@@ -5,11 +5,19 @@ A reproducible manual check of the main flows in a real browser, on a clean star
 ## Setup
 
 ```bash
-docker compose down -v   # only if a previous local run should be discarded: it deletes the local data
 docker compose up
 ```
 
 Open http://localhost:8080. The demo accounts and passwords are in the README ("Demo accounts"). Sign out (user menu → Çıkış yap) between roles.
+
+The checklist expects the demo data as seeded on a fresh database. Your existing local data is never deleted for QA. If the app log says `demo seed: the database holds data from an interrupted start or an earlier version`, run the checklist in a separate, throwaway Compose project instead; it has its own volumes and leaves yours untouched:
+
+```bash
+docker compose down                        # stop the main project (keeps its volumes)
+docker compose -p accessflow-qa up         # fresh volumes named accessflow-qa_*
+# after QA, remove only the throwaway project's volumes:
+docker compose -p accessflow-qa down -v
+```
 
 ## 1. Sign-in page
 

@@ -46,4 +46,9 @@
 - AccessFlow's own privileged roles get an evidence report, not a review campaign (D11).
 - The UI is Turkish-only (A7).
 
-**Out of scope:** SSO, real email, activation emails or self-service activation, bulk CSV onboarding of employees (HR creates them one by one), investigations of past employee activity, and real tool connectors.
+## Current, planned, and operational
+
+- **AccessFlow does today:** everything above, plus importing existing tool access from CSV or the Mock Tool Service as baseline grants (no approval invented) and flagging unmatched accounts as orphans (D10).
+- **Planned (M17, not implemented):** company-defined department and job-position catalogs, and CSV onboarding of active employees (validated, previewed, audited, without passwords). Until then HR creates employees one at a time.
+- **Operational responsibilities (people, not the software):** secure hosting, HTTPS, secrets and backups; keeping HR data current; tool admins exporting accounts and working their tasks; IT/InfoSec investigating and closing accounts in external tools, including the 14 former employees' accounts. AccessFlow records and tracks these removals but cannot see into the tools.
+- **Out of scope:** SSO, real e-mail and self-service activation, real tool connectors, and investigations of past activity in external tools.
