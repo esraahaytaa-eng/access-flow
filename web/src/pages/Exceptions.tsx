@@ -1,0 +1,103 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
+import { api } from "../api/client";
+import { useExceptions, useTools } from "../api/queries";
+import type { Approval, Operation, Overlap } from "../api/types";
+import { operationLabel, stepLabel } from "../i18n/labels";
+import { useSession } from "../session";
+import { Badge, Button, Callout, Card, EmptyState, PageHeader, Person, Segmented, StatusBadge, TableSkeleton, ToolCell, useAction } from "../ui/components";
+import { formatDateTime, relativeTime } from "../ui/format";
+import { statusBadge } from "../ui/status";
+import { DecisionDrawer } from "./Approvals";
+
+type Group = "OPS" | "STATE" | "FLOW";
+type Exception = { key: string; title: string; high: boolean; group: Group; at: string | null; body: ReactNode; op?: Operation; approval?: Approval };
+
+const opBody = (op: Operation, note?: string) => (
+  <div className="stack-sm">
+    <div className="row-wrap" style={{ gap: 18 }}>
+      <Person person={op.employee} sub={false} />
+      <ToolCell tool={op.tool} level={op.level} sub={operationLabel[op.type]} />
+      <StatusBadge badge={statusBadge("operation", op.status)} />
+    </div>
+    {op.lastError && <div className="small" style={{ color: "var(--red)" }}>{op.lastError}{op.attempts ? ` · ${op.attempts} deneme` : ""}</div>}
+    {note && <div className="small muted">{note}</div>}
+  </div>
+);
+
+const overlapBody = (o: Overlap) => (
+  <div className="stack-sm">
+    <div className="row-wrap" style={{ gap: 18 }}><Person person={o.employee} sub={false} /><ToolCell tool={o.tool} level={`${o.oldLevel} → ${o.newLevel}`} /><StatusBadge badge={statusBadge("operation", o.status)} /></div>
+    {o.lastError && <div className="small" style={{ color: "var(--red)" }}>{o.lastError}</div>}
+    <div className="small muted">Yeni seviye etkin, ancak eski seviyenin kaldırılması doğrulanamadı. Çalışan şu an iki seviyeye de sahip sayılıyor.</div>
+  </div>
+);
+
+export function ExceptionsPage() {
+  const { me, hasRole, timezone, adminGroups } = useSession();
+  const tools = useTools().data ?? [];
+  // The server lets a Super Admin or a member of the tool's admin group retry (never on one's own access).
+  const canRetry = (o: Operation) => o.employee.id !== me.id && (hasRole("SUPER_ADMIN") || adminGroups.some((g) => g.id === tools.find((t) => t.name === o.tool)?.adminGroup.id));
+  const qc = useQueryClient();
+  const query = useExceptions();
+  const [filter, setFilter] = useState<"ALL" | Group>("ALL");
+  const [openStep, setOpenStep] = useState<Approval | null>(null);
+  const [run, busy] = useAction();
+  const readOnly = !hasRole("SUPER_ADMIN", "INFOSEC");
+  const x = query.data;
+
+  // One card per entry; an operation in several lists (e.g. a failed security removal) shows once, under the most specific heading.
+  const seen = new Set<string>();
+  const fromOps = (ops: Operation[], title: string, high: boolean, group: Group, note?: string) =>
+    ops.filter((o) => !seen.has(o.id) && seen.add(o.id)).map((o): Exception => ({ key: o.id, title, high, group, at: o.failedAt ?? o.createdAt, body: opBody(o, note), op: o }));
+  const list: Exception[] = !x ? [] : [
+    ...fromOps(x.securityRevocations, "Ayrılan çalışanın erişimi sürüyor", true, "OPS", "Araçta kaldırıldığı doğrulanana veya onaylanana kadar erişim sürmüş sayılır."),
+    ...fromOps(x.suspensionGaps, "Askıya alma tamamlanmadı", true, "OPS", "Askıdaki çalışanın bu araçtaki erişimi henüz devre dışı bırakılamadı."),
+    ...x.overlaps.filter((o) => !seen.has(o.operationId) && seen.add(o.operationId)).map((o): Exception => ({ key: o.operationId, title: "Seviye çakışması", high: true, group: "STATE", at: null, body: overlapBody(o) })),
+    ...fromOps(x.staleGrants, "Transferden sonra etkinleşen erişim", true, "STATE", "Transfer sırasında kaldırılması istenen erişim sonradan etkinleşti; kaldırma doğrulanana kadar izlenir."),
+    ...fromOps(x.failedOperations, "Başarısız işlem", false, "OPS"),
+    ...x.unroutableSteps.map((a): Exception => ({
+      key: a.step.id, title: "Uygun onaylayıcı yok", high: false, group: "FLOW", at: a.step.openedAt, approval: a,
+      body: <div className="row-wrap" style={{ gap: 18 }}><Person person={a.item.beneficiary} sub={false} /><ToolCell tool={a.item.tool} level={a.item.level} sub={`${stepLabel[a.step.type]} adımı`} /></div>,
+    })),
+  ];
+  const count = (g: Group) => list.filter((e) => e.group === g).length;
+  const shown = list.filter((e) => filter === "ALL" || e.group === filter);
+
+  const retry = (op: Operation) => run(() => api.post(`/operations/${op.id}/retry`, { version: op.version }), { success: "İşlem yeniden başlatıldı" })
+    .then((r) => { if (r.ok) qc.invalidateQueries({ queryKey: ["exceptions"] }); });
+
+  return (
+    <>
+      <PageHeader title="İstisnalar" sub="Yalnızca gerçek sorunlar: başarısız işlemler, ayrılanların süren erişimleri, çakışan erişimler ve onaylayıcısı olmayan adımlar. Olağan bekleyen işler burada listelenmez." />
+      {readOnly && <div style={{ marginBottom: 14 }}><Callout icon="eye">Denetçi olarak bu ekranı salt okunur görüntülüyorsunuz.</Callout></div>}
+      <div className="toolbar">
+        <Segmented<"ALL" | Group> label="İstisna türü" value={filter} onChange={setFilter}
+          options={[{ value: "ALL", label: `Tümü (${list.length})` }, { value: "OPS", label: `İşlem hataları (${count("OPS")})` }, { value: "STATE", label: `Hesap tutarsızlıkları (${count("STATE")})` }, { value: "FLOW", label: `Onay (${count("FLOW")})` }]} />
+      </div>
+      {query.isPending ? <TableSkeleton /> : shown.length === 0 ? (
+        <div className="card"><EmptyState icon="check" title="Çözülmesi gereken istisna yok" desc="Yeni bir sorun oluştuğunda burada görünür." /></div>
+      ) : (
+        <div className="stack-sm">
+          {shown.map((e) => (
+            <Card key={e.key}>
+              <div className="between" style={{ alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+                <div className="stack-sm" style={{ flex: 1, minWidth: 260, gap: 12 }}>
+                  <div className="row-wrap" style={{ gap: 8 }}>
+                    <span className="strong">{e.title}</span>
+                    {e.high ? <Badge tone="red" dot>Yüksek</Badge> : <Badge tone="amber" dot>Orta</Badge>}
+                    {e.at && <span className="faint small">{formatDateTime(e.at, timezone)} · {relativeTime(e.at)}</span>}
+                  </div>
+                  {e.body}
+                </div>
+                {!readOnly && e.op?.status === "FAILED" && canRetry(e.op) && <div className="row"><Button size="sm" icon="refresh" loading={busy} onClick={() => retry(e.op!)}>Yeniden dene</Button></div>}
+                {!readOnly && e.approval && e.approval.item.beneficiary.id !== me.id && <div className="row"><Button size="sm" onClick={() => setOpenStep(e.approval!)}>{hasRole("SUPER_ADMIN") ? "Yeniden ata veya geçersiz kıl" : "Yeniden ata"}</Button></div>}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+      {openStep && <DecisionDrawer approval={openStep} canDecide={false} onClose={() => { setOpenStep(null); qc.invalidateQueries({ queryKey: ["exceptions"] }); }} />}
+    </>
+  );
+}

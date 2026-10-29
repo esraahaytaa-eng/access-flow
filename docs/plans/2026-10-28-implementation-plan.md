@@ -45,6 +45,7 @@
 - **Before `design/` arrives:** milestones deliver infrastructure and backend workflows proven by API scenario tests. The web app stays a placeholder page (build pipeline and embedding only). No visual design, no component library.
 - **When `design/` arrives:** milestone **U1 (UI foundation)** is inserted before the next backend milestone. It reviews `design/`, selects the UI library (A7), and builds the app shell, navigation, fetch wrapper, status-badge mapping, timezone display and login / password change. It also builds the screens for any backend milestones already completed (catch-up), so the UI never lags by more than one milestone.
 - **Localization (A7, 2026-10-28):** every screen, form, status, validation message, navigation item, modal and notification is available in English and Turkish, from U1 onward. Backend milestones return stable error codes for the UI to translate; they ship no display text.
+  - *Changed 2026-10-29 (approved):* the UI is Turkish only (DECISIONS.md A7). Backend error codes stay stable codes; the UI translates them.
 - **After U1:** every milestone has a **UI slice** delivering its screens together with its backend workflow, in the same milestone and PR. A milestone is not complete until its UI slice works against the real API.
 - Each milestone below lists its UI slice. Before U1, a milestone's UI slice is carried into U1's catch-up scope instead.
 
@@ -380,7 +381,20 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 
 - **Objective:** apply the design system and bring the UI up to the backend's current milestone.
 - **Tasks:** review `design/`; choose and add the single UI library (A7; reported for approval as a dependency); English and Turkish localization for all UI text, including translations of API error codes (A7, 2026-10-28); app shell and role-based navigation; fetch wrapper (CSRF, 401 → login, 403 / validation errors); shared status-badge mapping (self-reported always labelled); company-timezone timestamps; catch-up UI slices of completed milestones.
-- **Required tests:** fetch wrapper; status mapping; key forms; buttons disabled while in flight; every UI text and API error code has both an English and a Turkish translation.
+- **Required tests:** fetch wrapper; status mapping; key forms; buttons disabled while in flight; every API error code has a Turkish translation.
+- **Status:** implemented on `feat/ui` 2026-10-29, awaiting commit approval. `design/access-flow-reference.html` is the approved reference; its CSS is reused as is and no UI library is added (DECISIONS.md A7, 2026-10-29). `design/` is not committed.
+- **Screen-to-API mapping** (all under `/api/v1`):
+
+  | Batch | Screen | Route | API |
+  |---|---|---|---|
+  | 1 | Sign-in, forced and voluntary password change, shell, notifications | `/`, `/password` | `auth/login`, `auth/me`, `auth/password`, `auth/logout`, `GET /notifications`, `POST /notifications/{id}/read` |
+  | 2 | Home, catalog, new request (self, on behalf, starter package, extension and level change) | `/`, `/catalog`, `/request-new` | `GET /tools`, `GET /employees`, `GET /starter-packages`, `POST /requests`, `POST /grants/{id}/change` |
+  | 2 | My requests, request detail, withdraw; My access, revoke | `/requests`, `/requests/:id`, `/access` | `GET /requests`, `GET /requests/{id}`, `POST /request-items/{id}/withdraw`, `GET /access`, `POST /grants/{id}/revoke` |
+  | 3 | Approval inbox (approve, reject, reassign, override); team access; fulfillment tasks | `/approvals`, `/team`, `/tasks` | `GET /approvals`, `POST /approvals/{stepId}/approve\|reject\|reassign\|override`, `GET /access/team`, `GET /fulfillment-tasks`, `POST /fulfillment-tasks/{id}/claim\|ticket\|confirm\|fail` |
+  | 4 | Employees: create, password reset, suspend, reactivate, terminate now or scheduled, cancel schedule, transfer, rehire | `/employees`, `/employees/:id` | `GET/POST/PUT /employees…`, `GET /employees/{id}/grants`, lifecycle `POST /employees/{id}/…` |
+  | 5 | Exceptions with retry; tool administration; direct grant and revoke; settings (roles, admin groups, starter packages, e-mail outbox) | `/exceptions`, `/tools-admin`, `/tools-admin/:id`, `/direct`, `/settings` | `GET /exceptions`, `POST /operations/{id}/retry`, `/tools…`, `POST /direct-grants`, `/employees/{id}/roles`, `/admin-groups…`, `/starter-packages…`, `GET /email-outbox` |
+
+  Left for the milestones that add their backend: access reviews (M11), CSV import (M12), audit explorer and evidence (M13), Super Admin nomination (M14), and the history lists the API does not offer yet (decided approvals, closed tasks, direct-grant log).
 
 ---
 
@@ -400,7 +414,7 @@ Each milestone is still approved, implemented, reviewed and committed separately
 | 6 | `feat/reviews-import` | M11, M12 | `feat: quarterly reviews, baseline import and orphan accounts` |
 | 7 | `feat/proof-admin` | M13, M14 | `feat: audit explorer, evidence and super admin succession` |
 | 8 | `feat/seed-delivery` | M15, M16 | `feat: demo seed and delivery documentation` |
-| — | `feat/ui-foundation` | U1 | `feat: UI foundation from design` (own PR, merged when ready) |
+| — | `feat/ui` | U1 | `feat: Turkish web UI on the real API from the approved design (U1)` (own PR, merged when ready) |
 
 If a PR becomes large to review, it is split at a milestone boundary (with approval).
 

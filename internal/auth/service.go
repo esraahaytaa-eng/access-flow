@@ -27,18 +27,21 @@ type Options struct {
 	Secret        []byte // JWT signing secret, from LoadSecret
 	SecureCookies bool   // set the Secure flag; off for plain-HTTP localhost (A4)
 	BootstrapFile string // where the initial Super Admin password is written (A4)
-	Logger        *slog.Logger
+	// CompanyTimezone is shown to the UI, which displays times in it (A7).
+	CompanyTimezone string
+	Logger          *slog.Logger
 }
 
 // Service authenticates employees and guards the API.
 type Service struct {
-	pool          *pgxpool.Pool
-	secret        []byte
-	secureCookies bool
-	bootstrapFile string
-	log           *slog.Logger
-	dummyHash     string        // verified for unknown emails, so timing does not reveal which exist
-	hashSlots     chan struct{} // limits concurrent argon2 work (19 MiB each), see hashSlot
+	pool            *pgxpool.Pool
+	secret          []byte
+	secureCookies   bool
+	companyTimezone string
+	bootstrapFile   string
+	log             *slog.Logger
+	dummyHash       string        // verified for unknown emails, so timing does not reveal which exist
+	hashSlots       chan struct{} // limits concurrent argon2 work (19 MiB each), see hashSlot
 }
 
 func NewService(pool *pgxpool.Pool, opts Options) (*Service, error) {
@@ -50,7 +53,8 @@ func NewService(pool *pgxpool.Pool, opts Options) (*Service, error) {
 		opts.Logger = slog.Default()
 	}
 	return &Service{pool: pool, secret: opts.Secret, secureCookies: opts.SecureCookies,
-		bootstrapFile: opts.BootstrapFile, log: opts.Logger, dummyHash: dummy, hashSlots: make(chan struct{}, 2)}, nil
+		bootstrapFile: opts.BootstrapFile, companyTimezone: opts.CompanyTimezone, log: opts.Logger, dummyHash: dummy,
+		hashSlots: make(chan struct{}, 2)}, nil
 }
 
 // Principal is the signed-in employee, loaded from the database on every request.
