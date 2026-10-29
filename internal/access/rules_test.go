@@ -1,8 +1,14 @@
 package access
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
 func TestToday(t *testing.T) {
@@ -144,6 +150,41 @@ func TestRetiredReason(t *testing.T) {
 	for _, tc := range cases {
 		if got := RetiredReason(tc.tool, tc.level); got != tc.want {
 			t.Errorf("RetiredReason(%s, %s) = %q; want %q", tc.tool, tc.level, got, tc.want)
+		}
+	}
+}
+
+func TestCheckKeeps(t *testing.T) {
+	g1, g2, other := uuid.New(), uuid.New(), uuid.New()
+	reviewable := []uuid.UUID{g1, g2}
+	cases := []struct {
+		name        string
+		keep        []Keep
+		want        map[uuid.UUID]string
+		code, field string
+	}{
+		{"nothing kept", nil, map[uuid.UUID]string{}, "", ""},
+		{"kept, trimmed", []Keep{{g1, "  shared on-call rota "}}, map[uuid.UUID]string{g1: "shared on-call rota"}, "", ""},
+		{"blank justification", []Keep{{g1, "  "}}, nil, "justification_required", "keep[0].justification"},
+		{"too long", []Keep{{g2, "ok"}, {g1, strings.Repeat("x", 1001)}}, nil, "value_too_long", "keep[1].justification"},
+		{"not reviewable", []Keep{{other, "why"}}, nil, "grant_not_open", "keep[0].grantId"},
+		{"twice", []Keep{{g1, "a"}, {g1, "b"}}, nil, "duplicate_grant", "keep[1].grantId"},
+	}
+	for _, tc := range cases {
+		got, err := checkKeeps(reviewable, tc.keep)
+		var perr *platform.Error
+		switch {
+		case tc.code == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		case tc.code == "" && len(got) != len(tc.want):
+			t.Errorf("%s: got %v; want %v", tc.name, got, tc.want)
+		case tc.code != "" && (!errors.As(err, &perr) || perr.Code != tc.code || perr.Field != tc.field):
+			t.Errorf("%s: error %v; want %s on %s", tc.name, err, tc.code, tc.field)
+		}
+		for id, j := range tc.want {
+			if got[id] != j {
+				t.Errorf("%s: %v = %q; want %q", tc.name, id, got[id], j)
+			}
 		}
 	}
 }

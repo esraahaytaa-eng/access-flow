@@ -106,6 +106,27 @@ type Field struct {
 	Present bool
 }
 
+// RawField is a required body field, decoded into Dst; an explicit null is a value (it clears).
+type RawField struct {
+	Name string
+	Raw  json.RawMessage
+	Dst  any
+}
+
+// DecodeRaw requires every field and decodes it into its destination, so a forgotten key
+// never clears a value.
+func DecodeRaw(fields []RawField) error {
+	for _, f := range fields {
+		if len(f.Raw) == 0 {
+			return ValidationError(f.Name, "field_required")
+		}
+		if json.Unmarshal(f.Raw, f.Dst) != nil {
+			return ValidationError(f.Name, "invalid_json")
+		}
+	}
+	return nil
+}
+
 // DecodeRequired reads the body into in, then requires every listed field: a forgotten key
 // never silently drops an approval step or changes a value.
 func DecodeRequired(w http.ResponseWriter, r *http.Request, in any, fields func() []Field) error {

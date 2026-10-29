@@ -105,8 +105,8 @@ func cleanName(s string) (string, error) {
 	return s, platform.CheckText(s, "fullName", maxNameLength)
 }
 
-// cleanText trims an optional text field; blank becomes nil.
-func cleanText(s *string, field string) (*string, error) {
+// CleanText trims an optional text field; blank becomes nil.
+func CleanText(s *string, field string) (*string, error) {
 	if s == nil {
 		return nil, nil
 	}

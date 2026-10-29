@@ -187,8 +187,15 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 	return ops[0], nil
 }
 
-// SecurityRevocations are the open removals of terminated employees (D7, O7): listed until
-// verified or confirmed, whatever their reason. The caller checks who may read them.
+// StaleGrants are the open removals of grants that activated after their transfer removal
+// was requested (D5): listed until verified or confirmed. The caller checks who may read them.
+func StaleGrants(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+	return operations(ctx, pool, `o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND g.stale_at IS NOT NULL`)
+}
+
+// SecurityRevocations are the open removals of terminated employees (D7, O7), the only
+// priority-0 removals: listed until verified or confirmed, even after a rehire. The caller
+// checks who may read them.
 func SecurityRevocations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
-	return operations(ctx, pool, `o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND e.status = 'TERMINATED'`)
+	return operations(ctx, pool, `o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND o.priority = 0`)
 }

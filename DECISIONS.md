@@ -97,6 +97,14 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - Pending requests are reassessed: Manager step moves to the new manager; [DEFAULT] requests submitted before the transfer are cancelled when HR revokes everything.
 - A stale grant that completes after HR chose revocation is revoked immediately and recorded as an incident.
 - Managers can revoke direct reports' access at any time. No separate mover-review deadline.
+- *Refinement — [APPROVED 2026-10-29] (M10):* when the manager changes, pending requests whose Manager step the previous manager already approved are cancelled ("transferred"); the employee submits a new request for the new manager. A Manager step still pending is re-routed to the new manager. A department-only transfer re-routes no Manager step.
+- *Refinement — [APPROVED 2026-10-29] (M10 plan):*
+  - **What HR reviews:** every open grant not already being removed (provisioning, pending fulfillment, active, failed, and suspended while its resume is on its way). A grant created after HR read the list is removed with the rest. Only `ACTIVE` employees are transferred; a suspended one is reactivated first.
+  - **Revoke everything** means nothing kept: every reviewed grant is removed and every pending request is cancelled ("transferred"); no step is re-routed.
+  - **Retention** is stored on the grant (when, by whom, the justification), shown as `retainedOnTransfer`; the new manager gets one in-app notification listing the kept items. Each transfer's history is in its `EMPLOYEE_TRANSFERRED` audit event.
+  - **Stale grant:** a grant that activates while its transfer removal is open is marked stale and audited as `STALE_GRANT_INCIDENT`; the queued removal then runs, and the grant is listed in Exceptions until the removal is verified or confirmed.
+  - A manager or department change goes through the transfer only; editing an employee changes the job title alone.
+- *Refinement — [APPROVED 2026-10-29] (M10 review):* "revoke everything" applies only when the transfer removed at least one grant. A person with nothing to review (no open grants) keeps their pending requests; on a new manager a pending Manager step is re-routed and a request the previous manager approved is cancelled, as above.
 
 *Rationale:* revocation-by-default satisfies CASE.md; per-item retention avoids breaking shared tools, and retained items stay visible.
 
@@ -140,6 +148,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
   - **Who acts:** HR Managers and Super Admins suspend, reactivate, terminate and schedule; a target holding Super Admin or InfoSec needs a Super Admin; nobody acts on themselves.
   - **Roles and memberships:** termination closes them (audited); suspension keeps them.
   - **Last Super Admin (with D2):** the last active Super Admin cannot be suspended, terminated or scheduled for termination; a Super Admin whose termination is scheduled does not count. The check is serialized across concurrent actions.
+- *Refinement — [APPROVED 2026-10-29] (M10 plan):* leaver removals (priority 0) keep running after a rehire and stay in the security revocations list until verified or confirmed. A rehire restores no grant, role, admin group membership or request.
 
 ## D8. Quarterly access reviews — [CASE] quarterly review with chasing, [POLICY] the rules
 - A campaign starts every 3 months and covers all active and suspended grants, temporary and Until Revoked.
@@ -360,6 +369,9 @@ Revocation, suspension and resume follow the same pattern and labels (see O1, D7
 - Employees and users are never physically deleted in normal workflows. Account status is `ACTIVE`, `SUSPENDED` or `TERMINATED`.
 - Employee identifiers are immutable. Requests, approvals, grants, revocations, role changes and audit events are retained and remain available to point-in-time queries.
 - Rehire reactivates the same employee record (same identifier, history kept) with a new temporary password. No previous access is restored; new access requires the normal request and approval workflow (D7).
+  - *Refinement — [APPROVED 2026-10-29] (M10 merge review):* a rehire is also refused (`owns_tools`) while the person still owns any tool (termination does not change ownership). A Super Admin reassigns those tools to an active owner first, so a rehired person never silently regains Tool Owner approvals.
+  - *Refinement — [APPROVED 2026-10-29] (M10 review):* a rehire is refused (`has_direct_reports`) while anyone not terminated still reports to the person. HR transfers those reports to another manager first, so a rehired manager never silently regains their former reports' approvals, team view or revoke rights.
+  - *Refinement — [APPROVED 2026-10-29] (M10 plan):* HR Managers and Super Admins rehire a `TERMINATED` employee with a reason and a new manager, department and job title, under the same rules as other person-level actions (D7); the temporary password is shown once.
 - Reactivation after suspension follows D7: expired, revoked or retired grants are never restored; others are resumed only through the normal workflow.
 
 ### A6. Background processing — [APPROVED 2026-10-28]

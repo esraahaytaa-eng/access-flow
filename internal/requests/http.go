@@ -30,6 +30,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/employees/{id}/suspend", s.lifecycleRoute(s.Suspend))
 	r.Post("/employees/{id}/reactivate", s.lifecycleRoute(s.Reactivate))
 	r.Post("/employees/{id}/terminate", s.lifecycleRoute(s.Terminate))
+	r.Post("/employees/{id}/transfer", s.handleTransfer)
 	r.Put("/employees/{id}/termination", s.handleSchedule)
 	r.Post("/employees/{id}/termination/cancel", s.lifecycleRoute(s.CancelTermination))
 }

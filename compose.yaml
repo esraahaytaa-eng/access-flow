@@ -102,7 +102,9 @@ services:
         unformatted=$$(gofmt -l cmd internal)
         if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
         go vet ./...
-        go test -race -count=1 ./...
+        # internal/requests alone takes about 9 minutes with -race; packages run in parallel,
+        # so the 10-minute default is too short.
+        go test -race -count=1 -timeout 20m ./...
 
 volumes:
   pgdata:

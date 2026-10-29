@@ -32,11 +32,11 @@ func TestUpdateEmployee(t *testing.T) {
 	env := newEnv(t)
 	hr, c := env.user("HR_MANAGER")
 	emp := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
-	manager := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
 
-	r := put(c, emp.ID, map[string]any{"version": 1, "managerId": manager.ID, "department": "Finance", "jobTitle": nil})
+	// A job-title-only change is audited only (D5).
+	r := put(c, emp.ID, map[string]any{"version": 1, "managerId": nil, "department": nil, "jobTitle": "Analyst"})
 	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if r.Body["version"] != float64(2) || r.Body["department"] != "Finance" || r.Body["managerId"] != manager.ID.String() {
+	if r.Body["version"] != float64(2) || r.Body["jobTitle"] != "Analyst" {
 		t.Fatalf("updated employee = %v", r.Body)
 	}
 	var details []byte
@@ -46,36 +46,38 @@ func TestUpdateEmployee(t *testing.T) {
 	if err := json.Unmarshal(details, &changes); err != nil {
 		t.Fatalf("details %s: %v", details, err)
 	}
-	if len(changes) != 2 || changes["department"]["from"] != nil || changes["department"]["to"] != "Finance" ||
-		changes["managerId"]["to"] != manager.ID.String() {
-		t.Fatalf("EMPLOYEE_UPDATED details = %s; want only department and managerId with from/to", details)
-	}
-
-	// A job-title-only change is audited the same way (D5: audit only).
-	r = put(c, emp.ID, map[string]any{"version": 2, "managerId": manager.ID, "department": "Finance", "jobTitle": "Analyst"})
-	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if n := env.audits("EMPLOYEE_UPDATED", emp.ID); n != 2 {
-		t.Fatalf("EMPLOYEE_UPDATED events = %d; want 2", n)
+	if len(changes) != 1 || changes["jobTitle"]["from"] != nil || changes["jobTitle"]["to"] != "Analyst" {
+		t.Fatalf("EMPLOYEE_UPDATED details = %s; want only jobTitle with from/to", details)
 	}
 
 	// An unchanged body changes nothing.
-	r = put(c, emp.ID, map[string]any{"version": 3, "managerId": manager.ID, "department": " Finance ", "jobTitle": "Analyst"})
+	r = put(c, emp.ID, map[string]any{"version": 2, "managerId": nil, "department": nil, "jobTitle": " Analyst "})
 	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if r.Body["version"] != float64(3) || env.audits("EMPLOYEE_UPDATED", emp.ID) != 2 {
+	if r.Body["version"] != float64(2) || env.audits("EMPLOYEE_UPDATED", emp.ID) != 1 {
 		t.Fatalf("an unchanged update bumped the version or was audited: %v", r.Body)
+	}
+}
+
+// A department or manager change is a transfer (D5): PUT refuses it and changes nothing.
+func TestUpdateRejectsTransfer(t *testing.T) {
+	env := newEnv(t)
+	_, c := env.user("HR_MANAGER")
+	emp := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
+	manager := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
+	testutil.RequireStatus(t, edit(c, emp.ID, map[string]any{"version": 1, "managerId": manager.ID}), http.StatusConflict, "transfer_required")
+	testutil.RequireStatus(t, edit(c, emp.ID, map[string]any{"version": 1, "department": "Finance", "jobTitle": "Analyst"}),
+		http.StatusConflict, "transfer_required")
+	if env.count("SELECT count(*) FROM employees WHERE id = $1 AND version = 1 AND manager_id IS NULL AND department IS NULL AND job_title IS NULL", emp.ID) != 1 ||
+		env.audits("EMPLOYEE_UPDATED", emp.ID) != 0 {
+		t.Fatal("a refused transfer changed the employee")
 	}
 }
 
 func TestUpdateEmployeeRejects(t *testing.T) {
 	env := newEnv(t)
 	_, c := env.user("SUPER_ADMIN")
-	a := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
-	b := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
 	cc := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
-	env.exec("UPDATE employees SET manager_id = $2 WHERE id = $1", a.ID, b.ID)
-	env.exec("UPDATE employees SET manager_id = $2 WHERE id = $1", b.ID, cc.ID)
 	terminated := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Status: "TERMINATED"})
-	suspended := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Status: "SUSPENDED"})
 	_, plain := env.user("AUDITOR", "INFOSEC")
 
 	cases := []struct {
@@ -86,15 +88,11 @@ func TestUpdateEmployeeRejects(t *testing.T) {
 		status      int
 		code, field string
 	}{
-		{"stale version", c, cc.ID, map[string]any{"version": 7, "department": "X"}, 409, "version_conflict", ""},
+		{"stale version", c, cc.ID, map[string]any{"version": 7, "jobTitle": "X"}, 409, "version_conflict", ""},
 		{"unknown employee", c, uuid.New(), map[string]any{"version": 1}, 404, "not_found", ""},
-		{"terminated employee", c, terminated.ID, map[string]any{"version": 1, "department": "X"}, 400, "employee_terminated", ""},
-		{"own manager", c, cc.ID, map[string]any{"version": 1, "managerId": cc.ID}, 400, "manager_cycle", "managerId"},
-		{"indirect cycle", c, cc.ID, map[string]any{"version": 1, "managerId": a.ID}, 400, "manager_cycle", "managerId"},
-		{"inactive manager", c, cc.ID, map[string]any{"version": 1, "managerId": suspended.ID}, 400, "manager_inactive", "managerId"},
-		{"unknown manager", c, cc.ID, map[string]any{"version": 1, "managerId": uuid.New()}, 400, "manager_not_found", "managerId"},
-		{"long department", c, cc.ID, map[string]any{"version": 1, "department": string(make([]byte, 101))}, 400, "value_too_long", "department"},
-		{"not HR or Super Admin", plain, cc.ID, map[string]any{"version": 1, "department": "X"}, 403, "forbidden", ""},
+		{"terminated employee", c, terminated.ID, map[string]any{"version": 1, "jobTitle": "X"}, 400, "employee_terminated", ""},
+		{"long job title", c, cc.ID, map[string]any{"version": 1, "jobTitle": string(make([]byte, 101))}, 400, "value_too_long", "jobTitle"},
+		{"not HR or Super Admin", plain, cc.ID, map[string]any{"version": 1, "jobTitle": "X"}, 403, "forbidden", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,45 +115,10 @@ func TestNobodyEditsTheirOwnRecord(t *testing.T) {
 	for _, role := range []string{"HR_MANAGER", "SUPER_ADMIN"} {
 		me, c := env.user(role)
 		testutil.RequireStatus(t, edit(c, me.ID, map[string]any{"version": 1, "managerId": manager.ID}), http.StatusForbidden, "self_change_forbidden")
-		testutil.RequireStatus(t, edit(c, me.ID, map[string]any{"version": 1, "department": "X"}), http.StatusForbidden, "self_change_forbidden")
+		testutil.RequireStatus(t, edit(c, me.ID, map[string]any{"version": 1, "jobTitle": "X"}), http.StatusForbidden, "self_change_forbidden")
 	}
 	if n := env.count("SELECT count(*) FROM audit_events WHERE action = 'EMPLOYEE_UPDATED'"); n != 0 {
 		t.Fatalf("self-edits were audited: %d", n)
-	}
-}
-
-// Two opposite manager changes at once must not both pass the cycle check.
-func TestConcurrentManagerChangesCannotCreateACycle(t *testing.T) {
-	env := newEnv(t)
-	ctx := context.Background()
-	hr := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Roles: []string{"HR_MANAGER"}})
-	admin := auth.Principal{EmployeeID: hr.ID, Roles: []string{"HR_MANAGER"}}
-	for round := 0; round < 10; round++ {
-		a := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
-		b := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
-		var wg sync.WaitGroup
-		errs := make([]error, 2)
-		for i, pair := range [][2]uuid.UUID{{a.ID, b.ID}, {b.ID, a.ID}} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				mgr := pair[1]
-				_, errs[i] = env.svc.UpdateEmployee(ctx, admin, pair[0], EmployeeUpdate{Version: 1, ManagerID: &mgr})
-			}()
-		}
-		wg.Wait()
-		var cycles int
-		for _, err := range errs {
-			var e *platform.Error
-			if errors.As(err, &e) && e.Code == "manager_cycle" {
-				cycles++
-			} else if err != nil {
-				t.Fatalf("round %d: unexpected error %v", round, err)
-			}
-		}
-		if cycles != 1 {
-			t.Fatalf("round %d: manager_cycle errors = %d (%v); want exactly 1", round, cycles, errs)
-		}
 	}
 }
 
@@ -169,11 +132,11 @@ func TestConcurrentEditsWithTheSameVersion(t *testing.T) {
 		emp := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
-		for i, dept := range []string{"Finance", "Legal"} {
+		for i, title := range []string{"Analyst", "Engineer"} {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, errs[i] = env.svc.UpdateEmployee(ctx, actor, emp.ID, EmployeeUpdate{Version: 1, Department: &dept})
+				_, errs[i] = env.svc.UpdateEmployee(ctx, actor, emp.ID, EmployeeUpdate{Version: 1, JobTitle: &title})
 			}()
 		}
 		wg.Wait()
@@ -199,7 +162,7 @@ func TestUpdateEmployeeRequiresEveryField(t *testing.T) {
 	emp := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{})
 	env.exec("UPDATE employees SET job_title = 'Analyst' WHERE id = $1", emp.ID)
 	for _, missing := range []string{"version", "managerId", "department", "jobTitle"} {
-		body := map[string]any{"version": 1, "managerId": nil, "department": "Finance", "jobTitle": "Analyst"}
+		body := map[string]any{"version": 1, "managerId": nil, "department": nil, "jobTitle": "Engineer"}
 		delete(body, missing)
 		r := put(c, emp.ID, body)
 		testutil.RequireStatus(t, r, http.StatusBadRequest, "field_required")

@@ -14,6 +14,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
+	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
@@ -57,6 +58,7 @@ func newWorld(t *testing.T) *world {
 		r.Group(func(r chi.Router) {
 			r.Use(authSvc.RequireSession)
 			svc.Register(r)
+			people.NewService(db.App, authSvc).Register(r)
 			access.NewService(db.App).Register(r)
 			notify.Register(r, db.App)
 		})
