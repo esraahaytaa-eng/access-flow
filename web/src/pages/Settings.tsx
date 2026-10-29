@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
-import { useAdminGroups, useEmployees, useReviews, useStarterPackages, useTools } from "../api/queries";
+import { useAdminGroups, useAdminHealth, useEmployees, useNominations, useReviews, useStarterPackages, useTools } from "../api/queries";
 import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
@@ -11,7 +11,7 @@ import {
 import { formatDate, formatDateTime, relativeTime } from "../ui/format";
 import { departmentsOf, managerOptions } from "./Employees";
 
-type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "mail";
+type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "mail" | "system";
 const assignable: AssignRoleBody["role"][] = ["INFOSEC", "HR_MANAGER", "AUDITOR"];
 
 export function SettingsPage() {
@@ -20,28 +20,30 @@ export function SettingsPage() {
     <>
       <PageHeader title="Yönetim ayarları" sub="Ayrıcalıklı roller, yönetim grupları, başlangıç paketleri, inceleme takvimi, içe aktarma ve e-posta kutusu." />
       <Tabs value={tab} onChange={setTab} tabs={[{ value: "roles", label: "Roller" }, { value: "groups", label: "Yönetim grupları" }, { value: "packages", label: "Başlangıç paketleri" },
-        { value: "reviews", label: "İnceleme takvimi" }, { value: "imports", label: "İçe aktarma" }, { value: "mail", label: "E-posta kutusu" }]} />
+        { value: "reviews", label: "İnceleme takvimi" }, { value: "imports", label: "İçe aktarma" }, { value: "mail", label: "E-posta kutusu" }, { value: "system", label: "Sistem" }]} />
       {tab === "roles" ? <RolesTab /> : tab === "groups" ? <GroupsTab /> : tab === "packages" ? <PackagesTab /> : tab === "reviews" ? <ReviewScheduleTab />
-        : tab === "imports" ? <ImportsTab /> : <MailboxTab />}
+        : tab === "imports" ? <ImportsTab /> : tab === "mail" ? <MailboxTab /> : <SystemTab />}
     </>
   );
 }
 
 function RolesTab() {
   const qc = useQueryClient();
-  const { me } = useSession();
+  const { me, timezone } = useSession();
   const query = useEmployees();
   const employees = (query.data ?? []) as Employee[];
   const [assignOpen, setAssignOpen] = useState(false);
+  const [nominateOpen, setNominateOpen] = useState(false);
+  const nominations = useNominations().data ?? [];
   const [remove, setRemove] = useState<{ e: Employee; r: Role } | null>(null);
   const order: Role[] = ["SUPER_ADMIN", "INFOSEC", "HR_MANAGER", "AUDITOR"];
   const rows = order.flatMap((r) => employees.filter((e) => e.status !== "TERMINATED" && e.roles.includes(r)).map((e) => ({ e, r })));
   const superAdmins = rows.filter((x) => x.r === "SUPER_ADMIN").length;
   return (
     <div className="stack">
-      {!query.isPending && superAdmins < 2 && <Callout tone="warn" title="Yalnızca bir aktif Süper Yönetici var">Süper Yönetici ayrılırsa sistem kurtarma moduna girer. İkinci bir Süper Yönetici atanması önerilir.</Callout>}
-      <Card title="Ayrıcalıklı roller" sub="Kimse kendi rollerini değiştiremez. Süper Yönetici rolü bu ekrandan atanamaz." pad={false}
-        actions={<Button size="sm" variant="primary" icon="plus" onClick={() => setAssignOpen(true)}>Rol ata</Button>}>
+      {!query.isPending && superAdmins < 2 && <Callout tone="warn" title="Yalnızca bir aktif Süper Yönetici var">Süper Yönetici ayrılırsa sistem kurtarma moduna girer. İkinci bir Süper Yönetici önermeniz önerilir. Atama iki kişilik onay gerektirir: siz önerirsiniz, başka bir Süper Yönetici (yoksa Bilgi Güvenliği üyesi) yetkilendirir.</Callout>}
+      <Card title="Ayrıcalıklı roller" sub="Kimse kendi rollerini değiştiremez. Rol kaldırıldığında geçmiş kaydı korunur." pad={false}
+        actions={<><Button size="sm" onClick={() => setNominateOpen(true)}>Süper Yönetici öner</Button><Button size="sm" variant="primary" icon="plus" onClick={() => setAssignOpen(true)}>Rol ata</Button></>}>
         {query.isPending ? <TableSkeleton /> : (
           <div className="table-wrap">
             <table className="table">
@@ -59,7 +61,18 @@ function RolesTab() {
           </div>
         )}
       </Card>
+      {nominations.length > 0 && (
+        <Card title="Bekleyen Süper Yönetici önerileri" pad={false}>
+          {nominations.map((n) => (
+            <div key={n.id} className="list-row">
+              <div style={{ flex: 1 }}><Person person={n.nominee} sub={`Öneren: ${n.proposedBy.fullName} · ${formatDateTime(n.createdAt, timezone)} · ${formatDate(n.expiresAt, timezone)} tarihinde sona erer`} /></div>
+              <Badge tone="amber" dot>Yetkilendirme bekliyor</Badge>
+            </div>
+          ))}
+        </Card>
+      )}
       {assignOpen && <AssignRoleModal employees={employees} onClose={() => setAssignOpen(false)} />}
+      {nominateOpen && <NominateModal employees={employees} onClose={() => setNominateOpen(false)} />}
       <ConfirmDialog open={!!remove} onClose={() => setRemove(null)} title="Rol kaldırılsın mı?" tone="danger" confirmLabel="Rolü kaldır" success="Rol kaldırıldı"
         desc={remove ? `${remove.e.fullName} kullanıcısının ${roleLabel[remove.r]} rolü kaldırılır. Rolün geçmiş kaydı denetim için saklanır.` : undefined}
         onConfirm={async () => { await api.del(`/employees/${remove!.e.id}/roles/${remove!.r}`); qc.invalidateQueries({ queryKey: ["employees"] }); }} />
@@ -82,7 +95,7 @@ function AssignRoleModal({ employees, onClose }: { employees: Employee[]; onClos
     if (r.ok) { qc.invalidateQueries({ queryKey: ["employees"] }); onClose(); }
   };
   return (
-    <Modal open onClose={onClose} title="Rol ata" desc="Süper Yönetici rolü bu ekrandan atanamaz."
+    <Modal open onClose={onClose} title="Rol ata" desc="Süper Yönetici rolü bu ekrandan atanamaz; iki kişilik öneri süreci kullanılır."
       footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} onClick={submit}>Ata</Button></>}>
       <div className="stack">
         <Field label="Kişi" required error={errors.emp}><Select value={employeeId} onChange={(e) => { setEmployeeId(e.target.value); setErrors({ ...errors, emp: undefined }); }} placeholder="Seçin" options={managerOptions(employees, me.id)} /></Field>
@@ -90,6 +103,61 @@ function AssignRoleModal({ employees, onClose }: { employees: Employee[]; onClos
         {role === "AUDITOR" && <Callout tone="info">Denetçi rolü salt okunurdur; onay, karşılama veya yönetim yetkisi vermez.</Callout>}
       </div>
     </Modal>
+  );
+}
+
+/** Proposes a Super Admin (D2): a Super Admin proposes someone else; in recovery an HR Manager proposes, themself allowed. */
+export function NominateModal({ employees, recovery = false, onClose }: { employees: Employee[]; recovery?: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { me } = useSession();
+  const [nomineeId, setNomineeId] = useState("");
+  const [error, setError] = useState<string>();
+  const [run, busy] = useAction();
+  const otherSuperAdmins = employees.filter((e) => e.status === "ACTIVE" && e.roles.includes("SUPER_ADMIN") && e.id !== me.id).length;
+  const candidates = employees.filter((e) => !e.roles.includes("SUPER_ADMIN") && (recovery || e.id !== me.id));
+  const submit = async () => {
+    if (!nomineeId) { setError("Aday seçin."); return; }
+    const r = await run(() => api.post("/super-admin-nominations", { nomineeId }), { success: "Öneri oluşturuldu", successDesc: "Yetkilendirme için bildirim gönderildi." });
+    if (r.ok) { qc.invalidateQueries({ queryKey: ["nominations"] }); onClose(); }
+  };
+  return (
+    <Modal open onClose={onClose} title="Süper Yönetici öner"
+      desc={recovery ? "Kurtarma modu: öneriyi farklı bir Bilgi Güvenliği üyesi yetkilendirecek." : otherSuperAdmins ? "Başka bir Süper Yönetici yetkilendirmelidir." : "Tek Süper Yönetici sizsiniz; öneriyi bir Bilgi Güvenliği üyesi yetkilendirecek."}
+      footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} onClick={submit}>Öner</Button></>}>
+      <div className="stack">
+        <Field label="Aday" required error={error}><Select value={nomineeId} onChange={(e) => { setNomineeId(e.target.value); setError(undefined); }} placeholder="Seçin" options={managerOptions(candidates)} /></Field>
+        <p className="hint">Aday kendi önerisini yetkilendiremez. Öneriler 7 gün içinde yetkilendirilmezse sona erer. Mevcut rol ve grup üyelikleri korunur.</p>
+      </div>
+    </Modal>
+  );
+}
+
+function SystemTab() {
+  const { timezone } = useSession();
+  const health = useAdminHealth();
+  const employees = (useEmployees().data ?? []) as Employee[];
+  const tools = useTools().data ?? [];
+  return (
+    <div className="grid-2">
+      <Card title="Sistem">
+        <KeyValueList items={[
+          ["Şirket saat dilimi", timezone],
+          ["Aktif Süper Yönetici", health.data ? `${health.data.activeSuperAdmins}` : "—"],
+          ["Bilgi Güvenliği üyesi", health.data ? `${health.data.infosecMembers}` : "—"],
+          ["Çalışan", `${employees.filter((e) => e.status === "ACTIVE").length} aktif · ${employees.length} toplam`],
+          ["Araç", `${tools.filter((t) => t.status === "ACTIVE").length} kullanımda`],
+        ]} />
+      </Card>
+      <Card title="Uygulanan temel kurallar">
+        <ul className="small" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6, color: "var(--ink-2)" }}>
+          <li>Onay gereksinimleri erişim seviyesine aittir; yönetici onayı her zaman gerekir.</li>
+          <li>Adımlar sıralıdır ve her adıma farklı bir kişi karar verir; hak sahibi hiçbir adıma karar veremez.</li>
+          <li>Hiçbir onay otomatik verilmez; API sağlama yalnızca tüm onaylardan sonra yapılır.</li>
+          <li>Erişim, API’de doğrulandığında veya manuel/tedarikçi işlemde yetkili kişi onayladığında aktif sayılır.</li>
+          <li>Denetim kaydı yalnızca eklemeye açıktır; geçmiş kayıtlar değiştirilmez.</li>
+        </ul>
+      </Card>
+    </div>
   );
 }
 

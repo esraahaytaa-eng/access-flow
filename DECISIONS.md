@@ -148,6 +148,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
   - **Who acts:** HR Managers and Super Admins suspend, reactivate, terminate and schedule; a target holding Super Admin or InfoSec needs a Super Admin; nobody acts on themselves.
   - **Roles and memberships:** termination closes them (audited); suspension keeps them.
   - **Last Super Admin (with D2):** the last active Super Admin cannot be suspended, terminated or scheduled for termination; a Super Admin whose termination is scheduled does not count. The check is serialized across concurrent actions.
+    - *Note — [2026-10-29] (M14, per the approved D2 note):* the guard is lifted; terminating the last active Super Admin proceeds and starts D2 recovery.
 - *Refinement — [APPROVED 2026-10-29] (M10 plan):* leaver removals (priority 0) keep running after a rehire and stay in the security revocations list until verified or confirmed. A rehire restores no grant, role, admin group membership or request.
 
 ## D8. Quarterly access reviews — [CASE] quarterly review with chasing, [POLICY] the rules

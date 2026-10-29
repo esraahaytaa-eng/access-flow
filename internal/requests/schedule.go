@@ -22,15 +22,12 @@ const TerminationLockKey int64 = 0x0D7_7E21
 var errNotScheduled = platform.NewError(http.StatusConflict, "termination_not_scheduled")
 
 // ScheduleTermination schedules or moves an employee's termination to a future time (D7);
-// the sweep runs it then. A scheduled Super Admin no longer counts for KeepsASuperAdmin.
+// the sweep runs it then.
 func (s *Service) ScheduleTermination(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, at time.Time,
 	reason string) (people.Employee, error) {
 	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		if !at.After(now) {
 			return platform.ValidationError("effectiveAt", "effective_at_not_future")
-		}
-		if err := people.KeepsASuperAdmin(ctx, tx, e); err != nil {
-			return err
 		}
 		if err := people.SetTermination(ctx, tx, id, &at, &actor.EmployeeID, &reason); err != nil {
 			return err

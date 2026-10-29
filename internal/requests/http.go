@@ -25,6 +25,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/approvals/{id}/override", s.handleOverride)
 	r.Get("/email-outbox", s.handleOutbox)
 	r.Get("/exceptions", s.handleExceptions)
+	r.Get("/audit/requests", s.handleAudited)
 	r.Post("/direct-grants", s.handleDirectGrant)
 	r.Post("/grants/{id}/change", s.handleChange)
 	r.Post("/employees/{id}/suspend", s.lifecycleRoute(s.Suspend))

@@ -3,7 +3,6 @@ package people
 import (
 	"context"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -19,10 +18,9 @@ import (
 // reactivate, terminate, schedule), so the last-Super-Admin check counts a settled set.
 // shortcut: one lock for every person-level action; they are rare HR actions, so waiting
 // for each other is fine at the expected load.
-const LifecycleLockKey int64 = 0x0D7_11FE
+const LifecycleLockKey = auth.LifecycleLockKey
 
 var (
-	errLastSuperAdmin   = platform.NewError(http.StatusConflict, "last_super_admin")
 	errHasDirectReports = platform.NewError(http.StatusConflict, "has_direct_reports")
 	errOwnsTools        = platform.NewError(http.StatusConflict, "owns_tools")
 	// ErrEmployeeStatus refuses a person-level action on an employee in the wrong status.
@@ -36,22 +34,19 @@ func LockLifecycle(ctx context.Context, tx pgx.Tx) error {
 	return err
 }
 
-// KeepsASuperAdmin refuses to suspend or terminate the last active Super Admin, or to
-// schedule their termination: there is no recovery path before M14 (D2, approved
-// 2026-10-29). A Super Admin whose termination is scheduled does not count. The caller
-// holds LifecycleLockKey.
-func KeepsASuperAdmin(ctx context.Context, tx pgx.Tx, e Employee) error {
-	if !slices.Contains(e.Roles, "SUPER_ADMIN") {
-		return nil
-	}
-	var other bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM role_assignments r JOIN employees x ON x.id = r.employee_id
-		WHERE r.role = 'SUPER_ADMIN' AND r.valid_to IS NULL AND x.id <> $1 AND x.status = 'ACTIVE' AND x.termination_at IS NULL)`,
-		e.ID).Scan(&other); err != nil {
+// LockLifecycleAs is LockLifecycle for an action by actor: an actor suspended or terminated
+// since their request began acts no more (D7). Every status change holds LifecycleLockKey,
+// so a plain read is current; a row lock here could deadlock with an approval.
+func LockLifecycleAs(ctx context.Context, tx pgx.Tx, actor auth.Principal) error {
+	if err := LockLifecycle(ctx, tx); err != nil {
 		return err
 	}
-	if !other {
-		return errLastSuperAdmin
+	var status string
+	if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", actor.EmployeeID).Scan(&status); err != nil {
+		return err
+	}
+	if status != "ACTIVE" {
+		return platform.ErrUnauthorized
 	}
 	return nil
 }
@@ -161,17 +156,8 @@ func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID
 	}
 	var out Employee
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		if err := LockLifecycle(ctx, tx); err != nil {
+		if err := LockLifecycleAs(ctx, tx, actor); err != nil {
 			return err
-		}
-		// An actor suspended or terminated since their request began acts no more (D7); every
-		// status change holds LifecycleLockKey, so a plain read is current.
-		var status string
-		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", actor.EmployeeID).Scan(&status); err != nil {
-			return err
-		}
-		if status != "ACTIVE" {
-			return platform.ErrUnauthorized
 		}
 		e, err := LockEmployee(ctx, tx, id)
 		if err != nil {

@@ -372,7 +372,9 @@ export type NotificationKind =
   | "GRANTS_RETAINED_ON_TRANSFER"
   | "REVIEW_STARTED"
   | "REVIEW_REMINDER"
-  | "REVIEW_ESCALATED";
+  | "REVIEW_ESCALATED"
+  | "SUPER_ADMIN_NOMINATED"
+  | "ADMIN_RECOVERY_REQUIRED";
 
 export type Notification = {
   id: string;
@@ -469,3 +471,70 @@ export type Orphan = {
   importedAt: string;
   version: number;
 };
+
+// Audit Explorer (M13). Rows are in the caller's audit scope (O7).
+export type AuditEvent = {
+  id: string;
+  at: string;
+  actor: Person | null; // null: the system
+  action: string;
+  entity: string;
+  entityId: string | null;
+  subject: Person | null;
+  reason: string | null;
+  details: Record<string, unknown> | null;
+};
+export type AuditEventsResponse = { events: AuditEvent[]; truncated: boolean };
+
+export type HeldState = "ACTIVE" | "SUSPENDED" | "REVOCATION_REQUESTED" | "REVOCATION_FAILED";
+export type HeldGrant = {
+  grantId: string;
+  employee: Person | null; // null: an orphan account
+  account: string | null;
+  tool: string;
+  level: string;
+  method: FulfillmentMethod;
+  state?: HeldState;
+  evidence: Evidence | "IMPORTED";
+  confirmedBy: Person | null;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  removalEvidence: Evidence | null;
+  removedBy: Person | null;
+  imported: boolean;
+  direct: Person | null;
+  approvers: { type: StepType; status: string; name: string }[];
+};
+export type AccessAtResponse = { at: string; grants: HeldGrant[]; removed: HeldGrant[] };
+
+export type PrivilegedHolder = { role: Role | "ADMIN_GROUP"; group: string | null; employee: Person; since: string; grantedBy: Person | null };
+export type LeaverRow = {
+  employee: Person; terminatedAt: string | null; tool: string; level: string; status: GrantStatus; effectiveTo: string | null; removalEvidence: Evidence | null;
+};
+export type QuarterReport = {
+  campaign: { id: string; kind: "QUARTERLY" | "MANUAL"; quarter: string | null; startedAt: string; remindedAt: string | null; escalatedAt: string | null; closedAt: string | null } | null;
+  counts: { total: number; kept: number; revoked: number; unanswered: number; alreadyRemoved: number; autoRevoked: number; openFindings: number };
+  policyChanges: number;
+  overrides: number;
+  items: { employee: string; tool: string; level: string; reviewer: string | null; decision: "KEEP" | "REVOKE" | null; decidedBy: string | null;
+    decidedAt: string | null; reason: string | null; late: boolean; closedReason: string | null; finding: boolean }[];
+};
+
+/** GET /super-admin-nominations: open, unexpired Super Admin nominations (D2). */
+export type SuperAdminNomination = {
+  id: string;
+  nominee: { id: string; fullName: string };
+  proposedBy: { id: string; fullName: string };
+  /** Proposed by an HR Manager while no Super Admin was active. */
+  recovery: boolean;
+  status: "PENDING" | "AUTHORIZED" | "DECLINED" | "EXPIRED" | "CANCELLED";
+  createdAt: string;
+  expiresAt: string;
+  version: number;
+  /** Whether the caller may authorize or decline it; the server decides. */
+  canAuthorize: boolean;
+};
+export type NominationsResponse = { nominations: SuperAdminNomination[] };
+
+/** GET /admin/health */
+export type AdminHealth = { activeSuperAdmins: number; infosecMembers: number; recoveryRequired: boolean; warning: boolean };

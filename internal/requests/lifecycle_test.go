@@ -1147,46 +1147,29 @@ func TestTerminateReplacementInFlight(t *testing.T) {
 	}
 }
 
-// The last active Super Admin is never suspended or terminated: nothing could recover the
-// organization before M14 (approved 2026-10-29).
-func TestLastSuperAdminIsKept(t *testing.T) {
-	t.Run("another Super Admin's scheduled termination does not count", func(t *testing.T) {
-		w := newWorld(t)
-		other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
-		w.exec(`UPDATE employees SET termination_at = now() + interval '7 days', termination_scheduled_by = $2,
-			termination_reason = 'leaving' WHERE id = $1`, w.admin.ID, other.ID)
-		for _, action := range []string{"suspend", "terminate"} {
-			testutil.RequireStatus(t, w.lifecycle(w.admin, other.ID, action), http.StatusConflict, "last_super_admin")
+// Two Super Admins terminating each other: one wins, the other is signed out by it.
+func TestSuperAdminsTerminatingEachOther(t *testing.T) {
+	w := newWorld(t)
+	other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
+	var wg sync.WaitGroup
+	got := make([]testutil.Response, 2)
+	wg.Go(func() { got[0] = w.lifecycle(w.admin, other.ID, "terminate") })
+	wg.Go(func() { got[1] = w.lifecycle(other, w.admin.ID, "terminate") })
+	wg.Wait()
+	ok := 0
+	for _, r := range got {
+		switch r.Status {
+		case http.StatusOK:
+			ok++
+		case http.StatusUnauthorized:
+		default:
+			t.Fatalf("response %d %v", r.Status, r.Body)
 		}
-		if w.count("SELECT count(*) FROM employees WHERE id = $1 AND status = 'ACTIVE'", other.ID) != 1 {
-			t.Fatal("changed")
-		}
-		w.exec("UPDATE employees SET termination_at = NULL, termination_scheduled_by = NULL, termination_reason = NULL WHERE id = $1", w.admin.ID)
-		w.mustLifecycle(w.admin, other.ID, "suspend")
-	})
-	t.Run("two Super Admins terminating each other", func(t *testing.T) {
-		w := newWorld(t)
-		other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
-		var wg sync.WaitGroup
-		got := make([]testutil.Response, 2)
-		wg.Go(func() { got[0] = w.lifecycle(w.admin, other.ID, "terminate") })
-		wg.Go(func() { got[1] = w.lifecycle(other, w.admin.ID, "terminate") })
-		wg.Wait()
-		ok := 0
-		for _, r := range got {
-			switch {
-			case r.Status == http.StatusOK:
-				ok++
-			case r.Status == http.StatusConflict && r.Body["error"] == "last_super_admin", r.Status == http.StatusUnauthorized:
-			default:
-				t.Fatalf("response %d %v", r.Status, r.Body)
-			}
-		}
-		if ok != 1 || w.count(`SELECT count(*) FROM employees e JOIN role_assignments r ON r.employee_id = e.id
-			WHERE r.role = 'SUPER_ADMIN' AND r.valid_to IS NULL AND e.status = 'ACTIVE'`) != 1 {
-			t.Fatalf("successes %d", ok)
-		}
-	})
+	}
+	if ok != 1 || w.count(`SELECT count(*) FROM employees e JOIN role_assignments r ON r.employee_id = e.id
+		WHERE r.role = 'SUPER_ADMIN' AND r.valid_to IS NULL AND e.status = 'ACTIVE'`) != 1 {
+		t.Fatalf("successes %d", ok)
+	}
 }
 
 func TestTerminateRules(t *testing.T) {

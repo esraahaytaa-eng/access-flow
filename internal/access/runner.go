@@ -247,7 +247,9 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 		// The system's request, for every method: the confirmer only confirmed the new level.
 		return requestRemoval(ctx, tx, now, nil, *replaces, employee, "LEVEL_CHANGE", "level change")
 	}
-	if err := setGrant(ctx, tx, grant, grantStatus, "REVOKED", "effective_to = CASE WHEN effective_from IS NOT NULL THEN $3::timestamptz END", now); err != nil {
+	// Access that was held ends now: activated, or imported (held since the import, D10).
+	if err := setGrant(ctx, tx, grant, grantStatus, "REVOKED",
+		"effective_to = CASE WHEN effective_from IS NOT NULL OR import_id IS NOT NULL THEN $3::timestamptz END", now); err != nil {
 		return err
 	}
 	if err := endSuspension(ctx, tx, now, grant); err != nil {
