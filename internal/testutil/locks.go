@@ -9,6 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// WaitLimit bounds a test's wait for a condition (a call blocked on a lock, an operation
+// claimed) and the tool calls a test holds open. A wait ends as soon as its condition holds;
+// the limit is generous because parallel -race tests on a busy CI machine run slowly.
+const WaitLimit = 30 * time.Second
+
 // WhileLocked makes "a change committed while I waited for the lock" deterministic. It
 // runs setup in a second transaction (which must take a row lock and make the change),
 // starts call, waits until call is blocked on a lock, then commits and returns call's error.
@@ -25,7 +30,7 @@ func WhileLocked(t testing.TB, pool *pgxpool.Pool, setup func(context.Context, p
 	}
 	done := make(chan error, 1)
 	go func() { done <- call() }()
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(WaitLimit); ; time.Sleep(10 * time.Millisecond) {
 		var waiting int
 		// Only this test's database: other test packages run in parallel on the same server.
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity

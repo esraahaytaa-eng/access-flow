@@ -54,6 +54,7 @@ func (w *world) toolOf(level uuid.UUID) uuid.UUID {
 }
 
 func TestMockImportMatchesByEmailAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	leaver := w.person(testutil.EmployeeSpec{})
@@ -109,6 +110,7 @@ func TestMockImportMatchesByEmailAndIsIdempotent(t *testing.T) {
 }
 
 func TestCSVImportForManualTools(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	figma := testutil.CreateTool(t, w.db, testutil.ToolSpec{Name: "Figma", Method: "MANUAL", OwnerID: w.owner.ID})
 	editor := testutil.CreateLevel(t, w.db, figma, "Editor", false, false)
@@ -152,6 +154,7 @@ func TestCSVImportForManualTools(t *testing.T) {
 }
 
 func TestOrphanAccountsAreRevokedOrDismissed(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	gh := w.toolOf(w.github)
@@ -189,6 +192,7 @@ func TestOrphanAccountsAreRevokedOrDismissed(t *testing.T) {
 }
 
 func TestImportedGrantsAreReviewedIndividually(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	tl.legacy(t, w.jira, w.jiraViewer, w.dev.Email, "ACTIVE")
@@ -205,6 +209,7 @@ func TestImportedGrantsAreReviewedIndividually(t *testing.T) {
 }
 
 func TestChangeOfAnOrphanGrantIsNotFound(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	tl.legacy(t, w.jira, w.jiraViewer, "ghost@example.com", "ACTIVE")

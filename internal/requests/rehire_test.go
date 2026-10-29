@@ -21,6 +21,7 @@ func (w *world) rehire(by person, id uuid.UUID, manager any, version int) testut
 
 // A rehired employee is the same person with a new password and nothing restored (A5, D7).
 func TestRehireRestoresNothing(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()
@@ -66,6 +67,7 @@ func TestRehireRestoresNothing(t *testing.T) {
 }
 
 func TestRehireRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	testutil.RequireStatus(t, w.rehire(hr, w.dev.ID, w.mgr.ID, w.version(w.dev.ID)), http.StatusConflict, "employee_status")
@@ -102,6 +104,7 @@ func TestRehireRules(t *testing.T) {
 
 // A rehired manager never takes back their former reports: HR transfers them first (A5, 2026-10-29).
 func TestRehireRefusedWithDirectReports(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	leaver := w.person(testutil.EmployeeSpec{ManagerID: w.mgr.ID})
@@ -123,6 +126,7 @@ func TestRehireRefusedWithDirectReports(t *testing.T) {
 // A rehired tool owner never takes back their tools' approvals: a Super Admin reassigns
 // them first (A5, 2026-10-29).
 func TestRehireRefusedWhileOwningTools(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	w.mustLifecycle(hr, w.owner.ID, "terminate") // still owns every tool
@@ -137,6 +141,7 @@ func TestRehireRefusedWhileOwningTools(t *testing.T) {
 // Leaver removals keep running and stay visible after a rehire; other removals are not
 // leaver removals (D7, O7).
 func TestRehireKeepsLeaverRemovalsVisible(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	g := w.fulfilled(f, f.manual)

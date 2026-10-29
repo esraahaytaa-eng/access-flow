@@ -74,7 +74,8 @@ services:
   postgres-test:
     <<: *postgres
     profiles: [test]
-    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    # Parallel tests each hold a few pools, so allow more than the default 100 connections.
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=400"]
     tmpfs:
       - /var/lib/postgresql
     volumes:
@@ -106,8 +107,8 @@ services:
         unformatted=$$(gofmt -l cmd internal)
         if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
         go vet ./...
-        # internal/requests alone takes about 9 minutes with -race; packages run in parallel,
-        # so the 10-minute default is too short.
+        # internal/requests is the longest package (its tests run in parallel, about 4 minutes
+        # locally with -race); 20m leaves room on slow machines.
         go test -race -count=1 -timeout 20m ./...
 
 volumes:

@@ -62,6 +62,7 @@ func (w *world) age(days int) {
 }
 
 func TestCampaignSnapshotAndRouting(t *testing.T) {
+	t.Parallel()
 	w, _ := reviewWorld(t)
 	w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))) // pending: not access yet
 	testutil.RequireStatus(t, w.startCampaign(w.owner), http.StatusForbidden, "forbidden")
@@ -90,6 +91,7 @@ func TestCampaignSnapshotAndRouting(t *testing.T) {
 }
 
 func TestReviewDecisions(t *testing.T) {
+	t.Parallel()
 	w, tl := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	viewer := w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
@@ -120,6 +122,7 @@ func TestReviewDecisions(t *testing.T) {
 }
 
 func TestBulkKeepSkipsItemsDecidedIndividually(t *testing.T) {
+	t.Parallel()
 	w, tl := reviewWorld(t)
 	// Jira Admin requires InfoSec approval, so its item is decided individually.
 	req := w.mustSubmit(w.mgr.c, body(nil, item(w.jiraAdmin)))
@@ -142,6 +145,7 @@ func TestBulkKeepSkipsItemsDecidedIndividually(t *testing.T) {
 }
 
 func TestDayStepsRunOnceAndUseTheSnapshot(t *testing.T) {
+	t.Parallel()
 	w, tl := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	// GitHub Developer gains an InfoSec step after the start: day 21 still uses the snapshot.
@@ -198,6 +202,7 @@ func TestDayStepsRunOnceAndUseTheSnapshot(t *testing.T) {
 }
 
 func TestOpenFindingIsCarriedNotReAdded(t *testing.T) {
+	t.Parallel()
 	w, _ := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	w.age(21)
@@ -222,6 +227,7 @@ func TestOpenFindingIsCarriedNotReAdded(t *testing.T) {
 }
 
 func TestItemOfRemovedGrantClosesAsAlreadyRemoved(t *testing.T) {
+	t.Parallel()
 	w, tl := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraViewer))
@@ -241,6 +247,7 @@ func TestItemOfRemovedGrantClosesAsAlreadyRemoved(t *testing.T) {
 }
 
 func TestQuarterlyCampaignStartsOncePerQuarter(t *testing.T) {
+	t.Parallel()
 	w, _ := reviewWorld(t)
 	w.sweep()
 	if n := w.count("SELECT count(*) FROM review_campaigns"); n != 0 {
@@ -261,6 +268,7 @@ func TestQuarterlyCampaignStartsOncePerQuarter(t *testing.T) {
 }
 
 func TestAddedStepFlagsGrantsForIndividualReview(t *testing.T) {
+	t.Parallel()
 	w, _ := reviewWorld(t)
 	g := w.myGrant(w.dev.c, w.jiraViewer)
 	r := w.admin.c.Do(http.MethodPut, "/api/v1/tools/"+w.jira.String()+"/levels/"+w.jiraViewer.String(),
@@ -281,6 +289,7 @@ func TestAddedStepFlagsGrantsForIndividualReview(t *testing.T) {
 }
 
 func TestEarlierPolicyFlagAddedDuringACampaignSurvivesItsDecision(t *testing.T) {
+	t.Parallel()
 	w, _ := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	r := w.admin.c.Do(http.MethodPut, "/api/v1/tools/"+w.jira.String()+"/levels/"+w.jiraViewer.String(),
@@ -294,6 +303,7 @@ func TestEarlierPolicyFlagAddedDuringACampaignSurvivesItsDecision(t *testing.T) 
 }
 
 func TestGrantBeingRemovedIsNeitherDecidedNorAutoRevoked(t *testing.T) {
+	t.Parallel()
 	w, _ := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	w.exec("UPDATE review_items SET requires_infosec = true")

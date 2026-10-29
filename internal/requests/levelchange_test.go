@@ -54,6 +54,7 @@ func (w *world) timeOf(sql string, args ...any) time.Time {
 }
 
 func TestLevelChangeAPI(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -111,6 +112,7 @@ func TestLevelChangeAPI(t *testing.T) {
 }
 
 func TestLevelChangeManual(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	owner := testutil.CreateLevel(t, w.db, f.manualTool, "Owner", false, false)
@@ -147,6 +149,7 @@ func TestLevelChangeManual(t *testing.T) {
 }
 
 func TestLevelChangeNewGrantFails(t *testing.T) {
+	t.Parallel()
 	t.Run("API", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -184,6 +187,7 @@ func TestLevelChangeNewGrantFails(t *testing.T) {
 }
 
 func TestLevelChangeOverlap(t *testing.T) {
+	t.Parallel()
 	t.Run("the old removal fails, then a retry succeeds", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -229,6 +233,7 @@ func TestLevelChangeOverlap(t *testing.T) {
 }
 
 func TestLevelChangeRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -274,6 +279,7 @@ func TestLevelChangeRules(t *testing.T) {
 }
 
 func TestLevelChangeAfterOldGrantEnded(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -293,6 +299,7 @@ func TestLevelChangeAfterOldGrantEnded(t *testing.T) {
 // The old grant revoked while the new one provisions is the normal removal: the new grant
 // still activates, and no second removal of the old one is created.
 func TestOldGrantRemovedDuringChange(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	old, _ := w.levelChange(tl)
@@ -308,19 +315,13 @@ func TestOldGrantRemovedDuringChange(t *testing.T) {
 // The new level revoked while its GRANT is in flight never becomes ACTIVE: the old level,
 // still the one in use, is kept (D4).
 func TestNewLevelRevokedInFlightKeepsTheOld(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	old, _ := w.levelChange(tl)
-	tl.faults.DelayNext(500 * time.Millisecond)
-	done := make(chan error, 1)
-	go func() { _, err := tl.runner.RunOnce(context.Background()); done <- err }()
-	for deadline := time.Now().Add(5 * time.Second); w.count("SELECT count(*) FROM operations WHERE status = 'IN_PROGRESS'") == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never claimed")
-		}
-	}
+	done := w.inFlight(tl)
 	w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraAdmin))
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	tl.drain(t)
@@ -334,6 +335,7 @@ func TestNewLevelRevokedInFlightKeepsTheOld(t *testing.T) {
 // The old grant expiring while the new one provisions ends in exactly the new level: one
 // removal of the old, the new one active and the only level the tool holds (D4).
 func TestOldGrantExpiresDuringChange(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	old, _ := w.levelChange(tl)
@@ -356,6 +358,7 @@ func TestOldGrantExpiresDuringChange(t *testing.T) {
 // The same for a Manual tool: the old level's removal confirmed first, then the new level's
 // grant, leaves no second removal task and no overlap.
 func TestManualOldGrantRevokedDuringChange(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	owner := testutil.CreateLevel(t, w.db, f.manualTool, "Owner", false, false)
@@ -374,6 +377,7 @@ func TestManualOldGrantRevokedDuringChange(t *testing.T) {
 // Revoking both grants while the new one is still unsent leaves no access: the new grant
 // is cancelled, never sent.
 func TestBothGrantsRevokedDuringChange(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	old, _ := w.levelChange(tl)

@@ -86,6 +86,7 @@ func (w *world) mustAct(p person, task map[string]any, action string, extra map[
 }
 
 func TestManualTaskEndToEnd(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	it := w.approved(f.manual)
@@ -130,6 +131,7 @@ func TestManualTaskEndToEnd(t *testing.T) {
 }
 
 func TestVendorTaskNeedsATicket(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.approved(f.vendor)
@@ -155,6 +157,7 @@ func TestVendorTaskNeedsATicket(t *testing.T) {
 }
 
 func TestTaskFailureAndRetry(t *testing.T) {
+	t.Parallel()
 	for _, vendor := range []bool{false, true} {
 		w := newWorld(t)
 		f := w.fulfillers()
@@ -200,6 +203,7 @@ func TestTaskFailureAndRetry(t *testing.T) {
 }
 
 func TestClaimSkipsRetiredLevel(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.approved(f.manual)
@@ -230,6 +234,7 @@ func (w *world) activeManual(f fulfillers) map[string]any {
 }
 
 func TestManualRemovalTask(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	g := w.mustRevoke(w.dev.c, w.activeManual(f))
@@ -249,6 +254,7 @@ func TestManualRemovalTask(t *testing.T) {
 }
 
 func TestRevokeWhileGrantTaskClaimed(t *testing.T) {
+	t.Parallel()
 	for _, outcome := range []string{"confirm", "fail"} {
 		w := newWorld(t)
 		f := w.fulfillers()
@@ -289,6 +295,7 @@ func TestRevokeWhileGrantTaskClaimed(t *testing.T) {
 }
 
 func TestTaskPermissions(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
@@ -328,6 +335,7 @@ func TestTaskPermissions(t *testing.T) {
 }
 
 func TestTaskConcurrency(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.approved(f.manual)
@@ -373,6 +381,7 @@ func TestTaskConcurrency(t *testing.T) {
 }
 
 func TestTaskActionsAreIdempotent(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.approved(f.vendor)
@@ -392,6 +401,7 @@ func TestTaskActionsAreIdempotent(t *testing.T) {
 }
 
 func TestWithdrawApprovedBeforeWorkStarts(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()
@@ -426,6 +436,7 @@ func TestWithdrawApprovedBeforeWorkStarts(t *testing.T) {
 
 // An item approved before M6 has no grant: withdrawing it closes the item, with nothing to cancel.
 func TestWithdrawAnItemApprovedWithoutAGrant(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0]
 	w.exec(`UPDATE approval_steps SET status = 'APPROVED', decided_by = $2, decided_at = now(), version = version + 1
@@ -448,6 +459,7 @@ func TestWithdrawAnItemApprovedWithoutAGrant(t *testing.T) {
 // An approved item whose grant was already cancelled (retired before provisioning) can
 // still be withdrawn: no work ever started.
 func TestWithdrawAfterTheGrantWasCancelled(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	it := w.approved(f.vendor)
@@ -461,6 +473,7 @@ func TestWithdrawAfterTheGrantWasCancelled(t *testing.T) {
 }
 
 func TestWithdrawAfterWorkStarted(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()
@@ -479,6 +492,7 @@ func TestWithdrawAfterWorkStarted(t *testing.T) {
 }
 
 func TestWithdrawRacingClaim(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	it := w.approved(f.manual)

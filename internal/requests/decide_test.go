@@ -16,6 +16,7 @@ import (
 
 // The CASE flow: AWS Admin needs Manager → Tool Owner → InfoSec, three different people.
 func TestAWSAdminNeedsThreeDifferentPeople(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0]
 	it = w.approve(w.mgr.c, open(t, it))
@@ -48,6 +49,7 @@ func TestAWSAdminNeedsThreeDifferentPeople(t *testing.T) {
 }
 
 func TestJiraViewerApprovedByManagerAlone(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0]))
 	if it["status"] != "APPROVED" {
@@ -58,6 +60,7 @@ func TestJiraViewerApprovedByManagerAlone(t *testing.T) {
 // The manager is also the Tool Owner: the Tool Owner step goes to InfoSec, and the two
 // InfoSec steps need two different members.
 func TestManagerWhoIsToolOwnerGoesToInfoSec(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.exec("UPDATE tools SET owner_id = $1", w.mgr.ID)
 	it := w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0]))
@@ -77,6 +80,7 @@ func TestManagerWhoIsToolOwnerGoesToInfoSec(t *testing.T) {
 }
 
 func TestBeneficiaryCannotApprove(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	// The beneficiary is InfoSec and the tool owner: they appear in neither queue.
 	w.exec("UPDATE tools SET owner_id = $1", w.is1.ID)
@@ -97,6 +101,7 @@ func TestBeneficiaryCannotApprove(t *testing.T) {
 
 // Approved 2026-10-28: someone who requested on another's behalf decides no step on it.
 func TestOnBehalfSubmitterCannotApprove(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.exec("UPDATE tools SET owner_id = $1", w.is2.ID)
 	it := w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.is2.c, body(&w.dev.ID, item(w.awsAdmin))))[0]))
@@ -112,6 +117,7 @@ func TestOnBehalfSubmitterCannotApprove(t *testing.T) {
 }
 
 func TestRejectNeedsAReasonAndIsFinal(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin), item(w.jiraViewer)))
 	aws, jira := items(req)[0], items(req)[1]
@@ -137,6 +143,7 @@ func TestRejectNeedsAReasonAndIsFinal(t *testing.T) {
 }
 
 func TestOnlyTheAssigneeDecides(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0])
 	auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
@@ -159,6 +166,7 @@ func TestOnlyTheAssigneeDecides(t *testing.T) {
 }
 
 func TestStaleVersionIsAConflict(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0])
 	s["version"] = 99
@@ -168,6 +176,7 @@ func TestStaleVersionIsAConflict(t *testing.T) {
 // Ten InfoSec members decide one pool step at once: one wins, the others are rejected and
 // each rejection is recorded although its transaction rolled back.
 func TestConcurrentApprovals(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	loner := w.person(testutil.EmployeeSpec{})
 	s := open(t, items(w.mustSubmit(loner.c, body(nil, item(w.jiraViewer))))[0])
@@ -200,6 +209,7 @@ func TestConcurrentApprovals(t *testing.T) {
 }
 
 func TestRepeatedApproveIsIdempotent(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0])
 	first := w.approve(w.mgr.c, s)
@@ -229,6 +239,7 @@ func (w *world) inbox(c *testutil.Client) []any {
 }
 
 func TestInboxShowsOnlyMySteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin), item(w.jiraViewer)))
 	loner := w.person(testutil.EmployeeSpec{})
@@ -258,6 +269,7 @@ func TestInboxShowsOnlyMySteps(t *testing.T) {
 
 // A withdrawal committed while the approver waited for the item's lock is seen.
 func TestApproveSeesAWithdrawalCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0]
 	stepID := uuid.MustParse(open(t, it)["id"].(string))
