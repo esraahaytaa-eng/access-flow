@@ -1,26 +1,45 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
-import { useApprovals, useEmployees } from "../api/queries";
-import type { Approval, ApprovalsResponse, Employee, StepType } from "../api/types";
+import { useApprovals, useEmployees, useNominations } from "../api/queries";
+import type { Approval, ApprovalsResponse, Employee, StepType, SuperAdminNomination } from "../api/types";
 import { stepLabel } from "../i18n/labels";
 import { routingNoteText } from "../i18n/reasons";
 import { useSession } from "../session";
 import {
-  Button, Callout, ConfirmDialog, Drawer, EmptyState, Field, KeyValueList, Modal, PageHeader, Person, SearchBox, Segmented, Select, Tabs, TableSkeleton, Textarea, ToolCell, useAction,
+  Button, Callout, Card, ConfirmDialog, Drawer, EmptyState, Field, KeyValueList, Modal, PageHeader, Person, SearchBox, Segmented, Select, Tabs, TableSkeleton, Textarea, ToolCell, useAction,
 } from "../ui/components";
 import { DurationText } from "../ui/domain";
-import { sinceText } from "../ui/format";
+import { formatDate, sinceText } from "../ui/format";
 import { ItemTimeline } from "./RequestDetail";
 
 const decidedStatuses = ["APPROVED", "APPROVED_BY_SUBMISSION", "SUPER_ADMIN_OVERRIDE"];
 
 const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
 
+function NominationRow({ n }: { n: SuperAdminNomination }) {
+  const qc = useQueryClient();
+  const { timezone } = useSession();
+  const [run, busy] = useAction();
+  const decide = async (authorize: boolean) => {
+    const r = await run(() => api.post(`/super-admin-nominations/${n.id}/${authorize ? "authorize" : "decline"}`, { version: n.version }),
+      { success: authorize ? "Süper Yönetici yetkilendirildi" : "Öneri reddedildi" });
+    if (r.ok) ["nominations", "admin-health", "employees"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+  };
+  return (
+    <div className="list-row">
+      <div style={{ flex: 1 }}><Person person={n.nominee} sub={`Öneren: ${n.proposedBy.fullName}${n.recovery ? " (kurtarma)" : ""} · ${formatDate(n.createdAt, timezone)} · ${formatDate(n.expiresAt, timezone)} tarihinde sona erer`} /></div>
+      <Button size="sm" variant="danger-ghost" loading={busy} onClick={() => decide(false)}>Reddet</Button>
+      <Button size="sm" variant="primary" loading={busy} onClick={() => decide(true)}>Yetkilendir</Button>
+    </div>
+  );
+}
+
 export function ApprovalsPage() {
   const { hasRole } = useSession();
   const oversight = hasRole("INFOSEC", "SUPER_ADMIN");
   const mine = useApprovals();
+  const nominations = (useNominations(hasRole("INFOSEC", "SUPER_ADMIN")).data ?? []).filter((n) => n.canAuthorize);
   const all = useQuery({ queryKey: ["approvals", "open"], enabled: oversight, queryFn: () => api.get<ApprovalsResponse>("/approvals/open").then((r) => r.approvals) });
   const [tab, setTab] = useState<"mine" | "all">("mine");
   const [kind, setKind] = useState<"ALL" | StepType>("ALL");
@@ -37,6 +56,11 @@ export function ApprovalsPage() {
   return (
     <>
       <PageHeader title="Onay kutusu" sub="Kararınızı bekleyen erişim talepleri. Her talepte gerekçeyi, süreyi ve önceki kararları görebilirsiniz. Tüm kararlar elle verilir." />
+      {nominations.length > 0 && (
+        <Card title="Yetkilendirmenizi bekleyen Süper Yönetici önerileri" sub="Süper Yönetici ataması iki kişilik onay gerektirir." style={{ marginBottom: 18 }} pad={false}>
+          {nominations.map((n) => <NominationRow key={n.id} n={n} />)}
+        </Card>
+      )}
       <Tabs value={tab} onChange={setTab} tabs={[
         { value: "mine", label: "Bana atanan", count: mine.data?.length ?? 0 },
         ...(oversight ? [{ value: "all" as const, label: "Tüm bekleyen adımlar", count: all.data?.length ?? 0 }] : []),

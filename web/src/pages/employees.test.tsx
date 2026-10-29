@@ -64,6 +64,34 @@ describe("employee detail", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ effectiveAt: "2099-11-15T15:00:00.000Z", reason: "İstifa", version: 5 }));
   });
 
+  it("warns and asks for confirmation before the last Super Admin leaves (D2 recovery)", async () => {
+    const sa = principal({ employee: { id: "sa", email: "sa@x.co", fullName: "Okan Admin", roles: ["SUPER_ADMIN"] } }) as never;
+    const scheduledAdmin = employee({ id: "sa", fullName: "Okan Admin", roles: ["SUPER_ADMIN"], termination: { at: "2099-12-01T15:00:00Z", reason: "İstifa", scheduledBy: "x" } });
+    const target = employee({ roles: ["SUPER_ADMIN"] });
+    const calls = fakeServer({ ...dir(), "GET /employees": { employees: [manager, scheduledAdmin, target] }, "GET /employees/e2/grants": { grants: [] },
+      "PUT /employees/e2/termination": employee() });
+    renderPage(<EmployeeDetailPage />, { path: "/employees/e2", pattern: "/employees/:id", session: sa });
+    await userEvent.click(await screen.findByRole("button", { name: "İşten çıkış" }));
+    const d = dialog("Deniz Kara · işten çıkış");
+    expect(d.getByText("Sistem Yönetici Kurtarma moduna girecek")).toBeTruthy();
+    await userEvent.click(d.getByRole("button", { name: "Planlı" }));
+    await userEvent.type(d.getByLabelText(/Geçerlilik tarihi/), "2099-11-15");
+    await userEvent.type(d.getByLabelText(/Ayrılış nedeni/), "İstifa");
+    await userEvent.click(d.getByRole("button", { name: "Çıkışı planla" }));
+    expect(await d.findByText("Devam etmek için onaylayın.")).toBeTruthy();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    await userEvent.click(d.getByLabelText(/kurtarma moduna gireceğini anlıyorum/));
+    await userEvent.click(d.getByRole("button", { name: "Çıkışı planla" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+  });
+
+  it("does not warn while another Super Admin stays", async () => {
+    fakeServer({ ...dir(), "GET /employees": { employees: [manager, employee({ id: "sa", roles: ["SUPER_ADMIN"] }), employee({ roles: ["SUPER_ADMIN"] })] }, "GET /employees/e2/grants": { grants: [] } });
+    renderPage(<EmployeeDetailPage />, { path: "/employees/e2", pattern: "/employees/:id", session: hr });
+    await userEvent.click(await screen.findByRole("button", { name: "İşten çıkış" }));
+    expect(dialog("Deniz Kara · işten çıkış").queryByText(/Kurtarma moduna girecek/)).toBeNull();
+  });
+
   it("transfers to a new manager, keeping one grant with a justification", async () => {
     const grants = [grant({ id: "g1", employee: person("e2", "Deniz Kara") }), grant({ id: "g2", tool: "Figma", employee: person("e2", "Deniz Kara") })];
     const calls = fakeServer({ ...dir(), "GET /employees/e2/grants": { grants }, "POST /employees/e2/transfer": employee({ managerId: "m2" }) });

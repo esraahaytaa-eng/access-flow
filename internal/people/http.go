@@ -24,6 +24,11 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/admin-groups", s.handleCreateGroup)
 	r.Post("/admin-groups/{id}/members", s.handleAddMember)
 	r.Delete("/admin-groups/{id}/members/{employeeId}", s.handleRemoveMember)
+	r.Get("/super-admin-nominations", s.handleNominations)
+	r.Post("/super-admin-nominations", s.handleNominate)
+	r.Post("/super-admin-nominations/{id}/authorize", s.handleDecide(true))
+	r.Post("/super-admin-nominations/{id}/decline", s.handleDecide(false))
+	r.Get("/admin/health", s.handleHealth)
 }
 
 // pathID reads a UUID path parameter; a malformed one is simply not found.
@@ -222,4 +227,69 @@ func (s *Service) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	respondNoContent(w, r, err)
+}
+
+func (s *Service) handleNominations(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Nominations(r.Context(), actor(r))
+	if err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	platform.WriteJSON(w, http.StatusOK, map[string]any{"nominations": list})
+}
+
+func (s *Service) handleNominate(w http.ResponseWriter, r *http.Request) {
+	var in struct{ NomineeID *uuid.UUID }
+	if err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
+		return []platform.Field{{Name: "nomineeId", Present: in.NomineeID != nil}}
+	}); err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	n, err := s.Nominate(r.Context(), actor(r), *in.NomineeID)
+	if err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	platform.WriteJSON(w, http.StatusCreated, n)
+}
+
+func (s *Service) handleDecide(authorize bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r, "id")
+		if err != nil {
+			platform.WriteError(w, r, err)
+			return
+		}
+		var in struct {
+			Version *int
+			Reason  *string
+		}
+		if err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
+			return []platform.Field{{Name: "version", Present: in.Version != nil}}
+		}); err != nil {
+			platform.WriteError(w, r, err)
+			return
+		}
+		reason, err := CleanText(in.Reason, "reason")
+		if err != nil {
+			platform.WriteError(w, r, err)
+			return
+		}
+		n, err := s.Decide(r.Context(), actor(r), id, *in.Version, authorize, reason)
+		if err != nil {
+			platform.WriteError(w, r, err)
+			return
+		}
+		platform.WriteJSON(w, http.StatusOK, n)
+	}
+}
+
+func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
+	h, err := s.Health(r.Context(), actor(r))
+	if err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	platform.WriteJSON(w, http.StatusOK, h)
 }

@@ -115,7 +115,7 @@ export function EmployeeDetailPage() {
         </Modal>
       )}
       {modal === "transfer" && <TransferModal emp={emp} employees={employees} grants={grants} onClose={close} onDone={refresh} />}
-      {modal === "terminate" && <TerminateModal emp={emp} openGrants={grants.length} onClose={close} onDone={refresh} />}
+      {modal === "terminate" && <TerminateModal emp={emp} employees={employees} openGrants={grants.length} onClose={close} onDone={refresh} />}
       {modal === "rehire" && <RehireModal emp={emp} employees={employees} onClose={close} onDone={refresh} />}
     </>
   );
@@ -206,17 +206,22 @@ function TransferModal({ emp, employees, grants, onClose, onDone }: { emp: Emplo
   );
 }
 
-function TerminateModal({ emp, openGrants, onClose, onDone }: { emp: Employee; openGrants: number; onClose: () => void; onDone: () => void }) {
+function TerminateModal({ emp, employees, openGrants, onClose, onDone }: { emp: Employee; employees: Employee[]; openGrants: number; onClose: () => void; onDone: () => void }) {
   const { timezone } = useSession();
   const [mode, setMode] = useState<"NOW" | "SCHEDULED">("NOW");
   const [date, setDate] = useState("");
   const [why, setWhy] = useState("");
-  const [errors, setErrors] = useState<{ date?: string; why?: string }>({});
+  const [errors, setErrors] = useState<{ date?: string; why?: string; recovery?: string }>({});
+  const [recoveryAck, setRecoveryAck] = useState(false);
   const [run, busy] = useAction();
+  // D2: with no other active Super Admin staying (none, or all scheduled to leave), this leaves none.
+  const lastSuperAdmin = emp.roles.includes("SUPER_ADMIN") &&
+    !employees.some((e) => e.id !== emp.id && e.status === "ACTIVE" && e.roles.includes("SUPER_ADMIN") && !e.termination);
   const submit = async () => {
-    const next = { date: mode === "SCHEDULED" && (!date || date <= todayIn(timezone)) ? "İleri bir tarih seçin." : undefined, why: why.trim().length < 3 ? "Ayrılış nedenini girin." : undefined };
+    const next = { date: mode === "SCHEDULED" && (!date || date <= todayIn(timezone)) ? "İleri bir tarih seçin." : undefined, why: why.trim().length < 3 ? "Ayrılış nedenini girin." : undefined,
+      recovery: lastSuperAdmin && !recoveryAck ? "Devam etmek için onaylayın." : undefined };
     setErrors(next);
-    if (next.date || next.why) return;
+    if (next.date || next.why || next.recovery) return;
     const r = await run(
       () => mode === "NOW"
         ? api.post(`/employees/${emp.id}/terminate`, { version: emp.version, reason: why.trim() })
@@ -236,6 +241,13 @@ function TerminateModal({ emp, openGrants, onClose, onDone }: { emp: Employee; o
           </Field>
         )}
         <Field label="Ayrılış nedeni" required error={errors.why}><Textarea rows={2} value={why} onChange={(e) => setWhy(e.target.value)} placeholder="Örn. İstifa — son çalışma günü" /></Field>
+        {lastSuperAdmin && (
+          <Callout tone="danger" title="Sistem Yönetici Kurtarma moduna girecek">
+            Başka aktif Süper Yönetici kalmayacak. Ayrılış gerçekleştiğinde İK ve Bilgi Güvenliği bilgilendirilir; yeni Süper Yöneticiyi bir İK Yöneticisi önerir, farklı bir Bilgi Güvenliği üyesi yetkilendirir. Erişim iş akışları çalışmaya devam eder.
+            <label className="row" style={{ gap: 8, marginTop: 8 }}><input type="checkbox" checked={recoveryAck} aria-invalid={!!errors.recovery || undefined} onChange={(e) => { setRecoveryAck(e.target.checked); setErrors({ ...errors, recovery: undefined }); }} />Sistemin kurtarma moduna gireceğini anlıyorum</label>
+            {errors.recovery && <div className="error-text">{errors.recovery}</div>}
+          </Callout>
+        )}
         <Callout tone="danger" title="Gerçekleşecekler">Oturum kapatılır; bekleyen talepler iptal edilir; üzerindeki onaylar başkalarına aktarılır; {openGrants} erişim öncelikli olarak kaldırılır ve doğrulanana kadar izlenir.</Callout>
       </div>
     </Modal>

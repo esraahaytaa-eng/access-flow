@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from "react-router";
 import { api, ApiError, setUnauthorizedHandler } from "./api/client";
 import type { Principal } from "./api/types";
 import { ChangePasswordPage, ForcedPasswordChange } from "./pages/ChangePassword";
+import { AuditPage } from "./pages/Audit";
 import { ApprovalsPage } from "./pages/Approvals";
 import { ReviewsPage } from "./pages/Reviews";
 import { CatalogPage } from "./pages/Catalog";
@@ -81,6 +82,7 @@ function Root() {
           <Route path="/tools-admin/:id" element={<Guard allow={superAdmin}><ToolEditPage /></Guard>} />
           <Route path="/direct" element={<Guard allow={superAdmin}><DirectGrantPage /></Guard>} />
           <Route path="/settings" element={<Guard allow={superAdmin}><SettingsPage /></Guard>} />
+          <Route path="/audit" element={<AuditPage />} />
           <Route path="/password" element={<ChangePasswordPage onChanged={setPrincipal} />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

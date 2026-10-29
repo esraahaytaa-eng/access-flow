@@ -69,10 +69,10 @@ func TestScheduleTermination(t *testing.T) {
 	w.mustLifecycle(hr, w.dev.ID, "terminate")
 	testutil.RequireStatus(t, w.schedule(hr, w.dev.ID, inDays(7)), http.StatusConflict, "employee_status")
 
-	// Scheduling one Super Admin's termination leaves the other as the last one (approved 2026-10-29).
+	// Both Super Admins may be scheduled to leave: the last one leaving starts recovery (D2, M14).
 	other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
 	testutil.RequireStatus(t, w.schedule(w.admin, other.ID, inDays(7)), http.StatusOK, "")
-	testutil.RequireStatus(t, w.schedule(other, w.admin.ID, inDays(7)), http.StatusConflict, "last_super_admin")
+	testutil.RequireStatus(t, w.schedule(other, w.admin.ID, inDays(7)), http.StatusOK, "")
 }
 
 func TestScheduledTerminationRuns(t *testing.T) {

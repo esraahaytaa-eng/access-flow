@@ -3,7 +3,7 @@
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
 
-> Status: backend milestones M2–M10 (identity, catalog, requests and approvals, API / Manual / Vendor fulfillment, direct grants, expiry, extensions and level changes, suspension, termination, transfer and rehire) and the Turkish web UI on top of them (U1). Access reviews, CSV import, the audit explorer and Super Admin succession are not built yet.
+> Status: backend milestones M2–M10 (identity, catalog, requests and approvals, API / Manual / Vendor fulfillment, direct grants, expiry, extensions and level changes, suspension, termination, transfer and rehire) and the Turkish web UI on top of them (U1). Then quarterly access reviews, baseline import and orphan accounts (M11, M12), the audit explorer (M13) and Super Admin succession and recovery (M14).
 
 ## Run
 
@@ -22,6 +22,17 @@ docker compose exec app /accessflow bootstrap-password
 ```
 
 Sign in with it at http://localhost:8080; the app asks for a new password first. Until it is changed every other API call answers `403 password_change_required`. After the change the old password stops working and the file is deleted. This password does not expire. Passwords that admins later issue to employees expire after 72 hours (DECISIONS.md F4).
+
+### Super Admin recovery
+
+If no active Super Admin is left, the app shows a recovery banner: an HR Manager nominates a new Super Admin in the UI and a different InfoSec member authorizes it (DECISIONS.md D2). When that is impossible too (for example nobody holds InfoSec), the last resort runs on the server:
+
+```bash
+docker compose exec app /accessflow recover-admin someone@company.com
+docker compose exec app /accessflow bootstrap-password
+```
+
+It works only while no active Super Admin exists (it refuses otherwise). The employee with that email becomes Super Admin (one is created if none exists) with a new one-time password, read like the first one; their sessions end and the change is audited as `ADMIN_RECOVERED` with no actor.
 
 ### Configuration
 
@@ -73,7 +84,7 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `POST /api/v1/employees/{id}/transfer` | HR Manager or Super Admin, same permissions as suspend: `{version, managerId, department, jobTitle, reason, keep: [{grantId, justification}]}`, all required (null clears; a null `keep` keeps nothing) → the employee. Every reviewed grant not in `keep` is removed (reason `TRANSFER`); a kept one needs a justification (`400 justification_required`, `field` `keep[i].justification`) and must be reviewable (`grant_not_open`, `duplicate_grant`). `ACTIVE` employees only (`409 employee_status`); the same manager and department is `400 not_a_transfer`; manager cycles and inactive or unknown managers are rejected as on create |
 | `POST /api/v1/employees/{id}/rehire` | HR Manager or Super Admin, same permissions: `{version, managerId, department, jobTitle, reason}`, all required, on a `TERMINATED` employee (`409 employee_status`) with no direct reports left (`409 has_direct_reports`: transfer them first; terminated ones do not count) and owning no tool (`409 owns_tools`: a Super Admin reassigns them first) → `{employee, temporaryPassword}`: the same employee, `ACTIVE`, with a new 72-hour password shown once; nothing is restored |
 | `POST /api/v1/employees/{id}/password-reset` | HR Manager or Super Admin → `{temporaryPassword}`; accounts holding Super Admin or InfoSec need a Super Admin; never your own |
-| `POST /api/v1/employees/{id}/suspend` · `…/reactivate` · `…/terminate` | HR Manager or Super Admin: `{version, reason}`; an account holding Super Admin or InfoSec needs a Super Admin; never your own. Suspend and terminate act on `ACTIVE` employees (terminate also on `SUSPENDED`), reactivate on `SUSPENDED` ones, else `409 employee_status`. The last active Super Admin cannot be suspended or terminated (`409 last_super_admin`). Returns the employee |
+| `POST /api/v1/employees/{id}/suspend` · `…/reactivate` · `…/terminate` | HR Manager or Super Admin: `{version, reason}`; an account holding Super Admin or InfoSec needs a Super Admin; never your own. Suspend and terminate act on `ACTIVE` employees (terminate also on `SUSPENDED`), reactivate on `SUSPENDED` ones, else `409 employee_status`. Terminating the last active Super Admin is allowed and starts recovery mode (below). Returns the employee |
 | `PUT /api/v1/employees/{id}/termination` · `POST …/termination/cancel` | HR Manager or Super Admin, same permissions: schedule or move a termination `{effectiveAt, reason, version}` (RFC 3339, in the future, else `400 effective_at_not_future`), or cancel it `{reason, version}` (`409 termination_not_scheduled`). The employee shows `termination: {at, reason, scheduledBy}` |
 | `POST /api/v1/employees/{id}/roles` · `DELETE …/roles/{role}` | Super Admin: assign or remove `INFOSEC`, `HR_MANAGER`, `AUDITOR`; never your own |
 | `GET /api/v1/admin-groups` · `POST /api/v1/admin-groups` | list (members for the directory roles); create `{name}` (Super Admin) |
@@ -111,6 +122,14 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 | `POST /api/v1/imports/csv` | Super Admin: `{fileName, content}`, `content` semicolon-separated with the header `eposta;arac;seviye;hesap` (an empty `hesap` is the email) for Manual and Vendor tools → `201` the report; a bad header, an unterminated quote or no rows is `400 invalid_csv`. Rows with an unknown tool or level, an API tool, or missing fields are listed in `rejected` with their line |
 | `GET /api/v1/imports` | Super Admin, InfoSec, Auditor: the reports, newest first: `imported`, `orphans`, `terminated`, `skipped`, `rejected` |
 | `POST /api/v1/orphans/{id}/revoke` · `…/dismiss` | InfoSec: `{reason, version}`; revoke starts the normal removal (reason `ORPHAN`), dismiss closes the finding and leaves the account. `409 version_conflict`, `orphan_closed` |
+| `GET /api/v1/audit/events` | Super Admin, InfoSec, Auditor: every event; a manager: the events about their current direct and indirect reports. Filters `action` (comma list), `actor`, `from`, `to` (dates), `q` (text). Newest first, at most 1000 with `truncated` |
+| `GET /api/v1/audit/access` | Point in time (O1): the access each employee in scope held at `at` (RFC 3339) or at the end of `date` in company time (default now), plus access removed in the 30 days before; filters `employee`, `tool`. Each grant has its state then, evidence (`VERIFIED`, `SELF_REPORTED`, `IMPORTED`), approvers, who confirmed and who removed it |
+| `GET /api/v1/audit/requests` | The newest 100 requests in scope (`q` text filter) with their items, approval steps and timeline |
+| `GET /api/v1/audit/reports/privileged` · `…/overrides` · `…/policy` · `…/leavers` · `…/quarter` | Super Admin, InfoSec, Auditor: Super Admins, InfoSec and admin group members at `at` or `date`; Super Admin overrides and direct grants and revokes; approval-policy changes; access of terminated employees; the latest review campaign with its counts, policy changes and overrides |
+| `GET /api/v1/super-admin-nominations` | Super Admin, InfoSec, HR Manager, Auditor: open, unexpired nominations, each with `canAuthorize` for the caller; others get an empty list |
+| `POST /api/v1/super-admin-nominations` | `{nomineeId}` → `201`. A Super Admin nominates an active employee other than themself; while no Super Admin is active an HR Manager nominates (themself allowed, `recovery: true`). The authorizers are notified. `409 already_super_admin`, `nomination_pending`, `422 employee_not_active` |
+| `POST /api/v1/super-admin-nominations/{id}/authorize` · `…/decline` | `{version, reason?}`. Never the nominee or proposer (`403 separation_of_duties`). Another Super Admin decides when one exists (`403 super_admin_required` for InfoSec); otherwise, and in recovery, an InfoSec member. `409 nomination_closed`, `nomination_expired`, `recovery_ended`, `version_conflict` |
+| `GET /api/v1/admin/health` | Super Admin, InfoSec, HR Manager, Auditor: `activeSuperAdmins`, `infosecMembers`, `recoveryRequired` (no active Super Admin), `warning` (fewer than two) |
 | `POST /api/v1/operations/{id}/retry` | Super Admin or a member of the tool's admin group, never on their own grant (`403 separation_of_duties`): `{version}` on a `FAILED` operation starts a new round of 5 attempts with the same operation ID; a Manual or Vendor task returns to the queue unclaimed and without its ticket (the old reference stays in the audit log). A `SUSPEND` whose employee is no longer suspended, or a `RESUME` whose employee is no longer active, is `409 operation_superseded` |
 
 Only active employees receive roles, group memberships or password resets. Removing a role or membership closes it; nothing is deleted. Every change is in the audit log. A manager or department change is a transfer (below). Catalog changes are audited the same way; approval-policy changes (a level's steps) also notify every active InfoSec member in the app (DECISIONS.md F2, O2).
@@ -144,8 +163,14 @@ Only active employees receive roles, group memberships or password resets. Remov
 - Only the newest `SUSPEND` or `RESUME` of a grant is ever wanted: an older one, or one whose grant is being removed, is cancelled instead of being retried, so a stale exception never restores or disables access the wrong way. Operations on one grant reach the tool in the order they were created.
 - **Terminate:** roles and admin group memberships close (audited), any schedule is cleared, and every open grant gets a removal (reason `TERMINATION`) at the highest priority, ahead of all other work; an open removal is raised to it, and queued `SUSPEND`/`RESUME` are cancelled. A claimed Manual or Vendor grant task is cancelled too, so the removal task is ready at once (an ordinary revoke waits for it). A replacement grant in flight is removed once its call finishes. The removals stay in Exceptions until verified or confirmed.
 - **Scheduled termination:** the sweep (every minute, after a restart too) terminates each due employee once, as the system, recording who scheduled it; a schedule cancelled or moved meanwhile wins. Immediate termination overrides the schedule.
-- **Last Super Admin:** no suspension, termination or scheduled termination may leave no other active Super Admin without a scheduled termination (`409 last_super_admin`), until Super Admin recovery exists (M14).
+- **Last Super Admin:** terminating the last active Super Admin is allowed (D2). It records `ADMIN_RECOVERY_REQUIRED` and notifies HR Managers and InfoSec; the system is then in recovery mode (derived, never stored) until a new Super Admin is authorized. Access workflows keep running. (A suspension never leaves none: it is made by an active Super Admin.)
 - No email is sent for these actions (O2); they are audited.
+
+**Super Admin succession** (DECISIONS.md D2):
+- Promotion takes two people: a Super Admin nominates, a different person authorizes. Another Super Admin authorizes when one exists besides the proposer and nominee; otherwise an InfoSec member does. The nominee keeps their other roles and groups. Nominate, authorize and decline are audited.
+- A nomination expires 7 days after it was made (checked when listed or decided, no job; recorded as `SUPER_ADMIN_NOMINATION_EXPIRED` when a new nomination of the same person closes it). Terminating its nominee or proposer cancels it (`SUPER_ADMIN_NOMINATION_CANCELLED`). Nominations and decisions run under the person-level lock, by an actor still active, so two authorizers never both succeed.
+- A recovery nomination can no longer be decided once a Super Admin is active again (`409 recovery_ended`); it is no longer listed and is cancelled when the same person is nominated again.
+- The Super Admin role still cannot be assigned or removed through the roles API.
 
 **Transfer and rehire** (DECISIONS.md D5, D7, A5):
 - A transfer is one transaction, run one at a time with the other person-level actions. HR reads `GET …/grants`; every grant there is pre-selected for removal, and each kept one needs a justification. A grant created after HR read the list is removed too.
@@ -205,17 +230,18 @@ This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory P
 ## Layout
 
 ```
-cmd/accessflow      server (and `healthcheck`, `bootstrap-password`, `dev-fixture` commands)
+cmd/accessflow      server (and `healthcheck`, `bootstrap-password`, `recover-admin`, `dev-fixture` commands)
 cmd/mocktools       Mock Tool Service
 internal/platform   config, DB pool and transactions, migrations, HTTP helpers
 internal/audit      append-only audit writer
 internal/auth       sign-in, sessions, passwords, initial Super Admin
-internal/people     employees, roles, admin groups
+internal/people     employees, roles, admin groups, Super Admin succession
 internal/catalog    tools, access levels and approval steps, starter packages
 internal/requests   access requests, approval routing and decisions, Mock Email Outbox
 internal/notify     in-app notifications
 internal/access     grants, operations, the runner, fulfillment tasks, expiry, baseline import, orphans, the Mock Tool Service client
 internal/reviews    access review campaigns, decisions, the day-7/14/21 steps and findings
+internal/explorer   audit explorer: events, point-in-time access and evidence reports (read-only)
 internal/sweeps     the scheduled jobs loop (expiry, scheduled terminations, review steps)
 internal/mocktools  Mock Tool Service handlers and migrations
 internal/devfixture development employees, groups and tools (opt-in)
@@ -252,7 +278,6 @@ deploy/postgres     database and user setup, run on first start
 - The rehire check looks at direct reports only: an active employee whose manager is a terminated direct report of the rehired person sends Manager steps to the rehired person as skip-level until HR transfers them.
 - Re-routed Manager steps send no notification; the new manager sees them in the Approval Inbox.
 - Person-level actions (suspend, reactivate, transfer, rehire, terminate, schedule) are serialized by one database lock; they are rare HR actions, so they simply wait for each other.
-- A scheduled termination that the last-Super-Admin rule would refuse at its time is skipped, logged every minute and left due; scheduling already applies the rule, so this needs a change outside AccessFlow.
 - An approved extension cannot be withdrawn (it is already in force); give the access up with revoke instead.
 - Withdrawing an approved item sets its `closed_at` to the withdrawal time; the approval time stays in its steps and the audit log.
 - The UI is Turkish only (DECISIONS.md A7). It loads the Geist font from Google Fonts; offline, the browser falls back to a system font.
@@ -266,6 +291,10 @@ deploy/postgres     database and user setup, run on first start
 - A dismissed orphan account stays `ACTIVE` with no owner and is not part of later review campaigns (D8 reviews employees' grants); the dismissal and its reason stay in the audit log.
 - New system reasons or routing notes added in the backend need a Turkish text in `web/src/i18n/reasons.ts`; until then the UI shows the English text.
 - The UI has no screens for lists the API does not offer yet: decided approvals, closed tasks and the direct-grant log.
+- The audit explorer lists at most 1000 events per query (narrow the filters), 1000 rows in the override and policy reports, and the newest 100 requests; CSV export downloads the rows loaded in the browser. A manager's scope follows the current reporting lines (including terminated reports still linked), not past ones.
+- Point-in-time state is derived from the audit log and suspension intervals; imported access counts as held from its import time with no known approver.
+- Only a Super Admin may end a Super Admin's employment, so the last Super Admin leaves through a termination scheduled by another Super Admin, or by suspending or terminating each other. Recovery mode then needs an HR Manager and a different InfoSec member, or `recover-admin` on the server.
+- `recover-admin` writes the one-time password to the same file as the first start; a still-unused first-start password in it is replaced.
 - The Mock Tool Service has no authentication: it is reachable only on the internal Docker network (DECISIONS.md A2). It is a stand-in for real tools, not a model of their security.
 
 ## Possible future enhancements

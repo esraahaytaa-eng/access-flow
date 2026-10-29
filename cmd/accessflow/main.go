@@ -22,6 +22,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/devfixture"
+	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
@@ -75,6 +76,12 @@ func run(args []string) error {
 		BootstrapFile: cfg.BootstrapFile, CompanyTimezone: cfg.CompanyTimezone, Logger: slog.Default()})
 	if err != nil {
 		return err
+	}
+	if len(args) > 0 && args[0] == "recover-admin" { // D2 last resort; read the password with bootstrap-password
+		if len(args) != 2 {
+			return errors.New("usage: accessflow recover-admin <email>")
+		}
+		return svc.RecoverAdmin(ctx, args[1])
 	}
 	if len(args) > 0 && args[0] == "dev-fixture" {
 		return runDevFixture(ctx, people.NewService(pool, svc), catalog.NewService(pool), cfg.SeedPassword, os.Stdout)
@@ -143,6 +150,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 				accessSvc.Register(r)
 				notify.Register(r, pool)
 				reviews.NewService(pool).Register(r)
+				explorer.NewService(pool, loc).Register(r)
 			})
 		})
 	})

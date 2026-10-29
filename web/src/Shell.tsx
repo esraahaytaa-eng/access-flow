@@ -2,12 +2,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import { api } from "./api/client";
-import { useNotifications } from "./api/queries";
-import type { Notification } from "./api/types";
+import { useAdminHealth, useEmployees, useNotifications } from "./api/queries";
+import type { Employee, Notification } from "./api/types";
 import { roleLabel } from "./i18n/labels";
 import { useNavCounts, useRoleFlags, type RoleFlags } from "./nav";
 import { useSession } from "./session";
-import { Avatar, Button, Icon, Logo, Popover, useAction } from "./ui/components";
+import { NominateModal } from "./pages/Settings";
+import { Avatar, Button, Callout, Icon, Logo, Popover, useAction } from "./ui/components";
 import { formatDate, relativeTime } from "./ui/format";
 import type { IconName } from "./ui/icons";
 
@@ -33,6 +34,9 @@ function navGroups(flags: RoleFlags, counts: ReturnType<typeof useNavCounts>) {
       flags.admin && { to: "/tools-admin", label: "Araç yönetimi", icon: "box" },
       flags.admin && { to: "/direct", label: "Doğrudan erişim", icon: "zap" },
       flags.admin && { to: "/settings", label: "Yönetim ayarları", icon: "settings" },
+    ] },
+    { label: "Denetim", items: [
+      flags.audit && { to: "/audit", label: "Denetim kayıtları", icon: "audit" },
     ] },
   ];
   return groups.map((g) => ({ ...g, items: g.items.filter((i): i is NavItem => !!i) })).filter((g) => g.items.length > 0);
@@ -82,11 +86,14 @@ function notificationText(n: Notification, timeZone: string): string {
     case "REVIEW_STARTED": return `Erişim incelemesi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
     case "REVIEW_REMINDER": return "Yanıt bekleyen bir inceleme kaleminiz var (gün 7 hatırlatması).";
     case "REVIEW_ESCALATED": return "Yanıtlanmamış inceleme kalemleri Bilgi Güvenliğine eskale edildi.";
+    case "SUPER_ADMIN_NOMINATED": return `${d.nominee} Süper Yönetici olarak önerildi; yetkilendirmeniz bekleniyor.`;
+    case "ADMIN_RECOVERY_REQUIRED": return "Aktif Süper Yönetici kalmadı; sistem kurtarma modunda.";
   }
 }
 
 const notificationLink: Partial<Record<Notification["kind"], string>> = {
   APPROVAL_ASSIGNED: "/approvals", GRANTS_RETAINED_ON_TRANSFER: "/team", REVIEW_STARTED: "/reviews", REVIEW_REMINDER: "/reviews", REVIEW_ESCALATED: "/reviews",
+  SUPER_ADMIN_NOMINATED: "/approvals",
 };
 
 function NotificationsMenu() {
@@ -180,7 +187,7 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
           <NotificationsMenu />
           <UserMenu onSignOut={onSignOut} />
         </header>
-        <main className="content">{children}</main>
+        <main className="content"><RecoveryBanner />{children}</main>
       </div>
     </div>
   );
@@ -202,3 +209,22 @@ const Blocked = ({ icon, title, desc }: { icon: IconName; title: string; desc: s
 
 export const NoAccess = () => <Blocked icon="lock" title="Bu sayfaya erişiminiz yok" desc="Bu alan yalnızca ilgili role sahip kişilere açıktır." />;
 export const NotFound = () => <Blocked icon="search" title="Sayfa bulunamadı" desc="Aradığınız sayfa taşınmış veya hiç var olmamış olabilir." />;
+
+/** No active Super Admin (D2): HR, InfoSec and auditors are told; an HR Manager nominates, a different InfoSec member authorizes. */
+export function RecoveryBanner() {
+  const { hasRole } = useSession();
+  const health = useAdminHealth(hasRole("HR_MANAGER", "INFOSEC", "AUDITOR")).data;
+  const employees = (useEmployees().data ?? []) as Employee[];
+  const [open, setOpen] = useState(false);
+  if (!health?.recoveryRequired) return null;
+  const hr = hasRole("HR_MANAGER");
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <Callout tone="danger" title="Aktif Süper Yönetici yok: kurtarma modu">
+        Erişim iş akışları çalışmaya devam eder. Bir İK Yöneticisi yeni bir Süper Yönetici önerir, farklı bir Bilgi Güvenliği üyesi yetkilendirir.
+        {hr && <div style={{ marginTop: 10 }}><Button size="sm" variant="primary" onClick={() => setOpen(true)}>Süper Yönetici öner</Button></div>}
+      </Callout>
+      {open && <NominateModal employees={employees} recovery onClose={() => setOpen(false)} />}
+    </div>
+  );
+}

@@ -72,7 +72,7 @@ func (s *Service) Bootstrap(ctx context.Context, email string) error {
 		}
 		// Written before commit: if the commit fails the file is removed below, so an
 		// admin never exists without a readable password.
-		if err := writeBootstrapFile(s.bootstrapFile, id, email, password); err != nil {
+		if err := writeBootstrapFile(s.bootstrapFile, "AccessFlow initial Super Admin", id, email, password); err != nil {
 			return fmt.Errorf("write %s: %w", s.bootstrapFile, err)
 		}
 		wrote = true
@@ -91,7 +91,7 @@ func (s *Service) Bootstrap(ctx context.Context, email string) error {
 	return nil
 }
 
-func writeBootstrapFile(path string, id uuid.UUID, email, password string) error {
+func writeBootstrapFile(path, title string, id uuid.UUID, email, password string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -101,8 +101,8 @@ func writeBootstrapFile(path string, id uuid.UUID, email, password string) error
 		return err
 	}
 	defer os.Remove(f.Name()) // no-op after the rename
-	_, err = fmt.Fprintf(f, "AccessFlow initial Super Admin\nemail: %s\nemployee_id: %s\npassword: %s\n"+
-		"Sign in with this password and change it; this file is then deleted.\n", email, id, password)
+	_, err = fmt.Fprintf(f, "%s\nemail: %s\nemployee_id: %s\npassword: %s\n"+
+		"Sign in with this password and change it; this file is then deleted.\n", title, email, id, password)
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}

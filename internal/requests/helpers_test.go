@@ -15,6 +15,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
+	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
@@ -31,6 +32,7 @@ type world struct {
 	toolsLn net.Listener // where startTools serves the Mock Tool Service
 
 	dev, mgr, skip, owner, is1, is2, admin  person
+	auditor                                 person    // created by auditorOf
 	jiraViewer, jiraAdmin, awsAdmin, github uuid.UUID // levels
 	jira                                    uuid.UUID // tool
 }
@@ -72,6 +74,7 @@ func newWorld(t *testing.T) *world {
 			notify.Register(r, db.App)
 			catalog.NewService(db.App).Register(r)
 			reviews.NewService(db.App).Register(r)
+			explorer.NewService(db.App, istanbul).Register(r)
 		})
 	})
 	srv := httptest.NewServer(r)

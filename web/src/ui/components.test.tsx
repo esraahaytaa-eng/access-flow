@@ -38,7 +38,7 @@ describe("ConfirmDialog", () => {
   });
 
   it("stays open and shows the Turkish error when the server refuses", async () => {
-    const { confirm, onClose } = renderDialog(() => Promise.reject(new ApiError(409, "last_super_admin")));
+    const { confirm, onClose } = renderDialog(() => Promise.reject(new ApiError(409, "nomination_pending")));
     await userEvent.type(screen.getByLabelText(/Gerekçe/), "yeterli gerekçe");
     await userEvent.click(confirm());
     expect(await screen.findByText("İşlem tamamlanamadı")).toBeTruthy();

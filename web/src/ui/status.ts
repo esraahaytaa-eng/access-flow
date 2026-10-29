@@ -56,7 +56,8 @@ export function statusBadge(kind: StatusKind, status: string): Badge {
   return statuses[kind][status] ?? { label: status, tone: "outline" };
 }
 
-export function evidenceBadge(evidence: Evidence): Badge {
+export function evidenceBadge(evidence: Evidence | "IMPORTED"): Badge {
+  if (evidence === "IMPORTED") return { label: "İçe aktarıldı", tone: "outline" }; // existed before AccessFlow (D10)
   return evidence === "VERIFIED"
     ? { label: "Doğrulandı", tone: "green" }
     : { label: "Beyana dayalı", tone: "violet" };

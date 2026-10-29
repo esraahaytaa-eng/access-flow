@@ -138,18 +138,8 @@ func (s *Service) personAction(ctx context.Context, actor auth.Principal, id uui
 	}
 	var out people.Employee
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		if err := people.LockLifecycle(ctx, tx); err != nil {
+		if err := people.LockLifecycleAs(ctx, tx, actor); err != nil {
 			return err
-		}
-		// An actor suspended or terminated since their request began acts no more (D7). Every
-		// status change holds LifecycleLockKey, so a plain read is current; a row lock here
-		// would come before the items and deadlock with an approval.
-		var status string
-		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", actor.EmployeeID).Scan(&status); err != nil {
-			return err
-		}
-		if status != "ACTIVE" {
-			return platform.ErrUnauthorized
 		}
 		if err := lockFor(ctx, tx, id); err != nil {
 			return err
@@ -180,9 +170,6 @@ func (s *Service) personAction(ctx context.Context, actor auth.Principal, id uui
 // cancelled, their approval steps re-routed and their access suspended in each tool.
 func (s *Service) Suspend(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (people.Employee, error) {
 	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
-		if err := people.KeepsASuperAdmin(ctx, tx, e); err != nil {
-			return err
-		}
 		if err := people.SetStatus(ctx, tx, id, "SUSPENDED"); err != nil {
 			return err
 		}
@@ -224,10 +211,10 @@ func (s *Service) Terminate(ctx context.Context, actor auth.Principal, id uuid.U
 
 // terminate is shared by Terminate and the scheduled termination sweep (actor nil).
 func terminate(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, e people.Employee, reason string, details map[string]any) error {
-	if err := people.KeepsASuperAdmin(ctx, tx, e); err != nil {
+	if err := people.EndEmployment(ctx, tx, now, actor, e.ID); err != nil {
 		return err
 	}
-	if err := people.EndEmployment(ctx, tx, now, actor, e.ID); err != nil {
+	if err := people.AfterLeaving(ctx, tx, now, actor, e); err != nil {
 		return err
 	}
 	if err := endFor(ctx, tx, now, actor, e.ID, "employee terminated"); err != nil {
