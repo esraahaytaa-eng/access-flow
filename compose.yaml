@@ -1,5 +1,5 @@
 # Fixed local credentials for this case-study application (DECISIONS.md A2, 2026-10-28).
-# PostgreSQL is never published to the host; only app is, on port 8080.
+# PostgreSQL is never published to the host; only app is, on port 8080 (host port: ACCESSFLOW_PORT).
 x-db-credentials: &db-credentials
   POSTGRES_PASSWORD: postgres_local
   ACCESSFLOW_OWNER_PASSWORD: accessflow_owner_local
@@ -45,7 +45,7 @@ services:
       context: .
       target: app
     ports:
-      - "8080:8080"
+      - "${ACCESSFLOW_PORT:-8080}:8080"
     environment:
       DATABASE_URL: postgres://accessflow_app:accessflow_app_local@postgres:5432/accessflow
       MIGRATION_DATABASE_URL: postgres://accessflow_owner:accessflow_owner_local@postgres:5432/accessflow
