@@ -1,8 +1,14 @@
 package access
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
 // Today is now's date in the company timezone, at UTC midnight as dates are read and
@@ -74,4 +80,34 @@ func needsOp(target, effective string, cancelledSent bool) bool {
 
 func canMove(moves map[string][]string, from, to string) bool {
 	return slices.Contains(moves[from], to)
+}
+
+// Keep is a grant HR keeps at a transfer, with the required written justification (D5).
+type Keep struct {
+	GrantID       uuid.UUID `json:"grantId"`
+	Justification string    `json:"justification"`
+}
+
+// checkKeeps validates a transfer's keep list against the person's reviewable grants and
+// returns each kept grant's trimmed justification; every other grant is revoked (D5).
+func checkKeeps(reviewable []uuid.UUID, keep []Keep) (map[uuid.UUID]string, error) {
+	kept := make(map[uuid.UUID]string, len(keep))
+	for i, k := range keep {
+		field := fmt.Sprintf("keep[%d].", i)
+		if !slices.Contains(reviewable, k.GrantID) {
+			return nil, platform.ValidationError(field+"grantId", "grant_not_open")
+		}
+		if _, ok := kept[k.GrantID]; ok {
+			return nil, platform.ValidationError(field+"grantId", "duplicate_grant")
+		}
+		j := strings.TrimSpace(k.Justification)
+		if j == "" {
+			return nil, platform.ValidationError(field+"justification", "justification_required")
+		}
+		if err := platform.CheckText(j, field+"justification", 1000); err != nil {
+			return nil, err
+		}
+		kept[k.GrantID] = j
+	}
+	return kept, nil
 }

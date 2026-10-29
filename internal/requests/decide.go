@@ -593,6 +593,7 @@ type Exceptions struct {
 	Overlaps            []access.Overlap   `json:"overlaps"`
 	SuspensionGaps      []access.Operation `json:"suspensionGaps"`
 	SecurityRevocations []access.Operation `json:"securityRevocations"`
+	StaleGrants         []access.Operation `json:"staleGrants"`
 }
 
 func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Exceptions, error) {
@@ -616,7 +617,12 @@ func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Excepti
 		return Exceptions{}, err
 	}
 	leavers, err := access.SecurityRevocations(ctx, s.pool)
-	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps, SuspensionGaps: gaps, SecurityRevocations: leavers}, err
+	if err != nil {
+		return Exceptions{}, err
+	}
+	stale, err := access.StaleGrants(ctx, s.pool)
+	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps, SuspensionGaps: gaps, SecurityRevocations: leavers,
+		StaleGrants: stale}, err
 }
 
 // Open lists every open step, unroutable ones marked, for InfoSec and Super Admins, who

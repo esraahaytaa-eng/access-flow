@@ -17,6 +17,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/employees", s.handleCreate)
 	r.Put("/employees/{id}", s.handleUpdate)
 	r.Post("/employees/{id}/password-reset", s.handleReset)
+	r.Post("/employees/{id}/rehire", s.handleRehire)
 	r.Post("/employees/{id}/roles", s.handleAssignRole)
 	r.Delete("/employees/{id}/roles/{role}", s.handleRemoveRole)
 	r.Get("/admin-groups", s.handleListGroups)
@@ -90,20 +91,10 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in EmployeeUpdate
-	for _, f := range []struct {
-		name string
-		raw  json.RawMessage
-		dst  any
-	}{{"version", raw.Version, &in.Version}, {"managerId", raw.ManagerID, &in.ManagerID},
-		{"department", raw.Department, &in.Department}, {"jobTitle", raw.JobTitle, &in.JobTitle}} {
-		if len(f.raw) == 0 {
-			platform.WriteError(w, r, platform.ValidationError(f.name, "field_required"))
-			return
-		}
-		if json.Unmarshal(f.raw, f.dst) != nil {
-			platform.WriteError(w, r, platform.ValidationError(f.name, "invalid_json"))
-			return
-		}
+	if err := platform.DecodeRaw([]platform.RawField{{Name: "version", Raw: raw.Version, Dst: &in.Version}, {Name: "managerId", Raw: raw.ManagerID, Dst: &in.ManagerID},
+		{Name: "department", Raw: raw.Department, Dst: &in.Department}, {Name: "jobTitle", Raw: raw.JobTitle, Dst: &in.JobTitle}}); err != nil {
+		platform.WriteError(w, r, err)
+		return
 	}
 	e, err := s.UpdateEmployee(r.Context(), actor(r), id, in)
 	if err != nil {
@@ -111,6 +102,32 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	platform.WriteJSON(w, http.StatusOK, e)
+}
+
+func (s *Service) handleRehire(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r, "id")
+	if err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	var raw struct{ Version, ManagerID, Department, JobTitle, Reason json.RawMessage }
+	if err := platform.DecodeJSON(w, r, &raw); err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	var in RehireInput
+	if err := platform.DecodeRaw([]platform.RawField{{Name: "version", Raw: raw.Version, Dst: &in.Version}, {Name: "managerId", Raw: raw.ManagerID, Dst: &in.ManagerID},
+		{Name: "department", Raw: raw.Department, Dst: &in.Department}, {Name: "jobTitle", Raw: raw.JobTitle, Dst: &in.JobTitle}, {Name: "reason", Raw: raw.Reason, Dst: &in.Reason}}); err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	e, password, err := s.Rehire(r.Context(), actor(r), id, in)
+	if err != nil {
+		platform.WriteError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store") // carries a password
+	platform.WriteJSON(w, http.StatusOK, map[string]any{"employee": e, "temporaryPassword": password})
 }
 
 func (s *Service) handleReset(w http.ResponseWriter, r *http.Request) {

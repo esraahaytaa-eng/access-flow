@@ -21,6 +21,7 @@ func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 func (s *Service) Register(r chi.Router) {
 	r.Get("/access", s.handleMine)
 	r.Get("/access/team", s.handleTeam)
+	r.Get("/employees/{id}/grants", s.handleEmployeeGrants)
 	r.Post("/grants/{id}/revoke", s.handleRevoke)
 	r.Post("/operations/{id}/retry", s.handleRetry)
 	r.Get("/fulfillment-tasks", s.handleTasks)
@@ -46,6 +47,15 @@ func (s *Service) handleMine(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleTeam(w http.ResponseWriter, r *http.Request) {
 	gs, err := s.Team(r.Context(), actor(r))
+	platform.Respond(w, r, http.StatusOK, map[string]any{"grants": gs}, err)
+}
+
+func (s *Service) handleEmployeeGrants(w http.ResponseWriter, r *http.Request) {
+	ids, err := platform.PathIDs(r, "id")
+	var gs []Grant
+	if err == nil {
+		gs, err = s.EmployeeGrants(r.Context(), actor(r), ids[0])
+	}
 	platform.Respond(w, r, http.StatusOK, map[string]any{"grants": gs}, err)
 }
 

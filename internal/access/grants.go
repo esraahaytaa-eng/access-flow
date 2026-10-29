@@ -197,24 +197,35 @@ type Person struct {
 
 // Grant is one person's access to one level, with its display status (Fulfillment methods).
 type Grant struct {
-	ID            uuid.UUID  `json:"id"`
-	Employee      Person     `json:"employee"`
-	ToolID        uuid.UUID  `json:"toolId"`
-	Tool          string     `json:"tool"`
-	AccessLevelID uuid.UUID  `json:"accessLevelId"`
-	Level         string     `json:"level"`
-	Method        string     `json:"method"`
-	Status        string     `json:"status"`
-	DisplayStatus string     `json:"displayStatus"`
-	Evidence      *string    `json:"evidence"`
-	EffectiveFrom *time.Time `json:"effectiveFrom"`
-	EffectiveTo   *time.Time `json:"effectiveTo"`
-	ExpiresOn     *string    `json:"expiresOn"`
-	ClosedReason  *string    `json:"closedReason"` // why it was revoked or cancelled
-	Suspension    *string    `json:"suspension"`   // a SUSPEND or RESUME not yet verified or confirmed (D7)
-	Version       int        `json:"version"`
-	CreatedAt     time.Time  `json:"createdAt"`
+	ID                 uuid.UUID  `json:"id"`
+	Employee           Person     `json:"employee"`
+	ToolID             uuid.UUID  `json:"toolId"`
+	Tool               string     `json:"tool"`
+	AccessLevelID      uuid.UUID  `json:"accessLevelId"`
+	Level              string     `json:"level"`
+	Method             string     `json:"method"`
+	Status             string     `json:"status"`
+	DisplayStatus      string     `json:"displayStatus"`
+	Evidence           *string    `json:"evidence"`
+	EffectiveFrom      *time.Time `json:"effectiveFrom"`
+	EffectiveTo        *time.Time `json:"effectiveTo"`
+	ExpiresOn          *string    `json:"expiresOn"`
+	ClosedReason       *string    `json:"closedReason"` // why it was revoked or cancelled
+	Suspension         *string    `json:"suspension"`   // a SUSPEND or RESUME not yet verified or confirmed (D7)
+	RetainedOnTransfer *Retention `json:"retainedOnTransfer"`
+	Version            int        `json:"version"`
+	CreatedAt          time.Time  `json:"createdAt"`
 }
+
+// Retention records why a grant was kept when its holder was transferred (D5).
+type Retention struct {
+	At            time.Time `json:"at"`
+	Justification string    `json:"justification"`
+}
+
+// reviewable are the grants a transfer decides on: open, not being or already removed. A
+// SUSPENDED grant of an active employee is one whose RESUME is still on its way.
+const reviewable = "g.status IN ('PROVISIONING', 'PENDING_FULFILLMENT', 'ACTIVE', 'FAILED', 'SUSPENDED')"
 
 func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Grant, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -224,7 +235,8 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		       (SELECT CASE x.type WHEN 'SUSPEND' THEN 'SUSPENSION' ELSE 'RESUME' END ||
 		               CASE WHEN x.last_error IS NULL THEN '_REQUESTED' ELSE '_FAILED' END
 		        FROM operations x WHERE x.grant_id = g.id AND x.type IN ('SUSPEND', 'RESUME') AND x.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
-		        ORDER BY x.id DESC LIMIT 1)
+		        ORDER BY x.id DESC LIMIT 1),
+		       g.retained_at, g.retention_justification
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
@@ -235,9 +247,14 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Grant, error) {
 		var g Grant
 		var ticket bool
+		var retainedAt *time.Time
+		var justification *string
 		err := row.Scan(&g.ID, &g.Employee.ID, &g.Employee.FullName, &g.ToolID, &g.Tool, &g.AccessLevelID, &g.Level, &g.Method,
 			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket,
-			&g.Suspension)
+			&g.Suspension, &retainedAt, &justification)
+		if retainedAt != nil {
+			g.RetainedOnTransfer = &Retention{At: *retainedAt, Justification: *justification}
+		}
 		g.DisplayStatus = DisplayStatus(g.Method, g.Status, ticket)
 		return g, err
 	})
@@ -251,6 +268,21 @@ func (s *Service) Mine(ctx context.Context, actor auth.Principal) ([]Grant, erro
 // Team lists the grants of the actor's direct reports (D5).
 func (s *Service) Team(ctx context.Context, actor auth.Principal) ([]Grant, error) {
 	return s.grants(ctx, "e.manager_id = $1", actor.EmployeeID)
+}
+
+// EmployeeGrants lists the grants HR decides on when transferring an employee (D5).
+func (s *Service) EmployeeGrants(ctx context.Context, actor auth.Principal, id uuid.UUID) ([]Grant, error) {
+	if !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("HR_MANAGER") {
+		return nil, platform.ErrForbidden
+	}
+	var exists bool
+	if err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM employees WHERE id = $1)", id).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, platform.ErrNotFound
+	}
+	return s.grants(ctx, "g.employee_id = $1 AND "+reviewable, id)
 }
 
 // Revoke gives up a grant: by its employee (O6), their current direct manager (D5) or,

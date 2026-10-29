@@ -263,3 +263,43 @@ func RemoveAll(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, 
 	}
 	return nil
 }
+
+// RemoveExcept removes every reviewable grant of a transferred employee except the kept
+// ones, which record their justification (D5), in the caller's transaction under the
+// employee's lock. It returns the kept grants in request order and the removed ones.
+func RemoveExcept(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, employee uuid.UUID, keep []Keep) ([]Keep, []uuid.UUID, error) {
+	if _, err := lockEmployeeGrants(ctx, tx, employee); err != nil {
+		return nil, nil, err
+	}
+	rows, err := tx.Query(ctx, "SELECT g.id FROM grants g WHERE g.employee_id = $1 AND "+reviewable+" ORDER BY g.id", employee)
+	if err != nil {
+		return nil, nil, err
+	}
+	open, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, nil, err
+	}
+	justified, err := checkKeeps(open, keep)
+	if err != nil {
+		return nil, nil, err
+	}
+	kept := make([]Keep, 0, len(keep))
+	for _, k := range keep {
+		kept = append(kept, Keep{GrantID: k.GrantID, Justification: justified[k.GrantID]})
+		if _, err := tx.Exec(ctx, `UPDATE grants SET retained_at = $2, retained_by = $3, retention_justification = $4, version = version + 1
+			WHERE id = $1`, k.GrantID, now, actor, justified[k.GrantID]); err != nil {
+			return nil, nil, err
+		}
+	}
+	revoked := []uuid.UUID{}
+	for _, id := range open {
+		if _, ok := justified[id]; ok {
+			continue
+		}
+		if err := requestRemoval(ctx, tx, now, actor, id, employee, "TRANSFER", "transferred"); err != nil {
+			return nil, nil, err
+		}
+		revoked = append(revoked, id)
+	}
+	return kept, revoked, nil
+}

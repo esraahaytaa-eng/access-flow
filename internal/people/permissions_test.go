@@ -50,7 +50,7 @@ func TestPermissionMatrix(t *testing.T) {
 			return c.Do(http.MethodPost, "/api/v1/employees", map[string]any{"email": uuid.NewString() + "@example.com", "fullName": "X"})
 		}, []int{deny, created, deny, deny, created}},
 		{"edit employee", func(c *testutil.Client) testutil.Response {
-			return edit(c, newTarget(), map[string]any{"version": 1, "department": "Finance"})
+			return edit(c, newTarget(), map[string]any{"version": 1, "jobTitle": "Analyst"})
 		}, []int{deny, ok, deny, deny, ok}},
 		{"reset a plain employee", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/employees/"+newTarget().String()+"/password-reset", nil)

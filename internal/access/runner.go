@@ -223,8 +223,11 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 		if err := setGrant(ctx, tx, grant, grantStatus, to, "activation_evidence = $3, effective_from = $4", evidence, now); err != nil {
 			return err
 		}
-		if err := event("GRANT_ACTIVATED"); err != nil || to != "ACTIVE" {
+		if err := event("GRANT_ACTIVATED"); err != nil {
 			return err
+		}
+		if to != "ACTIVE" {
+			return staleIfTransferred(ctx, tx, now, actor, grant, employee)
 		}
 		if err := suspendIfSuspended(ctx, tx, now, grant, employee); err != nil {
 			return err
@@ -247,6 +250,18 @@ func succeed(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, op
 		return err
 	}
 	return event("GRANT_REVOKED")
+}
+
+// staleIfTransferred marks a grant that activated after its transfer removal was requested:
+// access the employee should no longer hold, an incident until removed (D5).
+func staleIfTransferred(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, grant, employee uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE grants SET stale_at = $2 WHERE id = $1 AND EXISTS (SELECT 1 FROM operations
+		WHERE grant_id = $1 AND type = 'REVOKE' AND reason = 'TRANSFER' AND status IN ('PENDING', 'IN_PROGRESS', 'FAILED'))`, grant, now)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "STALE_GRANT_INCIDENT", Entity: "grant", EntityID: &grant,
+		SubjectID: &employee})
 }
 
 // fail ends an IN_PROGRESS operation that did not work; it waits in Exceptions for a retry

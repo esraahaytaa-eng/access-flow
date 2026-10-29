@@ -4,12 +4,14 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
+	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -19,7 +21,12 @@ import (
 // for each other is fine at the expected load.
 const LifecycleLockKey int64 = 0x0D7_11FE
 
-var errLastSuperAdmin = platform.NewError(http.StatusConflict, "last_super_admin")
+var (
+	errLastSuperAdmin   = platform.NewError(http.StatusConflict, "last_super_admin")
+	errHasDirectReports = platform.NewError(http.StatusConflict, "has_direct_reports")
+	// ErrEmployeeStatus refuses a person-level action on an employee in the wrong status.
+	ErrEmployeeStatus = platform.NewError(http.StatusConflict, "employee_status")
+)
 
 // LockLifecycle takes LifecycleLockKey for the caller's transaction; it comes before any
 // row lock of the action.
@@ -110,4 +117,108 @@ func SetTermination(ctx context.Context, tx pgx.Tx, id uuid.UUID, at *time.Time,
 	_, err := tx.Exec(ctx, `UPDATE employees SET termination_at = $2, termination_scheduled_by = $3, termination_reason = $4,
 		version = version + 1 WHERE id = $1`, id, at, by, reason)
 	return err
+}
+
+// RehireInput places a rehired employee.
+type RehireInput struct {
+	Version              int
+	ManagerID            *uuid.UUID
+	Department, JobTitle *string
+	Reason               string
+}
+
+// Rehire makes a terminated employee active again under the same identity (A5): a new
+// temporary password, and nothing restored, neither access, roles, memberships nor
+// requests (D7). Leaver removals still open keep running. It returns the employee and the
+// password, shown once.
+func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID, in RehireInput) (Employee, string, error) {
+	if !canManageEmployees(actor) {
+		return Employee{}, "", platform.ErrForbidden
+	}
+	reason := strings.TrimSpace(in.Reason)
+	if reason == "" {
+		return Employee{}, "", platform.ValidationError("reason", "reason_required")
+	}
+	if err := platform.CheckText(reason, "reason", 1000); err != nil {
+		return Employee{}, "", err
+	}
+	department, err := CleanText(in.Department, "department")
+	if err != nil {
+		return Employee{}, "", err
+	}
+	jobTitle, err := CleanText(in.JobTitle, "jobTitle")
+	if err != nil {
+		return Employee{}, "", err
+	}
+	password, err := auth.NewTemporaryPassword()
+	if err != nil {
+		return Employee{}, "", err
+	}
+	hash, err := s.auth.Hash(ctx, password)
+	if err != nil {
+		return Employee{}, "", err
+	}
+	var out Employee
+	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		if err := LockLifecycle(ctx, tx); err != nil {
+			return err
+		}
+		// An actor suspended or terminated since their request began acts no more (D7); every
+		// status change holds LifecycleLockKey, so a plain read is current.
+		var status string
+		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", actor.EmployeeID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "ACTIVE" {
+			return platform.ErrUnauthorized
+		}
+		e, err := LockEmployee(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err := CheckAccountAction(actor, id, e.Roles); err != nil {
+			return err
+		}
+		if e.Status != "TERMINATED" {
+			return ErrEmployeeStatus
+		}
+		if e.Version != in.Version {
+			return errVersionConflict
+		}
+		// A rehired manager never takes back former reports' approvals and team access: HR
+		// transfers them first (A5, 2026-10-29). Nobody gains a terminated manager meanwhile.
+		var reports bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM employees WHERE manager_id = $1 AND status <> 'TERMINATED')",
+			id).Scan(&reports); err != nil {
+			return err
+		}
+		if reports {
+			return errHasDirectReports
+		}
+		if in.ManagerID != nil {
+			if err := CheckNewManager(ctx, tx, id, *in.ManagerID); err != nil {
+				return err
+			}
+		}
+		// Changes the manager under LifecycleLockKey, which serializes the cycle check.
+		if _, err := tx.Exec(ctx, `UPDATE employees SET status = 'ACTIVE', manager_id = $2, department = $3, job_title = $4,
+			version = version + 1 WHERE id = $1`, id, in.ManagerID, department, jobTitle); err != nil {
+			return err
+		}
+		if err := issueTemporaryPassword(ctx, tx, now, id, hash); err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "EMPLOYEE_REHIRED", Entity: "employee",
+			EntityID: &id, SubjectID: &id, Reason: reason, Details: map[string]any{
+				"from": map[string]any{"managerId": e.ManagerID, "department": e.Department, "jobTitle": e.JobTitle},
+				"to":   map[string]any{"managerId": in.ManagerID, "department": department, "jobTitle": jobTitle}}}); err != nil {
+			return err
+		}
+		out, err = GetEmployee(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Employee{}, "", err
+	}
+	return out, password, nil
 }

@@ -312,7 +312,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Follow-up from M5 (2026-10-28), assigned:** re-route pending approval steps whose assignee is suspended or terminated (F2 fallback); until then InfoSec reassigns them (D9).
 - **Required tests:** terminate during queued / in-flight grant; scheduled termination after downtime runs once; expiry during suspension; reactivation skips expired / revoked grants; suspended user's token rejected.
 - **UI slice:** suspend / reactivate / terminate / schedule actions on Employees; security revocations in Exceptions.
-- **Status:** implemented on `feat/termination-suspension` 2026-10-29, awaiting commit approval; detailed plan `2026-10-29-m9-termination-suspension.md`. The M5 re-routing follow-up and the M3/M4 manager and owner lock follow-ups are done. The UI slice moves to U1's catch-up.
+- **Status:** merged 2026-10-29 (PR #7); detailed plan `2026-10-29-m9-termination-suspension.md`. The M5 re-routing follow-up and the M3/M4 manager and owner lock follow-ups are done. The UI slice moves to U1's catch-up.
 
 ### M10 — Transfer and rehire
 
@@ -322,6 +322,7 @@ Package dependencies stay acyclic: `audit`, `notify` are leaves; `people`, `requ
 - **Acceptance criteria:** D5 and A5 rules covered by tests; stale grant after transfer revoked and visible.
 - **Required tests:** keep without justification rejected; Manager step moves to new manager; requests submitted before transfer cancelled on Revoke All; stale grant incident; rehire restores nothing.
 - **UI slice:** transfer screen on Employees; rehire action.
+- **Status:** implemented on `feat/transfer-rehire` 2026-10-29, awaiting commit approval; detailed plan `2026-10-29-m10-transfer-rehire.md`. Keep All is the UI sending every listed grant in `keep`. The UI slice moves to U1's catch-up.
 
 ### M11 — Quarterly access reviews
 

@@ -22,15 +22,14 @@ import (
 // one transaction. Lock order: LifecycleLockKey; the pending items naming the person, as
 // beneficiary or as a pending step's assignee; those items' beneficiaries (key share: the
 // audit events below reference them); the person; their operations; their grants; then,
-// shared, the tools of resumed grants (ResumeAll) and the people steps are re-routed to. An
+// shared, the tools of resumed grants (ResumeAll), the new manager (Transfer) and the people
+// steps are re-routed to. An
 // approval locks its item before its audit insert takes the approver's key lock, so the
 // items come before the person.
 // shortcut: these can still deadlock with the action (PostgreSQL fails one, a 500; see README):
 // an approval by the person on another item of a beneficiary whose item names the person; the
 // person, or someone a step is re-routed to, acting on another employee's grant or record; a
 // tool change making the person its owner during reactivation.
-
-var errEmployeeStatus = platform.NewError(http.StatusConflict, "employee_status")
 
 // lockFor takes the item and beneficiary locks of an action on employee.
 func lockFor(ctx context.Context, tx pgx.Tx, employee uuid.UUID) error {
@@ -50,24 +49,10 @@ func lockFor(ctx context.Context, tx pgx.Tx, employee uuid.UUID) error {
 // endFor cancels the person's pending items and re-routes the pending steps assigned to
 // them (F2, D9), after their status changed so routing sees them as unavailable.
 func endFor(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, employee uuid.UUID, reason string) error {
-	rows, err := tx.Query(ctx, "SELECT id FROM request_items WHERE beneficiary_id = $1 AND status = 'PENDING_APPROVAL' ORDER BY id", employee)
-	if err != nil {
+	if err := cancelOwn(ctx, tx, now, actor, employee, reason); err != nil {
 		return err
 	}
-	own, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return err
-	}
-	for _, id := range own {
-		it, err := lockItem(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if err := closeItem(ctx, tx, now, actor, it, "CANCELLED", reason); err != nil {
-			return err
-		}
-	}
-	rows, err = tx.Query(ctx, `SELECT s.id, s.item_id FROM approval_steps s JOIN request_items i ON i.id = s.item_id
+	rows, err := tx.Query(ctx, `SELECT s.id, s.item_id FROM approval_steps s JOIN request_items i ON i.id = s.item_id
 		WHERE s.status = 'PENDING' AND s.assignee_id = $1 AND i.status = 'PENDING_APPROVAL' ORDER BY s.id`, employee)
 	if err != nil {
 		return err
@@ -91,21 +76,53 @@ func endFor(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, emp
 		if s := it.steps[i]; it.status != "PENDING_APPROVAL" || s.Status != "PENDING" || s.AssigneeID == nil || *s.AssigneeID != employee {
 			continue
 		}
-		route, err := routeStep(ctx, tx, it, it.steps[i])
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE approval_steps SET assignee_id = $2, pool = NULLIF($3, ''), routing_note = $4,
-			version = version + 1 WHERE id = $1`, ref.step, route.AssigneeID, route.Pool, route.Note); err != nil {
-			return err
-		}
-		if err := audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "STEP_REROUTED", Entity: "approval_step", EntityID: &ref.step,
-			SubjectID: &it.beneficiary, Reason: reason, Details: map[string]any{"itemId": it.id, "from": employee,
-				"to": route.AssigneeID, "pool": route.Pool, "note": route.Note}}); err != nil {
+		if err := rerouteStep(ctx, tx, actor, it, it.steps[i], reason); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// ownPending lists the person's pending items.
+func ownPending(ctx context.Context, tx pgx.Tx, employee uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := tx.Query(ctx, "SELECT id FROM request_items WHERE beneficiary_id = $1 AND status = 'PENDING_APPROVAL' ORDER BY id", employee)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+}
+
+// cancelOwn cancels the person's pending items.
+func cancelOwn(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, employee uuid.UUID, reason string) error {
+	own, err := ownPending(ctx, tx, employee)
+	if err != nil {
+		return err
+	}
+	for _, id := range own {
+		it, err := lockItem(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err := closeItem(ctx, tx, now, actor, it, "CANCELLED", reason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rerouteStep routes a pending step of a locked item afresh and records the move.
+func rerouteStep(ctx context.Context, tx pgx.Tx, actor *uuid.UUID, it itemState, step Step, reason string) error {
+	route, err := routeStep(ctx, tx, it, step)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE approval_steps SET assignee_id = $2, pool = NULLIF($3, ''), routing_note = $4,
+		version = version + 1 WHERE id = $1`, step.ID, route.AssigneeID, route.Pool, route.Note); err != nil {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "STEP_REROUTED", Entity: "approval_step", EntityID: &step.ID,
+		SubjectID: &it.beneficiary, Reason: reason, Details: map[string]any{"itemId": it.id, "from": step.AssigneeID,
+			"to": route.AssigneeID, "pool": route.Pool, "note": route.Note}})
 }
 
 // personAction runs one person-level action on id under the lock order above, after the
@@ -145,7 +162,7 @@ func (s *Service) personAction(ctx context.Context, actor auth.Principal, id uui
 			return err
 		}
 		if !slices.Contains(from, e.Status) {
-			return errEmployeeStatus
+			return people.ErrEmployeeStatus
 		}
 		if e.Version != version {
 			return errVersionConflict
