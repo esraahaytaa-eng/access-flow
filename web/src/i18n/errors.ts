@@ -46,6 +46,7 @@ export const errorMessages: Record<string, string> = {
   invalid_duration: "Geçersiz süre.",
   invalid_email: "Geçersiz e-posta adresi.",
   invalid_fulfillment_method: "Geçersiz karşılama yöntemi.",
+  invalid_id: "Geçersiz kimlik.",
   invalid_json: "İstek okunamadı.",
   invalid_operation: "Geçersiz işlem.",
   invalid_role: "Geçersiz rol.",
