@@ -78,7 +78,8 @@ describe("settings: reviews and imports", () => {
       "POST /imports/csv": () => ({ status: 201, body: report }) });
     renderPage(<SettingsPage />, { session: sa });
     await userEvent.click(screen.getByRole("tab", { name: "İçe aktarma" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Araç servisinden içe aktar" }));
+    await userEvent.click(await screen.findByText("Gelişmiş içe aktarma seçenekleri"));
+    await userEvent.click(screen.getByRole("button", { name: "Araç servisinden içe aktar" }));
     await waitFor(() => expect(calls.some((c) => c.path === "/imports/mock")).toBe(true));
     await userEvent.type(screen.getByRole("textbox", { name: "İçerik" }), "eposta;arac;seviye;hesap{enter}a@x.co;Figma;Editor;");
     await userEvent.click(screen.getByRole("button", { name: "İçe aktar" }));
@@ -95,6 +96,31 @@ describe("settings: Excel workbook import", () => {
   const report = { id: "imp2", source: "WORKBOOK", fileName: "ekip.xlsx", importedBy: person("sa", "Okan Admin"), importedAt: "2026-10-29T09:00:00Z",
     imported: 3, orphans: 0, terminated: 0, skipped: 1, rejected: [], created: { employees: 2, tools: 1, levels: 2 } };
   const file = new File(["xlsx"], "ekip.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+  it("leads with the workbook and keeps the tool read and the CSV under collapsed advanced options", async () => {
+    fakeServer({ ...base, "GET /imports": { imports: [] } });
+    renderPage(<SettingsPage />, { session: sa });
+    await userEvent.click(screen.getByRole("tab", { name: "İçe aktarma" }));
+    const summary = await screen.findByText("Gelişmiş içe aktarma seçenekleri");
+    const advanced = summary.closest("details")!;
+    expect(advanced.open).toBe(false);
+    expect(within(advanced).getByRole("button", { name: "Araç servisinden içe aktar" })).toBeTruthy();
+    expect(within(advanced).getByLabelText("CSV dosyası")).toBeTruthy();
+    expect(advanced.contains(screen.getByLabelText("Excel dosyası"))).toBe(false);
+    await userEvent.click(summary);
+    expect(advanced.open).toBe(true);
+  });
+
+  it("uses Turkish file selectors that show the chosen file", async () => {
+    fakeServer({ ...base, "GET /imports": { imports: [] } });
+    renderPage(<SettingsPage />, { session: sa });
+    await userEvent.click(screen.getByRole("tab", { name: "İçe aktarma" }));
+    expect((await screen.findAllByText("Dosya seçilmedi")).length).toBe(2);
+    expect(screen.getAllByText("Dosya seç").length).toBe(2);
+    await userEvent.upload(screen.getByLabelText("Excel dosyası"), file);
+    expect(screen.getByText("ekip.xlsx")).toBeTruthy();
+    expect(screen.getAllByText("Dosya seçilmedi").length).toBe(1);
+  });
 
   it("previews a file and imports it only after a clean preview", async () => {
     const calls = fakeServer({ ...base, "GET /imports": { imports: [] },

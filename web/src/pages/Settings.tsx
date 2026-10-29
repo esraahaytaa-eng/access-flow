@@ -6,7 +6,7 @@ import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, 
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
-  Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, Input, KeyValueList, Modal, PageHeader, Person, Select, TableSkeleton, Tabs, Textarea, useAction,
+  Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, FilePicker, Input, KeyValueList, Modal, PageHeader, Person, Select, TableSkeleton, Tabs, Textarea, useAction,
 } from "../ui/components";
 import { formatDate, formatDateTime, relativeTime } from "../ui/format";
 import { catalogOptions, managerOptions } from "./Employees";
@@ -281,7 +281,7 @@ function MailboxTab() {
           {emails.map((m) => (
             <button key={m.id} className="list-row clickable" style={{ width: "100%", border: 0, background: "none", textAlign: "left", borderBottom: "1px solid var(--line-2)" }} onClick={() => setOpen(m)}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 560 }}>{m.subject}</div>
+                <div style={{ fontWeight: 600 }}>{m.subject}</div>
                 <div className="cell-sub" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Alıcı: {m.recipient.fullName} · {m.body}</div>
               </div>
               <span className="small muted nowrap">{relativeTime(m.createdAt)}</span>
@@ -408,11 +408,11 @@ function WorkbookCard({ onImported }: { onImported: (r: ImportReport) => void })
   const download = () => run(() => api.download("/imports/workbook/template")).then((r) => r.ok && saveFile(r.res, `accessflow-onboarding-${new Date().toISOString().slice(0, 10)}.xlsx`));
   const s = plan?.summary;
   return (
-    <Card title="Excel ile toplu aktarım" sub="Çalışanlar, araçlar ve mevcut erişimler tek dosyada aktarılır. Önce önizleyin; dosyada sorun varsa hiçbir şey kaydedilmez. Mevcut kayıtlar değiştirilmez."
+    <Card title="Excel ile toplu aktarım" sub="İlk kurulum için ana yöntem: çalışanlar, araçlar ve mevcut erişimler tek dosyada aktarılır. Önce önizleyin; dosyada sorun varsa hiçbir şey kaydedilmez. Mevcut kayıtlar değiştirilmez."
       actions={<Button onClick={download}>Excel şablonunu indir</Button>}>
       <div className="stack">
         <div className="row-wrap">
-          <input type="file" accept=".xlsx" aria-label="Excel dosyası" onChange={(e) => choose(e.target.files?.[0])} />
+          <FilePicker label="Excel dosyası" accept=".xlsx" fileName={file?.name} onFile={choose} />
           <Button disabled={!file} loading={busy} onClick={preview}>Önizle</Button>
           <Button variant="primary" disabled={!file || !plan || plan.problems.length > 0} loading={busy} onClick={submit}>Excel’i içe aktar</Button>
         </div>
@@ -454,24 +454,27 @@ function ImportsTab() {
   return (
     <div className="stack">
       <WorkbookCard onImported={(r) => done({ ok: true, res: r })} />
-      <Card title="API araçlarının mevcut erişimleri" sub="Mock Araç Servisi’ndeki hesaplar okunur ve kurumsal e-posta ile çalışanlara eşleştirilir. Aynı erişim ikinci kez aktarılmaz.">
-        <Button variant="primary" loading={busy} onClick={() => run(() => api.post<ImportReport>("/imports/mock", {}), { success: "İçe aktarma tamamlandı" }).then(done)}>Araç servisinden içe aktar</Button>
-      </Card>
-      <Card title="Manuel ve tedarikçi araçları için CSV içe aktarma" sub="Sütunlar: eposta; arac; seviye; hesap. Hesap boşsa e-posta adresi kullanılır.">
+      <details className="advanced">
+        <summary>Gelişmiş içe aktarma seçenekleri</summary>
+        <p className="muted small">İlk kurulumdan sonra erişimleri gerçek durumla karşılaştırmak (mutabakat) içindir: API araçlarından okunan hesaplar Excel’de bildirilen erişimleri doğrular, hiçbir çalışana ait olmayan hesapları ise İstisnalar’a sahipsiz hesap olarak ekler. Aynı erişim ikinci kez aktarılmaz.</p>
         <div className="stack">
-          <div className="row-wrap">
-            <input type="file" accept=".csv,text/csv" aria-label="CSV dosyası" onChange={(e) => readFile(e.target.files?.[0])} />
-            {fileName && <span className="muted small">{fileName}</span>}
-          </div>
-          <Field label="İçerik" hint="Bilinmeyen araç veya seviye içeren satırlar reddedilir ve raporda listelenir.">
-            <Textarea rows={6} value={content} onChange={(e) => setContent(e.target.value)} placeholder={csvExample} style={{ fontFamily: "var(--mono)", fontSize: 12.5 }} />
-          </Field>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <Button variant="primary" disabled={!content.trim()} loading={busy}
-              onClick={() => run(() => api.post<ImportReport>("/imports/csv", { fileName: fileName || "yapistirilan_veri.csv", content }), { success: "İçe aktarma tamamlandı" }).then(done)}>İçe aktar</Button>
-          </div>
+          <Card title="API araçlarının mevcut erişimleri" sub="Mock Araç Servisi’ndeki hesaplar okunur ve kurumsal e-posta ile çalışanlara eşleştirilir. Aynı erişim ikinci kez aktarılmaz.">
+            <Button loading={busy} onClick={() => run(() => api.post<ImportReport>("/imports/mock", {}), { success: "İçe aktarma tamamlandı" }).then(done)}>Araç servisinden içe aktar</Button>
+          </Card>
+          <Card title="Manuel ve tedarikçi araçları için CSV içe aktarma" sub="Araçtan alınan hesap listesini aktarır; hiçbir çalışanla eşleşmeyen hesaplar sahipsiz hesap olur. Sütunlar: eposta; arac; seviye; hesap. Hesap boşsa e-posta adresi kullanılır.">
+            <div className="stack">
+              <FilePicker label="CSV dosyası" accept=".csv,text/csv" fileName={fileName} onFile={readFile} />
+              <Field label="İçerik" hint="Bilinmeyen araç veya seviye içeren satırlar reddedilir ve raporda listelenir.">
+                <Textarea rows={6} value={content} onChange={(e) => setContent(e.target.value)} placeholder={csvExample} style={{ fontFamily: "var(--mono)", fontSize: 12.5 }} />
+              </Field>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <Button disabled={!content.trim()} loading={busy}
+                  onClick={() => run(() => api.post<ImportReport>("/imports/csv", { fileName: fileName || "yapistirilan_veri.csv", content }), { success: "İçe aktarma tamamlandı" }).then(done)}>İçe aktar</Button>
+              </div>
+            </div>
+          </Card>
         </div>
-      </Card>
+      </details>
       {last && <ImportReportCard report={last} highlight />}
       <div className="section-title" style={{ marginTop: 8 }}>Önceki içe aktarmalar</div>
       {imports.isPending ? <TableSkeleton rows={2} /> : (imports.data ?? []).filter((r) => r.id !== last?.id).map((r) => <ImportReportCard key={r.id} report={r} />)}

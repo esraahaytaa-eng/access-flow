@@ -22,7 +22,7 @@ import { TasksPage } from "./pages/Tasks";
 import { TeamPage } from "./pages/Team";
 import { ToolEditPage } from "./pages/ToolEdit";
 import { ToolsAdminPage } from "./pages/ToolsAdmin";
-import { LoginPage } from "./pages/Login";
+import { AuthScreen, LoginPage } from "./pages/Login";
 import { SessionProvider, useSession } from "./session";
 import { NoAccess, NotFound, Shell } from "./Shell";
 import { errorMessage } from "./i18n/errors";
@@ -58,7 +58,7 @@ function Root() {
   const signOut = () => api.post("/auth/logout").then(() => setPrincipal(null), (err) => toast({ type: "error", title: "Çıkış yapılamadı", desc: errorMessage(err) }));
 
   if (me.isPending) return null;
-  if (me.isError) return <div className="login"><p className="muted">Sunucuya ulaşılamıyor. Sayfayı yenileyin.</p></div>;
+  if (me.isError) return <AuthScreen><div className="login-card" role="alert"><h1>Sunucuya ulaşılamıyor</h1><p className="muted">Sayfayı yenileyin.</p></div></AuthScreen>;
   if (!me.data) return <LoginPage onSignedIn={setPrincipal} />;
   if (me.data.mustChangePassword) return <ForcedPasswordChange onChanged={setPrincipal} onSignOut={signOut} />;
   return (

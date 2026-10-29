@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<!-- Login visual reference supplied by the user on 2026-10-30 (U2, second version; supersedes the
+     first). Background: gradient #A9BB5E (top) to #9EB050 (bottom) with a soft radial light.
+     Button spec: normal #A4B657, hover #8A9C40, text and arrow #FFFFFF, shadow
+     rgba(138,156,64,.32), radius 14px, height 54px, Inter 600 15.5px. The app darkens the
+     button to #66752A / #5F6E26 for WCAG AA contrast (docs/plans/2026-10-30-u2-visual-redesign.md).
+     Reference only; not served by the app. Its demo script was left out. -->
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giriş</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --brand:#A4B657;
+    --brand-dark:#8A9C40;
+    --brand-deep:#5F6E26;
+    --brand-tint:#F3F6E8;
+    --ink:#1C2110;
+    --muted:#6B7160;
+    --line:#E3E6DA;
+    --field:#FAFBF7;
+    --danger:#C2412D;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    color:var(--ink);background:var(--brand);
+    -webkit-font-smoothing:antialiased;overflow:hidden;
+  }
+
+  /* ---------- Arka plan kompozisyonu ---------- */
+  .bg{position:fixed;inset:0;pointer-events:none}
+  .bg::after{
+    content:"";position:absolute;inset:0;
+    background:radial-gradient(1000px 700px at 50% 40%,rgba(255,255,255,.18),transparent 70%),linear-gradient(180deg,#A9BB5E 0%,#9EB050 100%);
+  }
+
+  /* ---------- Kart ---------- */
+  .stage{position:relative;min-height:100vh;display:grid;place-items:center;padding:24px}
+  .card{
+    width:100%;max-width:420px;background:#fff;border-radius:24px;
+    padding:44px 40px 40px;
+    box-shadow:0 30px 80px rgba(60,72,20,.28),0 2px 6px rgba(60,72,20,.08);
+    animation:rise .6s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+
+  .logo-slot{
+    width:56px;height:56px;border-radius:16px;background:var(--brand);
+    display:grid;place-items:center;margin:0 auto 26px;
+    color:#fff;font-weight:700;font-size:11px;letter-spacing:.06em;
+    box-shadow:0 10px 24px rgba(138,156,64,.35);
+  }
+  h1{text-align:center;font-size:26px;font-weight:700;letter-spacing:-.02em;margin-bottom:32px}
+
+  .field{margin-bottom:16px}
+  .field label{display:block;font-size:13px;font-weight:600;margin-bottom:8px}
+  .input-wrap{position:relative}
+  .input-wrap svg.icon{position:absolute;left:15px;top:50%;transform:translateY(-50%);color:#9AA08C;pointer-events:none;transition:.18s}
+  input[type=email],input[type=password],input[type=text]{
+    width:100%;height:52px;border-radius:14px;border:1.5px solid var(--line);background:var(--field);
+    padding:0 48px 0 46px;font:500 15px 'Inter',sans-serif;color:var(--ink);outline:none;transition:.18s;
+  }
+  input::placeholder{color:#A6AB9A;font-weight:400}
+  input:focus{border-color:var(--brand);background:#fff;box-shadow:0 0 0 4px rgba(164,182,87,.18)}
+  .input-wrap:focus-within svg.icon{color:var(--brand-dark)}
+  .toggle{
+    position:absolute;right:9px;top:50%;transform:translateY(-50%);
+    width:34px;height:34px;border:none;background:transparent;border-radius:9px;cursor:pointer;color:#8D937E;
+    display:grid;place-items:center;transition:.15s;
+  }
+  .toggle:hover{background:var(--brand-tint);color:var(--brand-deep)}
+  .toggle .off{display:none}
+  .toggle.on .on{display:none}
+  .toggle.on .off{display:block}
+
+  .row{display:flex;align-items:center;justify-content:space-between;margin:4px 0 26px}
+  .check{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--muted);cursor:pointer;user-select:none}
+  .check input{appearance:none;width:18px;height:18px;border-radius:5px;border:1.5px solid #C9CDBE;display:grid;place-items:center;cursor:pointer;transition:.15s}
+  .check input:checked{background:var(--brand);border-color:var(--brand)}
+  .check input:checked::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+  .link{font-size:13.5px;font-weight:500;color:var(--brand-dark);text-decoration:none}
+  .link:hover{text-decoration:underline}
+
+  .primary{
+    width:100%;height:54px;border:none;border-radius:14px;background:var(--brand);color:#fff;
+    font:600 15.5px 'Inter',sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;
+    transition:.18s;box-shadow:0 10px 24px rgba(138,156,64,.32);
+  }
+  .primary:hover{background:var(--brand-dark);transform:translateY(-1px)}
+  .primary:active{transform:none}
+  .primary .arrow{transition:transform .18s}
+  .primary:hover .arrow{transform:translateX(3px)}
+  .primary .spinner{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:spin .7s linear infinite;display:none}
+  .primary.loading .spinner{display:block}
+  .primary.loading .arrow{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .error{display:none;margin-top:14px;padding:12px 14px;border-radius:12px;background:#FBEDEA;color:var(--danger);font-size:13px;font-weight:500;text-align:center}
+  .error.show{display:block}
+
+  @media (max-width:480px){
+    .card{padding:36px 24px 30px;border-radius:20px}
+  }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+
+<main class="stage">
+  <div class="card">
+    <!-- Logonuzu buraya koyun: <img src="logo.svg" alt="" width="30"> -->
+    <div class="logo-slot">LOGO</div>
+    <h1>Giriş yap</h1>
+
+    <form id="loginForm" novalidate>
+      <div class="field">
+        <label for="email">E-posta</label>
+        <div class="input-wrap">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+          <input id="email" type="email" placeholder="ad.soyad@sirket.com" autocomplete="username" required>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="password">Şifre</label>
+        <div class="input-wrap">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+          <button class="toggle" type="button" id="togglePw" aria-label="Şifreyi göster">
+            <svg class="on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.2M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label class="check"><input type="checkbox"> Beni hatırla</label>
+        <a class="link" href="#">Şifremi unuttum</a>
+      </div>
+
+      <button class="primary" type="submit" id="submitBtn">
+        <span class="spinner"></span>
+        <span class="label">Giriş yap</span>
+        <svg class="arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+
+      <div class="error" id="error">Lütfen geçerli bir e-posta ve şifre girin.</div>
+    </form>
+  </div>
+</main>
+</body>
+</html>

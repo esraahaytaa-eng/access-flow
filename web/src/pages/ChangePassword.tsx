@@ -4,6 +4,7 @@ import { useDemo } from "../api/queries";
 import type { Principal } from "../api/types";
 import { errorMessage } from "../i18n/errors";
 import { Badge, Button, Callout, Card, Field, Input, Logo, PageHeader, useAction } from "../ui/components";
+import { AuthScreen } from "./Login";
 
 type Errors = { currentPassword?: string; newPassword?: string; repeat?: string };
 
@@ -48,17 +49,18 @@ function PasswordForm({ onChanged }: { onChanged: (p: Principal) => void }) {
 export function ForcedPasswordChange({ onChanged, onSignOut }: { onChanged: (p: Principal) => void; onSignOut: () => void }) {
   const demo = useDemo().data;
   return (
-    <div className="login">
+    <AuthScreen>
       <main className="login-box">
-        <div className="login-brand"><Logo size={30} /><span>AccessFlow</span>{demo && <Badge tone="amber" dot>Demo Environment</Badge>}</div>
         <div className="login-card">
+          <div className="login-logo" role="img" aria-label="AccessFlow"><Logo size={56} /></div>
+          {demo && <div className="row" style={{ justifyContent: "center", marginBottom: 12 }}><Badge tone="amber" dot>Demo Environment</Badge></div>}
           <h1>Parolanızı değiştirin</h1>
           <p className="muted">Devam etmeden önce geçici parolanızı değiştirmeniz gerekiyor.</p>
           <PasswordForm onChanged={onChanged} />
           <div style={{ marginTop: 16 }}><Button variant="ghost" block onClick={onSignOut}>Çıkış yap</Button></div>
         </div>
       </main>
-    </div>
+    </AuthScreen>
   );
 }
 
