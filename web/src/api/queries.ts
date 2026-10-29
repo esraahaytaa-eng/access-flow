@@ -1,0 +1,22 @@
+// One query per list endpoint, shared by the shell and the pages (TanStack Query caches by key).
+import { useQuery } from "@tanstack/react-query";
+import { api } from "./client";
+import type {
+  AdminGroupsResponse, ApprovalsResponse, BasicEmployee, CatalogResponse, Employee, EmployeesResponse, Exceptions,
+  FulfillmentTasksResponse, GrantsResponse, NotificationsResponse, RequestsResponse, StarterPackagesResponse,
+} from "./types";
+
+export const useEmployees = () => useQuery({ queryKey: ["employees"], queryFn: () => api.get<EmployeesResponse>("/employees").then((r) => r.employees as (Employee | BasicEmployee)[]) });
+export const useTools = () => useQuery({ queryKey: ["tools"], queryFn: () => api.get<CatalogResponse>("/tools").then((r) => r.tools) });
+export const useApprovals = (enabled = true) => useQuery({ queryKey: ["approvals"], enabled, queryFn: () => api.get<ApprovalsResponse>("/approvals").then((r) => r.approvals) });
+export const useTasks = (enabled = true) => useQuery({ queryKey: ["tasks"], enabled, queryFn: () => api.get<FulfillmentTasksResponse>("/fulfillment-tasks").then((r) => r.tasks) });
+export const useExceptions = (enabled = true) => useQuery({ queryKey: ["exceptions"], enabled, queryFn: () => api.get<Exceptions>("/exceptions") });
+export const useNotifications = () => useQuery({ queryKey: ["notifications"], queryFn: () => api.get<NotificationsResponse>("/notifications").then((r) => r.notifications) });
+export const useRequests = () => useQuery({ queryKey: ["requests"], queryFn: () => api.get<RequestsResponse>("/requests").then((r) => r.requests) });
+export const useMyGrants = () => useQuery({ queryKey: ["access"], queryFn: () => api.get<GrantsResponse>("/access").then((r) => r.grants) });
+export const useTeamGrants = () => useQuery({ queryKey: ["access", "team"], queryFn: () => api.get<GrantsResponse>("/access/team").then((r) => r.grants) });
+export const useAdminGroups = () => useQuery({ queryKey: ["admin-groups"], queryFn: () => api.get<AdminGroupsResponse>("/admin-groups").then((r) => r.groups) });
+export const useStarterPackages = () => useQuery({ queryKey: ["starter-packages"], queryFn: () => api.get<StarterPackagesResponse>("/starter-packages").then((r) => r.entries) });
+
+export const exceptionCount = (x: Exceptions) =>
+  x.failedOperations.length + x.unroutableSteps.length + x.overlaps.length + x.suspensionGaps.length + x.securityRevocations.length + x.staleGrants.length;

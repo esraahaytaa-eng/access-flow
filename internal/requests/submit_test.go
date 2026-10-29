@@ -101,6 +101,10 @@ func TestOneEmailPerSubmission(t *testing.T) {
 	if err := w.db.App.QueryRow(context.Background(), "SELECT subject, body FROM email_outbox WHERE request_id = $1", req["id"]).Scan(&subject, &text); err != nil {
 		t.Fatal(err)
 	}
+	// The UI is Turkish-only (A7), so the simulated e-mail is too.
+	if !strings.HasPrefix(subject, "Erişim talebi: ") || !strings.Contains(text, "e-posta üzerinden onay verilemez") {
+		t.Errorf("email = %q / %q; want Turkish text", subject, text)
+	}
 	for _, tool := range []string{"Jira", "AWS", "GitHub"} {
 		if !strings.Contains(text, tool) {
 			t.Errorf("email body %q does not name %s", text, tool)

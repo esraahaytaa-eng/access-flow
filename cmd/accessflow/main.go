@@ -71,7 +71,7 @@ func run(args []string) error {
 		return err
 	}
 	svc, err := auth.NewService(pool, auth.Options{Secret: secret, SecureCookies: cfg.SecureCookies,
-		BootstrapFile: cfg.BootstrapFile, Logger: slog.Default()})
+		BootstrapFile: cfg.BootstrapFile, CompanyTimezone: cfg.CompanyTimezone, Logger: slog.Default()})
 	if err != nil {
 		return err
 	}

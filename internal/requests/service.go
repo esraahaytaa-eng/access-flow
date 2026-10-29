@@ -507,9 +507,9 @@ func queueEmail(ctx context.Context, tx pgx.Tx, req Request) error {
 		return nil
 	}
 	_, err := tx.Exec(ctx, "INSERT INTO email_outbox (recipient_id, request_id, subject, body) VALUES ($1, $2, $3, $4)",
-		recipient, req.ID, "Access request from "+req.Beneficiary.FullName,
-		req.Beneficiary.FullName+" is requesting access to "+strings.Join(tools, ", ")+
-			". Open AccessFlow to approve or reject; nothing is approved by email.")
+		recipient, req.ID, "Erişim talebi: "+req.Beneficiary.FullName,
+		req.Beneficiary.FullName+" şu araçlar için erişim talep ediyor: "+strings.Join(tools, ", ")+
+			". Onaylamak veya reddetmek için AccessFlow'u açın; e-posta üzerinden onay verilemez.")
 	return err
 }
 

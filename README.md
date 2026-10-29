@@ -3,7 +3,7 @@
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
 
-> Status: identity, catalog, requests, approvals, API fulfillment, Manual / Vendor fulfillment with direct grants, and expiry, extensions and level changes (milestones M2–M8). Sign-in, sessions, password change, the initial Super Admin, employees, roles, admin groups, the tool catalog with approval steps, starter packages, in-app notifications, access requests and their approvals (routing, decisions, withdrawal, reassignment, Super Admin override, the Mock Email Outbox), API-tool provisioning through the Mock Tool Service with verification, removal, My Access, Team Access and Exceptions with manual retry, Fulfillment Tasks for Manual and Vendor tools, withdrawal of an approved item before work starts, Super Admin direct grants and revokes, automatic expiry of temporary access, extensions (including Temporary → Until Revoked) and level changes with the overlap exception work through the API. There are no screens yet (they arrive with the design).
+> Status: backend milestones M2–M10 (identity, catalog, requests and approvals, API / Manual / Vendor fulfillment, direct grants, expiry, extensions and level changes, suspension, termination, transfer and rehire) and the Turkish web UI on top of them (U1). Access reviews, CSV import, the audit explorer and Super Admin succession are not built yet.
 
 ## Run
 
@@ -21,7 +21,7 @@ On first start `app` creates the initial Super Admin (`admin@accessflow.local`, 
 docker compose exec app /accessflow bootstrap-password
 ```
 
-Sign in with it (`POST /api/v1/auth/login`) and change it (`POST /api/v1/auth/password`); until then every other API call answers `403 password_change_required`. After the change the old password stops working and the file is deleted. This password does not expire. Passwords that admins later issue to employees expire after 72 hours (DECISIONS.md F4).
+Sign in with it at http://localhost:8080; the app asks for a new password first. Until it is changed every other API call answers `403 password_change_required`. After the change the old password stops working and the file is deleted. This password does not expire. Passwords that admins later issue to employees expire after 72 hours (DECISIONS.md F4).
 
 ### Configuration
 
@@ -177,7 +177,7 @@ Go is not needed on the host; tests run only in Docker:
 docker compose --profile test run --rm tests
 ```
 
-This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory PostgreSQL (`postgres-test`). Each test gets its own database cloned from a migrated template, connected as the runtime user. A full run takes about 10 minutes (`internal/requests` alone about 9); the test timeout is 20 minutes. The frontend type check (`tsc --noEmit`) runs in the image build.
+This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory PostgreSQL (`postgres-test`). Each test gets its own database cloned from a migrated template, connected as the runtime user. A full run takes about 10 minutes (`internal/requests` alone about 9); the test timeout is 20 minutes. The frontend type check (`tsc --noEmit`) and the frontend tests (Vitest, in `web/src/**/*.test.ts(x)`) run in the image build (`npm run build`), so `docker compose build` fails if either fails.
 
 **CI:** GitHub Actions (`.github/workflows/ci.yml`) runs `docker compose build` (Go build, frontend type check and build) and the test command above on every pull request to `main` and every push to `main`. Results are on the pull request and in the repository's Actions tab. A PR is merged only when CI is green on its latest commit.
 
@@ -201,7 +201,7 @@ internal/mocktools  Mock Tool Service handlers and migrations
 internal/devfixture development employees, groups and tools (opt-in)
 internal/webui      embedded web build and SPA fallback
 internal/testutil   test databases, fixtures, API test client, lock-wait and fault-injection helpers
-web/                React + TypeScript app (placeholder until the design arrives)
+web/                React + TypeScript UI (Turkish): pages, shared components, API client, translations
 deploy/postgres     database and user setup, run on first start
 ```
 
@@ -235,4 +235,8 @@ deploy/postgres     database and user setup, run on first start
 - A scheduled termination that the last-Super-Admin rule would refuse at its time is skipped, logged every minute and left due; scheduling already applies the rule, so this needs a change outside AccessFlow.
 - An approved extension cannot be withdrawn (it is already in force); give the access up with revoke instead.
 - Withdrawing an approved item sets its `closed_at` to the withdrawal time; the approval time stays in its steps and the audit log.
+- The UI is Turkish only (DECISIONS.md A7). It loads the Geist font from Google Fonts; offline, the browser falls back to a system font.
+- Saving a tool in the UI sends one call per change (the tool, then each level); if one fails, the earlier ones stay saved and the page shows the error.
+- New system reasons or routing notes added in the backend need a Turkish text in `web/src/i18n/reasons.ts`; until then the UI shows the English text.
+- The UI has no screens for lists the API does not offer yet: decided approvals, closed tasks and the direct-grant log.
 - The Mock Tool Service has no authentication: it is reachable only on the internal Docker network (DECISIONS.md A2). It is a stand-in for real tools, not a model of their security.

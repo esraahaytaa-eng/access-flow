@@ -50,6 +50,9 @@ func TestLoginSetsCookiesAndMeShowsTheEmployee(t *testing.T) {
 	if roles := got["roles"].([]any); len(roles) != 2 || roles[0] != "AUDITOR" || roles[1] != "INFOSEC" {
 		t.Errorf("roles = %v; want [AUDITOR INFOSEC]", roles)
 	}
+	if me.Body["companyTimezone"] != "Europe/Istanbul" || r.Body["companyTimezone"] != "Europe/Istanbul" {
+		t.Errorf("companyTimezone = %v (login %v); want Europe/Istanbul", me.Body["companyTimezone"], r.Body["companyTimezone"])
+	}
 	if n := env.auditCount("LOGIN_SUCCEEDED", emp.ID); n != 1 {
 		t.Errorf("LOGIN_SUCCEEDED events = %d; want 1", n)
 	}

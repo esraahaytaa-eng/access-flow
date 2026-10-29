@@ -117,7 +117,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleMe(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFrom(r.Context())
-	platform.WriteJSON(w, http.StatusOK, principalBody(p))
+	platform.WriteJSON(w, http.StatusOK, s.principalBody(p))
 }
 
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -155,10 +155,10 @@ func (s *Service) respondWithSession(w http.ResponseWriter, r *http.Request, ses
 		platform.WriteError(w, r, err)
 		return
 	}
-	platform.WriteJSON(w, http.StatusOK, principalBody(p))
+	platform.WriteJSON(w, http.StatusOK, s.principalBody(p))
 }
 
-func principalBody(p Principal) map[string]any {
+func (s *Service) principalBody(p Principal) map[string]any {
 	return map[string]any{
 		"employee": map[string]any{
 			"id":       p.EmployeeID,
@@ -168,6 +168,7 @@ func principalBody(p Principal) map[string]any {
 		},
 		"adminGroups":        p.AdminGroups,
 		"mustChangePassword": p.MustChangePassword,
+		"companyTimezone":    s.companyTimezone,
 	}
 }
 

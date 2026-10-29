@@ -34,9 +34,10 @@ func newEnv(t *testing.T) *testEnv {
 	db := testutil.NewDB(t)
 	logs := &bytes.Buffer{}
 	svc, err := NewService(db.App, Options{
-		Secret:        testSecret,
-		BootstrapFile: filepath.Join(t.TempDir(), "bootstrap-admin.txt"),
-		Logger:        slog.New(slog.NewTextHandler(logs, nil)),
+		Secret:          testSecret,
+		CompanyTimezone: "Europe/Istanbul",
+		BootstrapFile:   filepath.Join(t.TempDir(), "bootstrap-admin.txt"),
+		Logger:          slog.New(slog.NewTextHandler(logs, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
