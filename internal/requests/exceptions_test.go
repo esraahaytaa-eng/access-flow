@@ -44,6 +44,7 @@ func (w *world) member(p person, tool uuid.UUID) {
 }
 
 func TestExceptionsListFailedOperationsAndUnroutableSteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.failed(tl)
@@ -69,6 +70,7 @@ func TestExceptionsListFailedOperationsAndUnroutableSteps(t *testing.T) {
 }
 
 func TestManualRetryWorks(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	// The real mock rejects the GRANT: dev's level is suspended in the tool (409 level_suspended).
@@ -108,6 +110,7 @@ func TestManualRetryWorks(t *testing.T) {
 }
 
 func TestRetryOfAFailedRemoval(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -124,6 +127,7 @@ func TestRetryOfAFailedRemoval(t *testing.T) {
 }
 
 func TestRetryPermissionMatrix(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.failed(tl)
@@ -145,6 +149,7 @@ func TestRetryPermissionMatrix(t *testing.T) {
 }
 
 func TestRetryIsIdempotent(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.failed(tl)

@@ -18,6 +18,7 @@ func withdraw(c *testutil.Client, it map[string]any, reason any) testutil.Respon
 }
 
 func TestWithdrawBeforeDecision(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.skip.c, body(&w.dev.ID, item(w.awsAdmin), item(w.jiraViewer)))
 	aws, jira := items(req)[0], items(req)[1]
@@ -51,12 +52,14 @@ func TestWithdrawBeforeDecision(t *testing.T) {
 
 // An approved item can be withdrawn until work starts on its grant (tasks_test.go).
 func TestCannotWithdrawARejectedItem(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	r := decide(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.github))))[0]), "reject", map[string]any{"reason": "no"})
 	testutil.RequireStatus(t, withdraw(w.dev.c, r.Body, "x"), http.StatusConflict, "item_not_pending")
 }
 
 func TestReassignRespectsSeparationOfDuties(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	terminated := testutil.CreateEmployee(t, w.db, testutil.EmployeeSpec{Status: "TERMINATED"})
 	it := w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0]))
@@ -103,6 +106,7 @@ func TestReassignRespectsSeparationOfDuties(t *testing.T) {
 }
 
 func TestNobodyReassignsTheirOwnItem(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.exec("UPDATE employees SET manager_id = $2 WHERE id = $1", w.is1.ID, w.mgr.ID)
 	s := open(t, items(w.mustSubmit(w.is1.c, body(nil, item(w.jiraViewer))))[0])
@@ -111,6 +115,7 @@ func TestNobodyReassignsTheirOwnItem(t *testing.T) {
 }
 
 func TestOverrideRecordsTheSuperAdmin(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0])
 	testutil.RequireStatus(t, decide(w.is1.c, s, "override", map[string]any{"reason": "x"}), http.StatusForbidden, "forbidden")
@@ -138,6 +143,7 @@ func TestOverrideRecordsTheSuperAdmin(t *testing.T) {
 }
 
 func TestOverrideNotifiesTheBypassedAssignee(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := open(t, w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.github))))[0])))
 	testutil.RequireStatus(t, decide(w.admin.c, s, "override", map[string]any{"reason": "owner away"}), http.StatusOK, "")
@@ -147,6 +153,7 @@ func TestOverrideNotifiesTheBypassedAssignee(t *testing.T) {
 }
 
 func TestOverrideCannotReverseARejection(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0])
 	r := decide(w.mgr.c, s, "reject", map[string]any{"reason": "no"})
@@ -160,6 +167,7 @@ func TestOverrideCannotReverseARejection(t *testing.T) {
 }
 
 func TestNoOverrideOnOwnItem(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.exec("UPDATE employees SET manager_id = $2 WHERE id = $1", w.admin.ID, w.mgr.ID)
 	s := open(t, items(w.mustSubmit(w.admin.c, body(nil, item(w.jiraViewer))))[0])
@@ -170,6 +178,7 @@ func TestNoOverrideOnOwnItem(t *testing.T) {
 }
 
 func TestUnroutableStepListedAndResolvedByOverride(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	// The only InfoSec member left is the beneficiary: nobody may decide the pool step.
 	w.exec("UPDATE role_assignments SET valid_to = now() WHERE employee_id = $1", w.is2.ID)
@@ -202,6 +211,7 @@ func TestUnroutableStepListedAndResolvedByOverride(t *testing.T) {
 
 // A role removal committed while the reassignment waited for the target's row lock is seen.
 func TestReassignSeesARoleRemovalCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	loner := w.person(testutil.EmployeeSpec{})
 	s := open(t, items(w.mustSubmit(loner.c, body(nil, item(w.jiraViewer))))[0]) // Manager step in the InfoSec pool
@@ -227,6 +237,7 @@ func TestReassignSeesARoleRemovalCommittedWhileWaiting(t *testing.T) {
 
 // F2: an item keeps the steps it was submitted with; later level changes do not alter them.
 func TestStepsAreSnapshottedAtSubmission(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin)))
 	w.exec("UPDATE access_levels SET requires_infosec = false, requires_tool_owner = false WHERE id = $1", w.awsAdmin)
@@ -239,6 +250,7 @@ func TestStepsAreSnapshottedAtSubmission(t *testing.T) {
 // Reassigning a step to yourself would turn an override into an ordinary approval and skip
 // D1's record and notifications; an earlier approver may not pick the next decider either.
 func TestReassignPermissionMatrix(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
 	hr := w.person(testutil.EmployeeSpec{Roles: []string{"HR_MANAGER"}})

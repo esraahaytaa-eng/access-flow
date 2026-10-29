@@ -49,8 +49,12 @@ services:
     environment:
       DATABASE_URL: postgres://accessflow_app:accessflow_app_local@postgres:5432/accessflow
       MIGRATION_DATABASE_URL: postgres://accessflow_owner:accessflow_owner_local@postgres:5432/accessflow
-      # Shared password of dev-fixture users; local only, used only by `accessflow dev-fixture` (A4).
-      SEED_PASSWORD: accessflow-local-demo
+      # Local demo (DECISIONS.md A4/D12 notes, 2026-10-29): documented accounts with these
+      # passwords and the demo seed. The server refuses demo mode outside this setup; a real
+      # deployment removes these three lines.
+      ACCESSFLOW_DEMO: "true"
+      ACCESSFLOW_ENV: local
+      DEMO_PASSWORDS: admin=Demo-Admin-2026,infosec=Demo-InfoSec-2026,hr=Demo-HR-2026,auditor=Demo-Auditor-2026,manager=Demo-Manager-2026,owner=Demo-Owner-2026,employee=Demo-Employee-2026
       MOCK_TOOLS_URL: http://mocktools:8081
     volumes:
       - appdata:/var/lib/accessflow
@@ -70,7 +74,8 @@ services:
   postgres-test:
     <<: *postgres
     profiles: [test]
-    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    # Parallel tests each hold a few pools, so allow more than the default 100 connections.
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=400"]
     tmpfs:
       - /var/lib/postgresql
     volumes:
@@ -102,8 +107,8 @@ services:
         unformatted=$$(gofmt -l cmd internal)
         if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi
         go vet ./...
-        # internal/requests alone takes about 9 minutes with -race; packages run in parallel,
-        # so the 10-minute default is too short.
+        # internal/requests is the longest package (its tests run in parallel, about 4 minutes
+        # locally with -race); 20m leaves room on slow machines.
         go test -race -count=1 -timeout 20m ./...
 
 volumes:

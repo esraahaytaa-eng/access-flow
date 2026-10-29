@@ -66,19 +66,24 @@ func (tl *tools) state(t *testing.T, g map[string]any, email string) string {
 	return s
 }
 
-// inFlight starts one runner round whose tool call is delayed, and returns once the
-// operation is IN_PROGRESS; the channel yields the round's error.
-func (w *world) inFlight(tl *tools) <-chan error {
+// inFlight starts the runner on the next operation and holds its tool call, after which
+// then's faults apply, until finish: finish releases the call and returns the runner's error.
+func (w *world) inFlight(tl *tools, then ...func(*testutil.Faults)) (finish func() error) {
 	w.t.Helper()
-	tl.faults.DelayNext(500 * time.Millisecond)
+	release := tl.faults.HoldNext()
+	w.t.Cleanup(release) // a test that fails before finish does not leave the call held
+	for _, f := range then {
+		f(tl.faults)
+	}
 	done := make(chan error, 1)
 	go func() { _, err := tl.runner.RunOnce(context.Background()); done <- err }()
-	for deadline := time.Now().Add(5 * time.Second); w.count("SELECT count(*) FROM operations WHERE status = 'IN_PROGRESS'") == 0; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(testutil.WaitLimit); w.count("SELECT count(*) FROM operations WHERE status = 'IN_PROGRESS'") == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
+			release()
 			w.t.Fatal("never claimed")
 		}
 	}
-	return done
+	return func() error { release(); return <-done }
 }
 
 func (w *world) ops(g map[string]any, typ, status string) int {
@@ -92,6 +97,7 @@ func (w *world) openIntervals(g map[string]any) int {
 }
 
 func TestSuspendAPI(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -128,6 +134,7 @@ func TestSuspendAPI(t *testing.T) {
 }
 
 func TestSuspendDuringProvisioning(t *testing.T) {
+	t.Parallel()
 	t.Run("never sent: cancelled", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -145,7 +152,7 @@ func TestSuspendDuringProvisioning(t *testing.T) {
 		w.approved(w.jiraViewer)
 		done := w.inFlight(tl)
 		w.mustLifecycle(w.hr(), w.dev.ID, "suspend")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		if g := w.teamGrant(w.jiraViewer); g["status"] != "ACTIVE" || g["suspension"] != "SUSPENSION_REQUESTED" {
@@ -161,6 +168,7 @@ func TestSuspendDuringProvisioning(t *testing.T) {
 }
 
 func TestSuspendDuringLevelChange(t *testing.T) {
+	t.Parallel()
 	t.Run("new grant never sent", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -182,7 +190,7 @@ func TestSuspendDuringLevelChange(t *testing.T) {
 		w.levelChange(tl)
 		done := w.inFlight(tl)
 		w.mustLifecycle(w.hr(), w.dev.ID, "suspend")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		tl.drain(t)
@@ -196,6 +204,7 @@ func TestSuspendDuringLevelChange(t *testing.T) {
 }
 
 func TestExpiryAndRevokeDuringSuspension(t *testing.T) {
+	t.Parallel()
 	t.Run("expiry of a suspended grant", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -237,7 +246,7 @@ func TestExpiryAndRevokeDuringSuspension(t *testing.T) {
 		if found, err := tl.runner.RunOnce(context.Background()); err != nil || found {
 			t.Fatalf("the REVOKE ran before the SUSPEND in flight finished (found %v, %v)", found, err)
 		}
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		tl.drain(t)
@@ -250,6 +259,7 @@ func TestExpiryAndRevokeDuringSuspension(t *testing.T) {
 }
 
 func TestSuspendReroutesSteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 	step := open(t, items(req)[0])
@@ -274,6 +284,7 @@ func TestSuspendReroutesSteps(t *testing.T) {
 // is refused afterwards. An assigned step's item is in the suspension's lock set, so the
 // two serialize; a pool step's item is not, so the approval itself must check its actor.
 func TestApproveWhileApproverIsSuspended(t *testing.T) {
+	t.Parallel()
 	for _, pool := range []bool{false, true} {
 		t.Run(map[bool]string{false: "assigned step", true: "InfoSec pool step"}[pool], func(t *testing.T) {
 			w := newWorld(t)
@@ -330,7 +341,7 @@ func TestApproveWhileApproverIsSuspended(t *testing.T) {
 // waitForLock returns once some statement in this test's database waits for a row lock.
 func (w *world) waitForLock() {
 	w.t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); w.count(`SELECT count(*) FROM pg_stat_activity
+	for deadline := time.Now().Add(testutil.WaitLimit); w.count(`SELECT count(*) FROM pg_stat_activity
 		WHERE datname = current_database() AND wait_event_type = 'Lock'`) == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			w.t.Fatal("nothing waited for a lock")
@@ -340,6 +351,7 @@ func (w *world) waitForLock() {
 
 // A step re-routed to someone whose suspension is committing never stays with them.
 func TestRerouteToSomeoneBeingSuspended(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))) // the Manager step is mgr's
 	hr := w.hr()
@@ -364,6 +376,7 @@ func TestRerouteToSomeoneBeingSuspended(t *testing.T) {
 // A step routed to the person after the action locked its items, and withdrawn while the
 // action re-routes, is left as the withdrawal closed it (review 2026-10-29, finding 5).
 func TestRerouteSkipsAStepClosedMeanwhile(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := items(w.mustSubmit(w.mgr.c, body(nil, item(w.jiraViewer))))[0] // the Manager step is skip's
 	hr := w.hr()
@@ -398,7 +411,7 @@ func TestRerouteSkipsAStepClosedMeanwhile(t *testing.T) {
 	if err := hold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); w.count(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+	for deadline := time.Now().Add(testutil.WaitLimit); w.count(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
 		AND wait_event_type = 'Lock' AND query LIKE '%request_items WHERE id = $1 FOR UPDATE%'`) == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the re-route never waited for the item")
@@ -415,6 +428,7 @@ func TestRerouteSkipsAStepClosedMeanwhile(t *testing.T) {
 }
 
 func TestSuspendPermissions(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	plain := w.lifecycle(w.owner, w.dev.ID, "suspend")
@@ -433,6 +447,7 @@ func TestSuspendPermissions(t *testing.T) {
 }
 
 func TestSuspendConcurrently(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -458,6 +473,7 @@ func TestSuspendConcurrently(t *testing.T) {
 // The runner records a grant's activation while the employee is being suspended: both
 // take the employee first, so neither deadlocks and the grant ends suspended.
 func TestSuspendWhileRunnerRecords(t *testing.T) {
+	t.Parallel()
 	for round := range 10 {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -494,6 +510,7 @@ func (w *world) due() {
 }
 
 func TestSuspendManualAndVendor(t *testing.T) {
+	t.Parallel()
 	for _, method := range []string{"MANUAL", "VENDOR"} {
 		t.Run(method, func(t *testing.T) {
 			w := newWorld(t)
@@ -523,6 +540,7 @@ func TestSuspendManualAndVendor(t *testing.T) {
 // The employee is suspended but the tool still grants access: listed from the first failed
 // attempt until the suspension is verified or confirmed, and retryable (D7, O7).
 func TestSuspensionGapIsVisibleAndActionable(t *testing.T) {
+	t.Parallel()
 	t.Run("API retrying, then verified", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -612,12 +630,13 @@ func TestSuspensionGapIsVisibleAndActionable(t *testing.T) {
 
 // A grant that activated after the suspension and whose SUSPEND then fails is a gap too.
 func TestSuspensionGapForAGrantActivatedAfterSuspension(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
 	done := w.inFlight(tl)
 	w.mustLifecycle(w.hr(), w.dev.ID, "suspend")
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	tl.faults.RespondNext(http.StatusConflict, `{"error":"not_granted"}`)
@@ -628,6 +647,7 @@ func TestSuspensionGapForAGrantActivatedAfterSuspension(t *testing.T) {
 }
 
 func TestSuspendedClaimerTaskCanBeTakenOver(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.approved(f.manual)
@@ -643,18 +663,9 @@ func TestSuspendedClaimerTaskCanBeTakenOver(t *testing.T) {
 
 // inFlightThenFail is inFlight whose tool call applies and whose status lookup then fails:
 // the tool changed, the attempt failed.
-func (w *world) inFlightThenFail(tl *tools) <-chan error {
+func (w *world) inFlightThenFail(tl *tools) func() error {
 	w.t.Helper()
-	tl.faults.DelayNext(500 * time.Millisecond) // the call
-	tl.faults.FailNext(1, http.StatusServiceUnavailable)
-	done := make(chan error, 1)
-	go func() { _, err := tl.runner.RunOnce(context.Background()); done <- err }()
-	for deadline := time.Now().Add(5 * time.Second); w.count("SELECT count(*) FROM operations WHERE status = 'IN_PROGRESS'") == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			w.t.Fatal("never claimed")
-		}
-	}
-	return done
+	return w.inFlight(tl, func(f *testutil.Faults) { f.FailNext(1, http.StatusServiceUnavailable) })
 }
 
 // suspended gives dev an ACTIVE Jira Viewer, suspended and verified.
@@ -668,6 +679,7 @@ func (w *world) suspended(tl *tools, hr person) map[string]any {
 }
 
 func TestReactivateAPI(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -693,6 +705,7 @@ func TestReactivateAPI(t *testing.T) {
 }
 
 func TestReactivateReevaluates(t *testing.T) {
+	t.Parallel()
 	t.Run("retired level", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -752,6 +765,7 @@ func TestReactivateReevaluates(t *testing.T) {
 }
 
 func TestReactivateDuringSuspend(t *testing.T) {
+	t.Parallel()
 	t.Run("never sent", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -796,7 +810,7 @@ func TestReactivateDuringSuspend(t *testing.T) {
 		w.mustLifecycle(hr, w.dev.ID, "suspend")
 		done := w.inFlight(tl)
 		w.mustLifecycle(hr, w.dev.ID, "reactivate")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		tl.drain(t)
@@ -819,6 +833,7 @@ func (w *world) failedOps(p person) []any {
 // A SUSPEND or RESUME overtaken by the opposite action or a removal is cancelled, never
 // retried or failed, so it cannot apply the wrong state later (review findings 1-3).
 func TestStaleSuspensionOperationsAreCancelled(t *testing.T) {
+	t.Parallel()
 	t.Run("SUSPEND failing after reactivation", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -828,7 +843,7 @@ func TestStaleSuspensionOperationsAreCancelled(t *testing.T) {
 		w.mustLifecycle(hr, w.dev.ID, "suspend")
 		done := w.inFlightThenFail(tl)
 		w.mustLifecycle(hr, w.dev.ID, "reactivate")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		g := w.teamGrant(w.jiraViewer)
@@ -849,7 +864,7 @@ func TestStaleSuspensionOperationsAreCancelled(t *testing.T) {
 		w.mustLifecycle(hr, w.dev.ID, "reactivate")
 		done := w.inFlightThenFail(tl)
 		w.mustLifecycle(hr, w.dev.ID, "suspend")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		if w.ops(g, "RESUME", "CANCELLED") != 1 || w.ops(g, "RESUME", "PENDING")+w.ops(g, "RESUME", "FAILED") != 0 {
@@ -869,7 +884,7 @@ func TestStaleSuspensionOperationsAreCancelled(t *testing.T) {
 		w.mustLifecycle(hr, w.dev.ID, "reactivate")
 		done := w.inFlight(tl)
 		w.mustRevoke(w.mgr.c, w.teamGrant(w.jiraViewer))
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		if w.openIntervals(g) != 0 || w.count(`SELECT count(*) FROM grant_suspensions s JOIN operations o ON o.grant_id = s.grant_id
@@ -901,6 +916,7 @@ func TestStaleSuspensionOperationsAreCancelled(t *testing.T) {
 // be earlier than an operation committed meanwhile; the order is the insert order (uuidv7
 // ids), so a backdated created_at changes nothing (review 2026-10-29, finding 2).
 func TestOperationOrderIsInsertOrder(t *testing.T) {
+	t.Parallel()
 	backdate := func(w *world, typ string, before string) {
 		w.exec(`UPDATE operations SET created_at = (SELECT created_at FROM operations WHERE type = $2) - interval '1 minute'
 			WHERE type = $1`, typ, before)
@@ -926,7 +942,7 @@ func TestOperationOrderIsInsertOrder(t *testing.T) {
 		done := w.inFlightThenFail(tl)
 		w.mustLifecycle(hr, w.dev.ID, "reactivate")
 		backdate(w, "RESUME", "SUSPEND")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		g := w.teamGrant(w.jiraViewer)
@@ -937,6 +953,7 @@ func TestOperationOrderIsInsertOrder(t *testing.T) {
 }
 
 func TestReactivateResumeManual(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	hr := w.hr()
@@ -949,6 +966,7 @@ func TestReactivateResumeManual(t *testing.T) {
 }
 
 func TestReactivateRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	testutil.RequireStatus(t, w.lifecycle(hr, w.dev.ID, "reactivate"), http.StatusConflict, "employee_status")
@@ -970,6 +988,7 @@ func (w *world) securityRevocations(p person) []any {
 // The "14 leavers" path: every open grant, whatever its state, gets a priority-0 removal
 // that stays in Exceptions until verified or confirmed (D7, O7).
 func TestTerminateRemovesEverything(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()
@@ -1020,6 +1039,7 @@ func TestTerminateRemovesEverything(t *testing.T) {
 
 // A grant never sent to the tool has nothing to remove: termination cancels it with no call.
 func TestTerminateCancelsNeverSentGrant(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer) // queued, not yet run
 	w.mustLifecycle(w.hr(), w.dev.ID, "terminate")
@@ -1036,6 +1056,7 @@ func TestTerminateCancelsNeverSentGrant(t *testing.T) {
 // An API GRANT call in flight is not cancelled: the removal waits for it, so the GRANT
 // cannot re-apply access after the removal (D5, D7).
 func TestTerminateDuringGrantInFlight(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -1045,7 +1066,7 @@ func TestTerminateDuringGrantInFlight(t *testing.T) {
 	if w.ops(g, "GRANT", "IN_PROGRESS") != 1 {
 		t.Fatal("the GRANT call in flight was cancelled")
 	}
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	tl.drain(t)
@@ -1057,6 +1078,7 @@ func TestTerminateDuringGrantInFlight(t *testing.T) {
 }
 
 func TestTerminateDuringSuspendInFlight(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -1065,7 +1087,7 @@ func TestTerminateDuringSuspendInFlight(t *testing.T) {
 	w.mustLifecycle(hr, w.dev.ID, "suspend")
 	done := w.inFlightThenFail(tl)
 	w.mustLifecycle(hr, w.dev.ID, "terminate")
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	g := w.teamGrant(w.jiraViewer)
@@ -1078,6 +1100,7 @@ func TestTerminateDuringSuspendInFlight(t *testing.T) {
 }
 
 func TestTerminateDuringResumeInFlight(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -1085,7 +1108,7 @@ func TestTerminateDuringResumeInFlight(t *testing.T) {
 	w.mustLifecycle(hr, w.dev.ID, "reactivate")
 	done := w.inFlight(tl)
 	w.mustLifecycle(hr, w.dev.ID, "terminate")
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	if w.openIntervals(g) != 0 {
@@ -1100,6 +1123,7 @@ func TestTerminateDuringResumeInFlight(t *testing.T) {
 }
 
 func TestTerminationRemovalsRunFirst(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -1126,12 +1150,13 @@ func TestTerminationRemovalsRunFirst(t *testing.T) {
 }
 
 func TestTerminateReplacementInFlight(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	old, _ := w.levelChange(tl)
 	done := w.inFlight(tl)
 	w.mustLifecycle(w.hr(), w.dev.ID, "terminate")
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	tl.drain(t)
@@ -1149,6 +1174,7 @@ func TestTerminateReplacementInFlight(t *testing.T) {
 
 // Two Super Admins terminating each other: one wins, the other is signed out by it.
 func TestSuperAdminsTerminatingEachOther(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
 	var wg sync.WaitGroup
@@ -1173,6 +1199,7 @@ func TestSuperAdminsTerminatingEachOther(t *testing.T) {
 }
 
 func TestTerminateRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	testutil.RequireStatus(t, w.lifecycle(hr, w.is1.ID, "terminate"), http.StatusForbidden, "privileged_reset_requires_super_admin")
@@ -1210,6 +1237,7 @@ func TestTerminateRules(t *testing.T) {
 }
 
 func TestTerminateCancelsPendingWork(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.mustSubmit(w.mgr.c, body(&w.dev.ID, item(w.github))) // on the employee's behalf
 	w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))   // a step for the manager
@@ -1226,6 +1254,7 @@ func TestTerminateCancelsPendingWork(t *testing.T) {
 // A RESUME queued while the SUSPEND is in flight waits for it, so the tool applies them in
 // order and the employee ends with the level active.
 func TestResumeWaitsForSuspendInFlight(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -1237,7 +1266,7 @@ func TestResumeWaitsForSuspendInFlight(t *testing.T) {
 	if found, err := tl.runner.RunOnce(context.Background()); err != nil || found {
 		t.Fatalf("the RESUME ran while the SUSPEND was in flight (found %v, %v)", found, err)
 	}
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	tl.drain(t)
@@ -1251,6 +1280,7 @@ func TestResumeWaitsForSuspendInFlight(t *testing.T) {
 // An HR Manager suspended while their own action waits for the lifecycle lock is refused:
 // suspension blocks every action by the employee (D7).
 func TestActorSuspendedWhileActing(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	v := w.version(w.dev.ID)
@@ -1278,6 +1308,7 @@ func TestActorSuspendedWhileActing(t *testing.T) {
 // A task action or retry passed its session check, then waited for the grant's employee
 // while its actor was suspended: it is refused, as an approval is (D7).
 func TestTaskActorSuspendedWhileActing(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"confirm", "retry"} {
 		t.Run(action, func(t *testing.T) {
 			w := newWorld(t)
@@ -1318,6 +1349,7 @@ func TestTaskActorSuspendedWhileActing(t *testing.T) {
 // termination cancels it, so its claimer cannot re-enable a leaver and the removal task is
 // ready at once (D7: termination overrides any pending resume).
 func TestTerminateCancelsClaimedSuspensionTasks(t *testing.T) {
+	t.Parallel()
 	for _, typ := range []string{"SUSPEND", "RESUME"} {
 		t.Run(typ, func(t *testing.T) {
 			w := newWorld(t)
@@ -1351,6 +1383,7 @@ func TestTerminateCancelsClaimedSuspensionTasks(t *testing.T) {
 // removal task is ready at once instead of waiting on its claimer (D7, A6), also when an
 // ordinary revoke was already waiting for it. That revoke alone waits (TestRevokeWhileGrantTaskClaimed).
 func TestTerminateCancelsClaimedGrantTask(t *testing.T) {
+	t.Parallel()
 	for _, method := range []string{"MANUAL", "VENDOR"} {
 		for _, revokedFirst := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s revoked first %v", method, revokedFirst), func(t *testing.T) {
@@ -1387,6 +1420,7 @@ func TestTerminateCancelsClaimedGrantTask(t *testing.T) {
 
 // A leaver's removal task heads the queue, ahead of older tasks (A6, D7).
 func TestTerminationTasksComeFirst(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.fulfilled(f, f.manual)

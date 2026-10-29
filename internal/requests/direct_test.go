@@ -37,6 +37,7 @@ func (w *world) mustDirectGrant(level uuid.UUID) map[string]any {
 }
 
 func TestDirectGrantAPI(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	b := directBody(w.dev.ID, w.jiraViewer, in(30))
@@ -67,6 +68,7 @@ func TestDirectGrantAPI(t *testing.T) {
 }
 
 func TestDirectGrantManualInitiatorCannotConfirm(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.member(w.admin, f.manualTool)
@@ -82,6 +84,7 @@ func TestDirectGrantManualInitiatorCannotConfirm(t *testing.T) {
 }
 
 func TestDirectGrantRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	retired := testutil.CreateLevel(t, w.db, w.jira, "Old", false, false)
@@ -124,6 +127,7 @@ func TestDirectGrantRules(t *testing.T) {
 }
 
 func TestDirectGrantNotifications(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	notes := func(p person) int {
 		return w.count("SELECT count(*) FROM notifications WHERE recipient_id = $1 AND kind = 'DIRECT_GRANT'", p.ID)
@@ -141,6 +145,7 @@ func TestDirectGrantNotifications(t *testing.T) {
 }
 
 func TestDirectRevoke(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()

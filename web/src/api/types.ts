@@ -538,3 +538,7 @@ export type NominationsResponse = { nominations: SuperAdminNomination[] };
 
 /** GET /admin/health */
 export type AdminHealth = { activeSuperAdmins: number; infosecMembers: number; recoveryRequired: boolean; warning: boolean };
+
+export interface DemoResponse {
+  accounts: { key: string; email: string; role: string }[];
+}

@@ -42,6 +42,7 @@ func (w *world) health(p person) map[string]any {
 }
 
 func TestSuperAdminPromotionIsTwoPerson(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	if h := w.health(w.admin); h["activeSuperAdmins"] != float64(1) || h["recoveryRequired"] != false {
 		t.Fatalf("health = %v", h)
@@ -85,6 +86,7 @@ func TestSuperAdminPromotionIsTwoPerson(t *testing.T) {
 }
 
 func TestNominationExpiresAfterSevenDays(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	n := w.mustNominate(w.admin, w.dev.ID)
 	if w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND expires_at = created_at + interval '7 days'", n["id"]) != 1 {
@@ -99,6 +101,7 @@ func TestNominationExpiresAfterSevenDays(t *testing.T) {
 }
 
 func TestConcurrentAuthorizationsAreConsistent(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	n := w.mustNominate(w.admin, w.dev.ID)
 	var wg sync.WaitGroup
@@ -126,6 +129,7 @@ func TestConcurrentAuthorizationsAreConsistent(t *testing.T) {
 // Only a Super Admin may end a Super Admin's employment, so the last one leaves through a
 // termination another Super Admin scheduled.
 func TestRecoveryAfterTheLastSuperAdminLeaves(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -178,6 +182,7 @@ func TestRecoveryAfterTheLastSuperAdminLeaves(t *testing.T) {
 
 // An actor suspended while their nomination or decision waited for the lock acts no more (D7).
 func TestSuccessionActorSuspendedWhileWaiting(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	n := w.mustNominate(w.admin, w.dev.ID)
 	suspend := func(id uuid.UUID) func(context.Context, pgx.Tx) error {
@@ -201,6 +206,7 @@ func TestSuccessionActorSuspendedWhileWaiting(t *testing.T) {
 
 // A nominee who became Super Admin another way (recover-admin) is refused, not a 500.
 func TestAuthorizingASuperAdminNominee(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	n := w.mustNominate(w.admin, w.dev.ID)
 	w.exec("INSERT INTO role_assignments (employee_id, role) VALUES ($1, 'SUPER_ADMIN')", w.dev.ID)
@@ -208,6 +214,7 @@ func TestAuthorizingASuperAdminNominee(t *testing.T) {
 }
 
 func TestNominationExpiryIsAudited(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	n := w.mustNominate(w.admin, w.dev.ID)
 	w.exec("UPDATE super_admin_nominations SET created_at = created_at - interval '8 days', expires_at = expires_at - interval '8 days' WHERE id = $1", n["id"])

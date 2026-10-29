@@ -15,6 +15,7 @@ import (
 func ref(id uuid.UUID) *uuid.UUID { return &id }
 
 func TestExclusions(t *testing.T) {
+	t.Parallel()
 	ben, sub, mgr := uuid.New(), uuid.New(), uuid.New()
 	ex := Exclusions(ben, sub, []uuid.UUID{mgr})
 	if ex[ben] != "the beneficiary" || ex[sub] != "the submitter" || ex[mgr] != "an earlier approver" || len(ex) != 3 {
@@ -30,6 +31,7 @@ func TestExclusions(t *testing.T) {
 }
 
 func TestRouteManager(t *testing.T) {
+	t.Parallel()
 	ben, mgr, skip := uuid.New(), uuid.New(), uuid.New()
 	active := func(id uuid.UUID) *Candidate { return &Candidate{ID: id, Active: true} }
 	inactive := func(id uuid.UUID) *Candidate { return &Candidate{ID: id} }
@@ -60,6 +62,7 @@ func TestRouteManager(t *testing.T) {
 }
 
 func TestRouteToolOwner(t *testing.T) {
+	t.Parallel()
 	owner := uuid.New()
 	cases := []struct {
 		name   string
@@ -88,6 +91,7 @@ func sameRoute(a, b Route) bool {
 }
 
 func TestCanDecide(t *testing.T) {
+	t.Parallel()
 	me, other, ben := uuid.New(), uuid.New(), uuid.New()
 	mine := Step{AssigneeID: ref(me)}
 	pool := Step{Pool: "INFOSEC"}
@@ -117,6 +121,7 @@ func TestCanDecide(t *testing.T) {
 }
 
 func TestParseDuration(t *testing.T) {
+	t.Parallel()
 	istanbul, err := time.LoadLocation("Europe/Istanbul")
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +166,7 @@ func TestParseDuration(t *testing.T) {
 }
 
 func TestDirectExpiry(t *testing.T) {
+	t.Parallel()
 	istanbul, err := time.LoadLocation("Europe/Istanbul")
 	if err != nil {
 		t.Fatal(err)
@@ -203,6 +209,7 @@ func TestDirectExpiry(t *testing.T) {
 }
 
 func TestTransitions(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		moves    map[string][]string
 		from, to string
@@ -229,6 +236,7 @@ func TestTransitions(t *testing.T) {
 }
 
 func TestPolicySteps(t *testing.T) {
+	t.Parallel()
 	have := func(types ...string) []Step {
 		var out []Step
 		for _, typ := range types {

@@ -3,7 +3,9 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"time"
 	_ "time/tzdata" // the distroless image has no zoneinfo
@@ -18,7 +20,8 @@ type Config struct {
 	SecureCookies        bool   // COOKIE_SECURE: set when served over HTTPS (A4)
 	BootstrapAdminEmail  string // the initial Super Admin, created once (A4)
 	BootstrapFile        string // where its one-time password is written
-	SeedPassword         string // SEED_PASSWORD: shared local-only password of seeded users (A4)
+	Demo                 bool   // ACCESSFLOW_DEMO: local demo accounts and seed (A4, D12); fails closed outside the local setup
+	DemoPasswords        string // DEMO_PASSWORDS: "account=password,..." for the documented demo accounts
 	CompanyTimezone      string // COMPANY_TIMEZONE: the zone that dates such as expiry are in (A6)
 	MockToolsURL         string // MOCK_TOOLS_URL: base URL of the Mock Tool Service (A6)
 }
@@ -32,7 +35,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		JWTSecret:            getenv("JWT_SECRET"),
 		BootstrapAdminEmail:  getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapFile:        getenv("BOOTSTRAP_FILE"),
-		SeedPassword:         getenv("SEED_PASSWORD"),
+		DemoPasswords:        getenv("DEMO_PASSWORDS"),
 		CompanyTimezone:      getenv("COMPANY_TIMEZONE"),
 		MockToolsURL:         getenv("MOCK_TOOLS_URL"),
 	}
@@ -67,5 +70,40 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if cfg.MigrationDatabaseURL == "" {
 		return Config{}, fmt.Errorf("MIGRATION_DATABASE_URL is required")
 	}
+	if v := getenv("ACCESSFLOW_DEMO"); v != "" {
+		demo, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ACCESSFLOW_DEMO must be true or false: %w", err)
+		}
+		cfg.Demo = demo
+	}
+	if cfg.Demo {
+		if err := checkLocal(cfg, getenv("ACCESSFLOW_ENV")); err != nil {
+			return Config{}, fmt.Errorf("demo mode refused: %w", err)
+		}
+	}
 	return cfg, nil
+}
+
+// checkLocal lets demo mode (known passwords) run only in the local Compose setup (A4 note
+// 2026-10-29): every check must pass, so a real deployment fails closed.
+func checkLocal(cfg Config, env string) error {
+	switch {
+	case env != "local":
+		return errors.New("ACCESSFLOW_ENV must be local")
+	case cfg.SecureCookies:
+		return errors.New("COOKIE_SECURE is set")
+	case cfg.JWTSecret != "":
+		return errors.New("JWT_SECRET is set")
+	case cfg.DemoPasswords == "":
+		return errors.New("DEMO_PASSWORDS is required")
+	}
+	for _, u := range []string{cfg.DatabaseURL, cfg.MigrationDatabaseURL} {
+		// No query: pgx would let a host parameter there override the URL's host.
+		parsed, err := url.Parse(u)
+		if err != nil || parsed.Hostname() != "postgres" || parsed.RawQuery != "" {
+			return errors.New("the databases must be the Compose postgres service")
+		}
+	}
+	return nil
 }

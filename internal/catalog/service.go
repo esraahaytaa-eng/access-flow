@@ -37,7 +37,7 @@ func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 
 func actorRef(p auth.Principal) *uuid.UUID {
 	if p.EmployeeID == uuid.Nil {
-		return nil // the system (dev fixture)
+		return nil // the system (demo seed)
 	}
 	return &p.EmployeeID
 }

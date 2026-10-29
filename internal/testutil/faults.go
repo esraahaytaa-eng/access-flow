@@ -42,6 +42,20 @@ func (f *Faults) DelayNext(d time.Duration) {
 	})
 }
 
+// HoldNext holds the next request until release is called (or the client gives up), then
+// serves it: a call in flight for exactly as long as the test needs, with no fixed delay.
+func (f *Faults) HoldNext() (release func()) {
+	held := make(chan struct{})
+	f.push(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-held:
+			f.next.ServeHTTP(w, r)
+		case <-r.Context().Done():
+		}
+	})
+	return sync.OnceFunc(func() { close(held) })
+}
+
 // MalformNext answers the next request with a truncated JSON body and status 200.
 func (f *Faults) MalformNext() {
 	f.push(func(w http.ResponseWriter, _ *http.Request) {

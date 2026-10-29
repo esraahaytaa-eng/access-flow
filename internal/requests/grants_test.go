@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,7 +31,7 @@ func (w *world) startTools() *tools {
 	srv.Listener = w.toolsLn // the address the import routes call
 	srv.Start()
 	w.t.Cleanup(srv.Close)
-	return &tools{mock, faults, access.NewRunner(w.db.App, access.NewHTTPToolClient(srv.URL, 5*time.Second))}
+	return &tools{mock, faults, access.NewRunner(w.db.App, access.NewHTTPToolClient(srv.URL, testutil.WaitLimit))}
 }
 
 // drain runs the runner until nothing is due.
@@ -94,6 +93,7 @@ func requireGrant(t *testing.T, g map[string]any, status, display string) {
 
 // The whole CASE flow against the real Mock Tool Service.
 func TestVoluntaryRevokeEndToEnd(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -133,6 +133,7 @@ func TestVoluntaryRevokeEndToEnd(t *testing.T) {
 }
 
 func TestManagerRevokesDirectReport(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -150,6 +151,7 @@ func TestManagerRevokesDirectReport(t *testing.T) {
 }
 
 func TestRevokeWhileQueuedCancels(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -170,19 +172,13 @@ func TestRevokeWhileQueuedCancels(t *testing.T) {
 // The removal arrives while the provisioning call is in flight: the GRANT completes and
 // records when access began, then the REVOKE removes it.
 func TestRevokeWhileInFlight(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
-	tl.faults.DelayNext(500 * time.Millisecond)
-	done := make(chan error, 1)
-	go func() { _, err := tl.runner.RunOnce(context.Background()); done <- err }()
-	for deadline := time.Now().Add(5 * time.Second); w.count("SELECT count(*) FROM operations WHERE status = 'IN_PROGRESS'") == 0; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("never claimed")
-		}
-	}
+	done := w.inFlight(tl)
 	requireGrant(t, w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraViewer)), "REVOCATION_REQUESTED", "REVOCATION_REQUESTED")
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	tl.drain(t)
@@ -195,6 +191,7 @@ func TestRevokeWhileInFlight(t *testing.T) {
 
 // The tool applied the grant but the answer was lost; the removal still removes it.
 func TestRevokeWhileRetrying(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -220,6 +217,7 @@ func TestRevokeWhileRetrying(t *testing.T) {
 }
 
 func TestRevokeAfterFailed(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -236,6 +234,7 @@ func TestRevokeAfterFailed(t *testing.T) {
 }
 
 func TestRepeatedRevokeIsIdempotent(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -260,6 +259,7 @@ func TestRepeatedRevokeIsIdempotent(t *testing.T) {
 }
 
 func TestRevokeInput(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -276,6 +276,7 @@ func TestRevokeInput(t *testing.T) {
 }
 
 func TestRevokePermissionMatrix(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
 	for _, tc := range []struct {
@@ -302,6 +303,7 @@ func TestRevokePermissionMatrix(t *testing.T) {
 }
 
 func TestMyAccessAndTeamVisibility(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)                                                                     // dev's
 	w.approve(w.skip.c, open(t, items(w.mustSubmit(w.mgr.c, body(nil, item(w.jiraViewer))))[0])) // mgr's
@@ -340,34 +342,22 @@ func TestMyAccessAndTeamVisibility(t *testing.T) {
 // The removal arrives while a provisioning attempt is in flight, and that attempt fails:
 // the GRANT is cancelled (never retried after the removal) and the REVOKE runs.
 func TestGrantFailingAfterRevokeIsCancelled(t *testing.T) {
+	t.Parallel()
 	for _, fail := range []struct {
 		name   string
 		inject func(*testutil.Faults)
 	}{
-		{"transient", func(f *testutil.Faults) {
-			f.DelayNext(500 * time.Millisecond)
-			f.FailNext(1, http.StatusServiceUnavailable)
-		}},
-		{"rejected", func(f *testutil.Faults) {
-			f.DelayNext(500 * time.Millisecond)
-			f.RespondNext(http.StatusConflict, `{"error":"level_suspended"}`)
-		}},
+		{"transient", func(f *testutil.Faults) { f.FailNext(1, http.StatusServiceUnavailable) }},
+		{"rejected", func(f *testutil.Faults) { f.RespondNext(http.StatusConflict, `{"error":"level_suspended"}`) }},
 	} {
 		t.Run(fail.name, func(t *testing.T) {
 			w := newWorld(t)
 			tl := w.startTools()
 			w.approved(w.jiraViewer)
-			// The delayed Apply reaches the tool; the status lookup after it fails.
-			fail.inject(tl.faults)
-			done := make(chan error, 1)
-			go func() { _, err := tl.runner.RunOnce(context.Background()); done <- err }()
-			for deadline := time.Now().Add(5 * time.Second); w.count("SELECT count(*) FROM operations WHERE status = 'IN_PROGRESS'") == 0; time.Sleep(10 * time.Millisecond) {
-				if time.Now().After(deadline) {
-					t.Fatal("never claimed")
-				}
-			}
+			// The held Apply reaches the tool; the status lookup after it fails.
+			done := w.inFlight(tl, fail.inject)
 			requireGrant(t, w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraViewer)), "REVOCATION_REQUESTED", "REVOCATION_REQUESTED")
-			if err := <-done; err != nil {
+			if err := done(); err != nil {
 				t.Fatal(err)
 			}
 			if n := w.count("SELECT count(*) FROM operations WHERE type = 'GRANT' AND status = 'CANCELLED'"); n != 1 || w.audits("OPERATION_CANCELLED") != 1 {

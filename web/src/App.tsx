@@ -58,7 +58,7 @@ function Root() {
   const signOut = () => api.post("/auth/logout").then(() => setPrincipal(null), (err) => toast({ type: "error", title: "Çıkış yapılamadı", desc: errorMessage(err) }));
 
   if (me.isPending) return null;
-  if (me.isError) return <div className="login-main"><p className="muted">Sunucuya ulaşılamıyor. Sayfayı yenileyin.</p></div>;
+  if (me.isError) return <div className="login"><p className="muted">Sunucuya ulaşılamıyor. Sayfayı yenileyin.</p></div>;
   if (!me.data) return <LoginPage onSignedIn={setPrincipal} />;
   if (me.data.mustChangePassword) return <ForcedPasswordChange onChanged={setPrincipal} onSignOut={signOut} />;
   return (

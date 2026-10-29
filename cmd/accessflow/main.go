@@ -21,7 +21,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
-	"github.com/esraahaytaa-eng/access-flow/internal/devfixture"
+	"github.com/esraahaytaa-eng/access-flow/internal/demo"
 	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
@@ -83,10 +83,19 @@ func run(args []string) error {
 		}
 		return svc.RecoverAdmin(ctx, args[1])
 	}
-	if len(args) > 0 && args[0] == "dev-fixture" {
-		return runDevFixture(ctx, people.NewService(pool, svc), catalog.NewService(pool), cfg.SeedPassword, os.Stdout)
+	// Demo mode (A4, D12 notes 2026-10-29): LoadConfig allowed it only in the local setup.
+	var demoAdmin *auth.DemoAdmin
+	var demoPasswords map[string]string
+	var demoAccounts []demo.Account
+	if cfg.Demo {
+		if demoPasswords, err = demo.ParsePasswords(cfg.DemoPasswords); err != nil {
+			return err
+		}
+		demoAdmin = &auth.DemoAdmin{FullName: demo.AdminName, Password: demoPasswords["admin"]}
+		demoAccounts = demo.Accounts
+		slog.Warn("demo mode on: documented demo accounts with known passwords; local use only")
 	}
-	if err := svc.Bootstrap(ctx, cfg.BootstrapAdminEmail); err != nil {
+	if err := svc.Bootstrap(ctx, cfg.BootstrapAdminEmail, demoAdmin); err != nil {
 		return err
 	}
 	if err := svc.RemoveFinishedBootstrapFile(ctx); err != nil {
@@ -104,20 +113,33 @@ func run(args []string) error {
 	var wg sync.WaitGroup
 	wg.Go(func() { runner.Run(ctx) })
 	wg.Go(func() { sweeps.New(pool, loc, requests.TerminateDue).Run(ctx) })
+	if cfg.Demo {
+		// The seed needs the runner for its API operations, so it runs beside it; the
+		// server starts at once and the demo data appears within seconds.
+		services := demo.Services{Pool: pool, Auth: svc, People: people.NewService(pool, svc), Catalog: catalog.NewService(pool),
+			Requests: requests.NewService(pool, loc), Access: access.NewService(pool, tools), Reviews: reviews.NewService(pool),
+			Tools: tools, Location: loc}
+		wg.Go(func() {
+			if err := demo.Seed(ctx, services, cfg.BootstrapAdminEmail, demoPasswords); err != nil && ctx.Err() == nil {
+				slog.Error("demo seed failed", "err", err)
+			}
+		})
+	}
 	defer wg.Wait()
 	defer stop() // runs first: a server that fails to start must stop the runner too
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(pool, svc, loc, tools, webui.Dist()),
+		Handler:           newRouter(pool, svc, loc, tools, webui.Dist(), demoAccounts),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
 	return platform.Serve(ctx, srv)
 }
 
-// newRouter serves the JSON API under /api and the web app on every other path.
-func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools *access.HTTPToolClient, dist fs.FS) http.Handler {
+// newRouter serves the JSON API under /api and the web app on every other path. Demo
+// accounts (demo mode only) are listed, without passwords, for the sign-in page.
+func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools *access.HTTPToolClient, dist fs.FS, demoAccounts []demo.Account) http.Handler {
 	// Rejects cross-origin unsafe requests (Sec-Fetch-Site / Origin), on top of the CSRF token (A4).
 	crossOrigin := http.NewCrossOriginProtection()
 	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +164,11 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 		r.Route("/v1", func(r chi.Router) {
 			r.Method(http.MethodGet, "/health", platform.HealthHandler(pool.Ping))
 			r.Mount("/auth", svc.Routes())
+			if demoAccounts != nil {
+				r.Get("/demo", func(w http.ResponseWriter, r *http.Request) {
+					platform.WriteJSON(w, http.StatusOK, map[string]any{"accounts": demoAccounts})
+				})
+			}
 			r.Group(func(r chi.Router) {
 				r.Use(svc.RequireSession)
 				peopleSvc.Register(r)
@@ -170,17 +197,4 @@ func printBootstrapPassword(file string, out io.Writer) error {
 	}
 	_, err = out.Write(data)
 	return err
-}
-
-// runDevFixture creates the development employees, groups and tools on request (never at startup).
-func runDevFixture(ctx context.Context, svc *people.Service, cat *catalog.Service, password string, out io.Writer) error {
-	created, err := devfixture.Run(ctx, svc, cat, password)
-	for _, email := range created {
-		fmt.Fprintln(out, "created", email)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "%d records created; fixture employees sign in with the SEED_PASSWORD value (local only)\n", len(created))
-	return nil
 }

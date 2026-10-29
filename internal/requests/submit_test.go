@@ -16,6 +16,7 @@ import (
 )
 
 func TestSubmitJiraViewerNeedsOnlyManager(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 	it := items(req)[0]
@@ -36,6 +37,7 @@ func TestSubmitJiraViewerNeedsOnlyManager(t *testing.T) {
 }
 
 func TestSubmitAWSAdminHasThreeSteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	s := steps(items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0])
 	want := [][2]string{{"MANAGER", "PENDING"}, {"TOOL_OWNER", "WAITING"}, {"INFOSEC", "WAITING"}}
@@ -53,6 +55,7 @@ func TestSubmitAWSAdminHasThreeSteps(t *testing.T) {
 }
 
 func TestOnBehalfByManagerIsApprovedBySubmission(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.mgr.c, body(&w.dev.ID, item(w.jiraViewer), item(w.awsAdmin)))
 	if req["beneficiary"].(map[string]any)["id"] != w.dev.ID.String() || req["submittedBy"].(map[string]any)["id"] != w.mgr.ID.String() {
@@ -80,6 +83,7 @@ func TestOnBehalfByManagerIsApprovedBySubmission(t *testing.T) {
 }
 
 func TestOnBehalfByOtherNeedsManager(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.person(testutil.EmployeeSpec{Roles: []string{"HR_MANAGER"}})
 	for _, submitter := range []person{w.skip, hr} {
@@ -95,6 +99,7 @@ func TestOnBehalfByOtherNeedsManager(t *testing.T) {
 }
 
 func TestOneEmailPerSubmission(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer), item(w.awsAdmin), item(w.github)))
 	var subject, text string
@@ -123,6 +128,7 @@ func TestOneEmailPerSubmission(t *testing.T) {
 }
 
 func TestNoEmailWhenManagerStepGoesToInfoSec(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	loner := w.person(testutil.EmployeeSpec{})
 	s := open(t, items(w.mustSubmit(loner.c, body(nil, item(w.jiraViewer))))[0])
@@ -135,6 +141,7 @@ func TestNoEmailWhenManagerStepGoesToInfoSec(t *testing.T) {
 }
 
 func TestManagerFallbackWhenManagerInactive(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.exec("UPDATE employees SET status = 'SUSPENDED' WHERE id = $1", w.mgr.ID)
 	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0])
@@ -147,6 +154,7 @@ func TestManagerFallbackWhenManagerInactive(t *testing.T) {
 }
 
 func TestRepeatedSubmissionIDReturnsTheOriginal(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	b := body(nil, item(w.jiraViewer))
 	first := w.mustSubmit(w.dev.c, b)
@@ -195,6 +203,7 @@ func TestRepeatedSubmissionIDReturnsTheOriginal(t *testing.T) {
 }
 
 func TestSubmissionIDOfAnotherSubmitterIsRejected(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	b := body(nil, item(w.jiraViewer))
 	w.mustSubmit(w.dev.c, b)
@@ -206,6 +215,7 @@ func TestSubmissionIDOfAnotherSubmitterIsRejected(t *testing.T) {
 }
 
 func TestOpenItemPerToolIsUnique(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 	r := submit(w.dev.c, body(nil, item(w.github), item(w.jiraAdmin)))
@@ -223,6 +233,7 @@ func TestOpenItemPerToolIsUnique(t *testing.T) {
 }
 
 func TestInvalidSubmissions(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	terminated := testutil.CreateEmployee(t, w.db, testutil.EmployeeSpec{Status: "TERMINATED"})
 	retiredTool := testutil.CreateTool(t, w.db, testutil.ToolSpec{})
@@ -275,6 +286,7 @@ func TestInvalidSubmissions(t *testing.T) {
 }
 
 func TestTemporaryDurationIsStored(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := item(w.github)
 	it["duration"] = map[string]any{"type": "TEMPORARY", "expiresOn": "2099-06-30"}
@@ -285,6 +297,7 @@ func TestTemporaryDurationIsStored(t *testing.T) {
 }
 
 func TestCannotReadOthersRequests(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.skip.c, body(&w.dev.ID, item(w.jiraViewer)))
 	path := "/api/v1/requests/" + req["id"].(string)
@@ -305,6 +318,7 @@ func TestCannotReadOthersRequests(t *testing.T) {
 
 // A retirement committed while the submission waited for the tool's lock is seen.
 func TestSubmitSeesARetirementCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	var got error
 	err := testutil.WhileLocked(t, w.db.App, func(ctx context.Context, tx pgx.Tx) error {
@@ -323,6 +337,7 @@ func TestSubmitSeesARetirementCommittedWhileWaiting(t *testing.T) {
 
 // Concurrent submissions for one tool, each with its own ID: one item, the rest 409 (A9).
 func TestConcurrentSubmissionsForOneTool(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	var wg sync.WaitGroup
 	results := make([]testutil.Response, 10)

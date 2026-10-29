@@ -32,7 +32,7 @@ func TestBootstrapCreatesTheInitialSuperAdminOnce(t *testing.T) {
 	env := newEnv(t)
 	file := env.svc.bootstrapFile
 
-	if err := env.svc.Bootstrap(ctx, "Admin@AccessFlow.local"); err != nil {
+	if err := env.svc.Bootstrap(ctx, "Admin@AccessFlow.local", nil); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	info, err := os.Stat(file)
@@ -62,12 +62,20 @@ func TestBootstrapCreatesTheInitialSuperAdminOnce(t *testing.T) {
 		t.Fatalf("got role %s email %s temporary %v no-expiry %v; want a Super Admin with a non-expiring temporary password",
 			role, email, temporary, noExpiry)
 	}
+	// The production audit event is unchanged by demo mode: no seed marker.
+	var details string
+	if err := env.db.App.QueryRow(ctx, "SELECT details::text FROM audit_events WHERE action = 'EMPLOYEE_CREATED'").Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(details, "seed") {
+		t.Errorf("EMPLOYEE_CREATED details = %s; want no seed key", details)
+	}
 
 	// A restart does nothing: a Super Admin has existed.
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local"); err != nil {
+	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
@@ -87,7 +95,7 @@ func TestBootstrapDoesNotRunAgainAfterTheRoleWasRemoved(t *testing.T) {
 	admin := env.employee("SUPER_ADMIN")
 	env.exec("UPDATE role_assignments SET valid_to = now() WHERE employee_id = $1", admin.ID)
 
-	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local"); err != nil {
+	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(env.svc.bootstrapFile); !os.IsNotExist(err) {
@@ -98,7 +106,7 @@ func TestBootstrapDoesNotRunAgainAfterTheRoleWasRemoved(t *testing.T) {
 func TestBootstrapAdminMustChangeThePasswordAndTheFileIsDeleted(t *testing.T) {
 	ctx := context.Background()
 	env := newEnv(t)
-	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local"); err != nil {
+	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local", nil); err != nil {
 		t.Fatal(err)
 	}
 	password := bootstrapPassword(t, env.svc.bootstrapFile)
@@ -123,7 +131,7 @@ func TestBootstrapAdminMustChangeThePasswordAndTheFileIsDeleted(t *testing.T) {
 func TestStaleBootstrapFileIsRemovedAtStartup(t *testing.T) {
 	ctx := context.Background()
 	env := newEnv(t)
-	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local"); err != nil {
+	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local", nil); err != nil {
 		t.Fatal(err)
 	}
 	// The password was changed, but the process stopped before deleting the file.
@@ -149,7 +157,7 @@ func TestBootstrapCreatesNothingWhenTheFileCannotBeWritten(t *testing.T) {
 	}
 	env.svc.bootstrapFile = filepath.Join(blocker, "bootstrap-admin.txt")
 
-	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local"); err == nil {
+	if err := env.svc.Bootstrap(ctx, "admin@accessflow.local", nil); err == nil {
 		t.Fatal("bootstrap succeeded; want an error")
 	}
 	var employees int
@@ -188,7 +196,7 @@ func TestLoadSecret(t *testing.T) {
 
 func TestBootstrapRejectsAnInvalidEmail(t *testing.T) {
 	env := newEnv(t)
-	err := env.svc.Bootstrap(context.Background(), "admİn@accessflow.local")
+	err := env.svc.Bootstrap(context.Background(), "admİn@accessflow.local", nil)
 	if err == nil || !strings.Contains(err.Error(), "BOOTSTRAP_ADMIN_EMAIL") {
 		t.Fatalf("err = %v; want an error naming BOOTSTRAP_ADMIN_EMAIL", err)
 	}
@@ -196,5 +204,28 @@ func TestBootstrapRejectsAnInvalidEmail(t *testing.T) {
 	_ = env.db.App.QueryRow(context.Background(), "SELECT count(*) FROM employees").Scan(&employees)
 	if employees != 0 {
 		t.Fatalf("employees = %d; want 0", employees)
+	}
+}
+
+// Demo mode (A4 note 2026-10-29): the demo Super Admin signs in with the documented password
+// at once; nothing is written to the bootstrap file.
+func TestBootstrapDemoAdmin(t *testing.T) {
+	ctx := context.Background()
+	env := newEnv(t)
+	demo := &DemoAdmin{FullName: "Okan Yılmaz", Password: "Demo-Admin-Pass-1"}
+	for range 2 {
+		if err := env.svc.Bootstrap(ctx, "admin@accessflow.local", demo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(env.svc.bootstrapFile); !os.IsNotExist(err) {
+		t.Fatal("demo bootstrap wrote the password file")
+	}
+	if env.count("SELECT count(*) FROM employees WHERE email = 'admin@accessflow.local' AND full_name = 'Okan Yılmaz' AND seeded") != 1 {
+		t.Fatal("demo admin not created once, named and seed-marked")
+	}
+	r := env.client().Do(http.MethodPost, "/api/v1/auth/login", map[string]any{"email": "admin@accessflow.local", "password": demo.Password})
+	if r.Status != http.StatusOK || r.Body["mustChangePassword"] != false {
+		t.Fatalf("demo login: %d %v", r.Status, r.Body)
 	}
 }

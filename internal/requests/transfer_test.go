@@ -27,6 +27,7 @@ func (w *world) employeeGrants(p person, id uuid.UUID) testutil.Response {
 
 // HR reviews the grants a transfer decides on: open ones, not those being or already removed (D5).
 func TestEmployeeGrants(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	slack := w.apiLevel("Slack")
@@ -86,6 +87,7 @@ func (w *world) itemStatus(it map[string]any) string {
 }
 
 func TestTransferRevokesByDefault(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()
@@ -117,6 +119,7 @@ func TestTransferRevokesByDefault(t *testing.T) {
 }
 
 func TestTransferKeepNeedsJustification(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	jira := w.myGrant(w.dev.c, w.jiraViewer)
@@ -130,6 +133,7 @@ func TestTransferKeepNeedsJustification(t *testing.T) {
 }
 
 func TestTransferKeeps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	f := w.fulfillers()
@@ -166,6 +170,7 @@ func TestTransferKeeps(t *testing.T) {
 
 // A grant approved after HR read the list was not reviewed: it is removed (D5).
 func TestTransferRevokesGrantCreatedAfterReview(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	hr := w.hr()
@@ -206,6 +211,7 @@ func (w *world) managerStep(it map[string]any) (assignee uuid.UUID, version int)
 // The new manager decides what the previous one has not; what the previous one approved is
 // asked again (D5, 2026-10-29).
 func TestTransferManagerStepMovesToNewManager(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	jira, waiting, approved := w.pendingWork()
 	boss := w.person(testutil.EmployeeSpec{ManagerID: w.skip.ID})
@@ -226,6 +232,7 @@ func TestTransferManagerStepMovesToNewManager(t *testing.T) {
 }
 
 func TestDepartmentOnlyTransferKeepsSteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	jira, waiting, approved := w.pendingWork()
 	_, before := w.managerStep(waiting)
@@ -240,6 +247,7 @@ func TestDepartmentOnlyTransferKeepsSteps(t *testing.T) {
 }
 
 func TestTransferRevokeAllCancelsPendingRequests(t *testing.T) {
+	t.Parallel()
 	for _, newManager := range []bool{true, false} {
 		t.Run(map[bool]string{true: "new manager", false: "department only"}[newManager], func(t *testing.T) {
 			w := newWorld(t)
@@ -264,6 +272,7 @@ func (w *world) waiting() int {
 // The previous manager's approval racing the transfer either lands before it or is refused;
 // it is never recorded after the transfer (D5).
 func TestTransferWhileOldManagerApproves(t *testing.T) {
+	t.Parallel()
 	for _, approvalFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "approval first", false: "transfer first"}[approvalFirst], func(t *testing.T) {
 			w := newWorld(t)
@@ -290,7 +299,7 @@ func TestTransferWhileOldManagerApproves(t *testing.T) {
 			go first()
 			w.waitForLock()
 			go second()
-			for deadline := time.Now().Add(5 * time.Second); w.waiting() < 2; time.Sleep(10 * time.Millisecond) {
+			for deadline := time.Now().Add(testutil.WaitLimit); w.waiting() < 2; time.Sleep(10 * time.Millisecond) {
 				if time.Now().After(deadline) {
 					t.Fatal("the second action never waited")
 				}
@@ -324,6 +333,7 @@ func TestTransferWhileOldManagerApproves(t *testing.T) {
 // With no grants to review, nothing was revoked: requests follow the normal manager rules
 // instead of being cancelled (D5, 2026-10-29).
 func TestTransferWithoutGrantsKeepsRequests(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T) (*world, map[string]any, map[string]any) {
 		w := newWorld(t)
 		waiting := items(w.mustSubmit(w.dev.c, body(nil, item(w.github))))[0]
@@ -350,6 +360,7 @@ func TestTransferWithoutGrantsKeepsRequests(t *testing.T) {
 // moveManagerSteps cancels any request the previous reporting line approved, including one the
 // manager submitted, keeps one a Super Admin overrode, and routes to the fallback with no manager.
 func TestTransferManagerStepCases(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	jira := w.myGrant(w.dev.c, w.jiraViewer)
@@ -369,6 +380,7 @@ func TestTransferManagerStepCases(t *testing.T) {
 
 // A grant suspended while its RESUME is on its way is reviewed like any open grant.
 func TestTransferMidResumeGrant(t *testing.T) {
+	t.Parallel()
 	for _, kept := range []bool{true, false} {
 		t.Run(map[bool]string{true: "kept", false: "revoked"}[kept], func(t *testing.T) {
 			w := newWorld(t)
@@ -393,6 +405,7 @@ func TestTransferMidResumeGrant(t *testing.T) {
 }
 
 func TestTransferRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	jira := w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraViewer)) // being removed
@@ -426,6 +439,7 @@ func TestTransferRules(t *testing.T) {
 
 // Two opposite transfers cannot both pass the cycle check (they serialize on the lifecycle lock).
 func TestConcurrentTransfersCannotCreateACycle(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr1, hr2 := w.hr(), w.hr()
 	for range 10 {
@@ -445,6 +459,7 @@ func TestConcurrentTransfersCannotCreateACycle(t *testing.T) {
 
 // An explicit null keep keeps nothing, as [] does.
 func TestTransferNullKeepKeepsNothing(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	jira := w.myGrant(w.dev.c, w.jiraViewer)
@@ -466,6 +481,7 @@ func (w *world) staleGrants() []any {
 // A grant that activates after its transfer removal was requested is an incident, listed
 // until the removal is verified or confirmed (D5).
 func TestStaleGrantAfterTransfer(t *testing.T) {
+	t.Parallel()
 	t.Run("API", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -474,7 +490,7 @@ func TestStaleGrantAfterTransfer(t *testing.T) {
 		boss := w.person(testutil.EmployeeSpec{})
 		done := w.inFlight(tl)
 		testutil.RequireStatus(t, w.transfer(w.hr(), w.dev.ID, boss.ID, "Platform"), http.StatusOK, "")
-		if err := <-done; err != nil {
+		if err := done(); err != nil {
 			t.Fatal(err)
 		}
 		if w.count("SELECT count(*) FROM grants WHERE id = $1 AND effective_from IS NOT NULL AND stale_at IS NOT NULL", g["id"]) != 1 ||
@@ -509,13 +525,14 @@ func TestStaleGrantAfterTransfer(t *testing.T) {
 }
 
 func TestNoIncidentWithoutTransfer(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
 	g := w.myGrant(w.dev.c, w.jiraViewer)
 	done := w.inFlight(tl)
 	w.mustRevoke(w.dev.c, g)
-	if err := <-done; err != nil {
+	if err := done(); err != nil {
 		t.Fatal(err)
 	}
 	if w.count("SELECT count(*) FROM grants WHERE stale_at IS NOT NULL") != 0 || w.audits("STALE_GRANT_INCIDENT") != 0 {

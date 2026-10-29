@@ -1,4 +1,5 @@
-# Runs the same Docker commands as local development (plan milestone C1).
+# Runs the same Docker commands as local development (plan milestone C1). The image build
+# and the Go checks are independent, so they run as two parallel jobs (M16).
 name: CI
 
 on:
@@ -11,7 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  checks:
+  images:
+    name: Build images
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -19,8 +21,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build images (Go build, frontend type check and build)
+      - name: Build images (Go build, frontend type check, tests and build)
         run: docker compose build
 
+  checks:
+    name: Go checks and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Go module and build caches live in the workspace (.cache is git- and docker-ignored)
+      # so they survive between runs; -count=1 keeps every test running every time.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+
       - name: Test (gofmt, go vet, go test -race against PostgreSQL)
-        run: docker compose --profile test run --rm tests
+        run: docker compose --profile test run --rm -e GOMODCACHE=/src/.cache/mod -e GOCACHE=/src/.cache/go-build tests

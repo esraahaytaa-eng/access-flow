@@ -37,6 +37,7 @@ func (w *world) makeDue(id uuid.UUID) {
 }
 
 func TestScheduleTermination(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	r := w.schedule(hr, w.dev.ID, inDays(7))
@@ -76,6 +77,7 @@ func TestScheduleTermination(t *testing.T) {
 }
 
 func TestScheduledTerminationRuns(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
@@ -118,6 +120,7 @@ func TestScheduledTerminationRuns(t *testing.T) {
 }
 
 func TestImmediateTerminationOverridesSchedule(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	testutil.RequireStatus(t, w.schedule(hr, w.dev.ID, inDays(7)), http.StatusOK, "")
@@ -134,6 +137,7 @@ func TestImmediateTerminationOverridesSchedule(t *testing.T) {
 // The sweep lists the employee, then waits for the lifecycle lock while a cancellation
 // commits: its re-check under the lock sees no schedule and does nothing.
 func TestScheduleCancelledWhileSweeping(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	hr := w.hr()
 	testutil.RequireStatus(t, w.schedule(hr, w.dev.ID, inDays(7)), http.StatusOK, "")

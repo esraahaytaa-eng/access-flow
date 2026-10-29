@@ -20,9 +20,12 @@ type EmployeeSpec struct {
 
 // Password is the test password; PasswordHash is its argon2id hash, precomputed because
 // testutil cannot import auth (auth's tests import testutil). auth tests check they match.
+// The hash carries minimal cost parameters (64 KiB, 1 pass), which VerifyPassword reads from
+// it: a 19 MiB verification per sign-in made parallel -race tests memory-bound. Production
+// hashes keep the OWASP parameters (A4; auth's HashPassword test pins them).
 const (
 	Password     = "correct horse battery"
-	PasswordHash = "$argon2id$v=19$m=19456,t=2,p=1$QSOldEmzMi+hk5/lEvz57Q$NNDVDBoKQcdQ2tTzKEWG5eU5i3qFYdO0BsDHBiL+ocY"
+	PasswordHash = "$argon2id$v=19$m=64,t=1,p=1$YWNjZXNzZmxvdy10ZXN0cw$lhLFv+nC5exVpH4+cZ3EnH1AVHcEug4HBY1nSzoMG/Q"
 )
 
 // Employee is a created test employee.

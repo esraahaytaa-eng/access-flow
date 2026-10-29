@@ -20,6 +20,7 @@ func (w *world) approved(level uuid.UUID) map[string]any {
 }
 
 func TestFinalApprovalCreatesGrantAndOperation(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	it := w.approved(w.jiraViewer)
 	if it["status"] != "APPROVED" {
@@ -42,6 +43,7 @@ func TestFinalApprovalCreatesGrantAndOperation(t *testing.T) {
 }
 
 func TestTemporaryGrantKeepsTheExpiryDate(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tomorrow := time.Now().AddDate(0, 0, 2).Format("2006-01-02")
 	temp := item(w.jiraViewer)
@@ -54,6 +56,7 @@ func TestTemporaryGrantKeepsTheExpiryDate(t *testing.T) {
 }
 
 func TestManualToolGrantWaitsForFulfillment(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	for _, method := range []string{"MANUAL", "VENDOR"} {
 		tool := testutil.CreateTool(t, w.db, testutil.ToolSpec{Method: method, OwnerID: w.owner.ID})
@@ -65,6 +68,7 @@ func TestManualToolGrantWaitsForFulfillment(t *testing.T) {
 }
 
 func TestStricterWinsAddsAStepBeforeProvisioning(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 	w.exec("UPDATE access_levels SET requires_tool_owner = true, requires_infosec = true WHERE id = $1", w.jiraViewer)
@@ -90,6 +94,7 @@ func TestStricterWinsAddsAStepBeforeProvisioning(t *testing.T) {
 }
 
 func TestRemovingAStepNeverRemovesOne(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.github))) // Manager → Tool Owner
 	w.exec("UPDATE access_levels SET requires_tool_owner = false WHERE id = $1", w.github)
@@ -100,6 +105,7 @@ func TestRemovingAStepNeverRemovesOne(t *testing.T) {
 }
 
 func TestRetiredLevelIsNeverProvisioned(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, sql, reason string }{
 		{"level", "UPDATE access_levels SET status = 'RETIRED' WHERE tool_id = $1", "access level retired"},
 		{"tool", "UPDATE tools SET status = 'RETIRED' WHERE id = $1", "tool retired"},
@@ -127,6 +133,7 @@ func TestRetiredLevelIsNeverProvisioned(t *testing.T) {
 }
 
 func TestNoSecondRequestWhileAccessIsOpen(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	conflict := func(status string) {
@@ -154,6 +161,7 @@ func TestNoSecondRequestWhileAccessIsOpen(t *testing.T) {
 
 // A grant committed while the submission waited for the beneficiary's lock is seen.
 func TestSubmitSeesAGrantCommittedWhileItWaited(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	slack := testutil.CreateTool(t, w.db, testutil.ToolSpec{OwnerID: w.owner.ID})
 	w.approved(testutil.CreateLevel(t, w.db, slack, "Member", false, false)) // dev's grant row; setup moves it to Jira
@@ -178,6 +186,7 @@ func TestSubmitSeesAGrantCommittedWhileItWaited(t *testing.T) {
 }
 
 func TestRequestShowsFulfillment(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 	path := "/api/v1/requests/" + req["id"].(string)
@@ -206,6 +215,7 @@ func TestRequestShowsFulfillment(t *testing.T) {
 
 // Retired after approval: the runner cancels the grant, and My Requests shows why.
 func TestRetiredAfterApprovalShowsTheReason(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
@@ -220,6 +230,7 @@ func TestRetiredAfterApprovalShowsTheReason(t *testing.T) {
 
 // Retired and made stricter: the item is cancelled at once; nobody is asked to approve it.
 func TestRetiredIsCheckedBeforeStricterSteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 	w.exec("UPDATE access_levels SET requires_infosec = true, status = 'RETIRED' WHERE id = $1", w.jiraViewer)

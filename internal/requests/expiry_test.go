@@ -47,6 +47,7 @@ func (w *world) fulfilled(f fulfillers, level uuid.UUID) map[string]any {
 }
 
 func TestExpirySweepRemovesTemporaryAccess(t *testing.T) {
+	t.Parallel()
 	t.Run("API", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -88,6 +89,7 @@ func TestExpirySweepRemovesTemporaryAccess(t *testing.T) {
 }
 
 func TestExpirySweepIsIdempotent(t *testing.T) {
+	t.Parallel()
 	t.Run("one after the other", func(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
@@ -127,6 +129,7 @@ func TestExpirySweepIsIdempotent(t *testing.T) {
 }
 
 func TestExpirySweepSkipsWhileAnotherHoldsTheLock(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -156,6 +159,7 @@ func TestExpirySweepSkipsWhileAnotherHoldsTheLock(t *testing.T) {
 }
 
 func TestExpiryOfAGrantNeverSent(t *testing.T) {
+	t.Parallel()
 	t.Run("never sent: cancelled", func(t *testing.T) {
 		w := newWorld(t)
 		w.approved(w.jiraViewer) // no runner: never sent
@@ -182,6 +186,7 @@ func TestExpiryOfAGrantNeverSent(t *testing.T) {
 }
 
 func TestUntilRevokedAndFutureGrantsAreKept(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -199,6 +204,7 @@ func TestUntilRevokedAndFutureGrantsAreKept(t *testing.T) {
 // The sweep listed the grant as due, then waited for the employee while an extension's
 // approval moved its date: after the locks it sees the new date and keeps the access.
 func TestExpiryAndExtensionSerialize(t *testing.T) {
+	t.Parallel()
 	for _, extended := range []any{in(30), nil} { // a later date, or Until Revoked
 		t.Run(fmt.Sprint(extended), func(t *testing.T) {
 			w := newWorld(t)

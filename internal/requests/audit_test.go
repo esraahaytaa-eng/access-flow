@@ -68,6 +68,7 @@ func requireState(t *testing.T, rows []map[string]any, grant any, state, evidenc
 }
 
 func TestPointInTimeAtActivationAndRemoval(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -128,6 +129,7 @@ func TestPointInTimeAtActivationAndRemoval(t *testing.T) {
 }
 
 func TestPointInTimeEvidenceLabels(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	f := w.fulfillers()
 	w.approved(f.manual)
@@ -175,6 +177,7 @@ func TestPointInTimeEvidenceLabels(t *testing.T) {
 }
 
 func TestAuditExplorerScope(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer) // dev: subject of request, approval and grant events
@@ -235,6 +238,7 @@ func TestAuditExplorerScope(t *testing.T) {
 }
 
 func TestAuditEventFilters(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	q := func(params string) []any {
@@ -261,6 +265,7 @@ func TestAuditEventFilters(t *testing.T) {
 }
 
 func TestPrivilegedRolesAtAPastDate(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/employees/"+w.owner.ID.String()+"/roles", map[string]any{"role": "AUDITOR"}),
 		http.StatusNoContent, "")
@@ -293,6 +298,7 @@ func TestPrivilegedRolesAtAPastDate(t *testing.T) {
 }
 
 func TestEvidenceReports(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.approved(w.jiraViewer)
@@ -334,6 +340,7 @@ func (w *world) auditorOf() person {
 }
 
 func TestApprovalEvidenceInScope(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	w.approved(w.jiraViewer)
 	w.mustSubmit(w.owner.c, body(nil, item(w.jiraViewer)))

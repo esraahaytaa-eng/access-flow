@@ -42,6 +42,7 @@ func (w *world) temporary(tl *tools, date string) map[string]any {
 }
 
 func TestExtensionKeepsAccessActive(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))
@@ -74,6 +75,7 @@ func TestExtensionKeepsAccessActive(t *testing.T) {
 }
 
 func TestExtensionToUntilRevoked(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))
@@ -84,6 +86,7 @@ func TestExtensionToUntilRevoked(t *testing.T) {
 }
 
 func TestExtensionRules(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))
@@ -133,6 +136,7 @@ func TestExtensionRules(t *testing.T) {
 
 // The body names no beneficiary: an inactive employee's grant is a conflict, not a field error.
 func TestChangeForAnInactiveEmployee(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))
@@ -145,6 +149,7 @@ func TestChangeForAnInactiveEmployee(t *testing.T) {
 }
 
 func TestExtensionByTheManagerOnBehalf(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))
@@ -159,6 +164,7 @@ func TestExtensionByTheManagerOnBehalf(t *testing.T) {
 }
 
 func TestExtensionUsesCurrentSteps(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))
@@ -172,6 +178,7 @@ func TestExtensionUsesCurrentSteps(t *testing.T) {
 // Access is valid through its date: an extension approved on that date still applies;
 // one approved later, before the sweep ran, finds the access ended.
 func TestExtensionApprovedAroundTheExpiryDate(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, expires string
 		status        string
@@ -201,6 +208,7 @@ func TestExtensionApprovedAroundTheExpiryDate(t *testing.T) {
 }
 
 func TestClosingAGrantCancelsItsPendingChange(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		close func(w *world, g map[string]any)
@@ -231,6 +239,7 @@ func TestClosingAGrantCancelsItsPendingChange(t *testing.T) {
 }
 
 func TestItemApprovedAfterItsExpiry(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, expires, status string
 	}{
@@ -258,6 +267,7 @@ func TestItemApprovedAfterItsExpiry(t *testing.T) {
 // D1 (2026-10-28): a direct grant is extended only through the normal workflow, which
 // re-runs the steps it bypassed, and may then become Until Revoked.
 func TestDirectGrantExtendedThroughTheWorkflow(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	w.mustDirectGrant(w.jiraViewer)
@@ -276,6 +286,7 @@ func TestDirectGrantExtendedThroughTheWorkflow(t *testing.T) {
 // An approved extension is already in force: withdrawing it would leave the new date in
 // place behind a WITHDRAWN item.
 func TestApprovedExtensionCannotBeWithdrawn(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t)
 	tl := w.startTools()
 	g := w.temporary(tl, in(10))

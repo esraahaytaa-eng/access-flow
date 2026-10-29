@@ -2,13 +2,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import { api } from "./api/client";
-import { useAdminHealth, useEmployees, useNotifications } from "./api/queries";
+import { useAdminHealth, useDemo, useEmployees, useNotifications } from "./api/queries";
 import type { Employee, Notification } from "./api/types";
 import { roleLabel } from "./i18n/labels";
 import { useNavCounts, useRoleFlags, type RoleFlags } from "./nav";
 import { useSession } from "./session";
 import { NominateModal } from "./pages/Settings";
-import { Avatar, Button, Callout, Icon, Logo, Popover, useAction } from "./ui/components";
+import { Avatar, Badge, Button, Callout, Icon, Logo, Popover, useAction } from "./ui/components";
 import { formatDate, relativeTime } from "./ui/format";
 import type { IconName } from "./ui/icons";
 
@@ -175,6 +175,7 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
 export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut: () => void }) {
   const [navOpen, setNavOpen] = useState(false);
   const navigate = useNavigate();
+  const demo = useDemo().data;
   return (
     <div className="shell">
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
@@ -182,6 +183,7 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
       <div className="main">
         <header className="topbar">
           <Button variant="ghost" icon="menu" className="menu-btn" aria-label="Menüyü aç" onClick={() => setNavOpen(true)} />
+          {demo && <Badge tone="amber" dot title="Yerel demo: belgelenmiş demo hesapları ve örnek veriler">Demo ortamı</Badge>}
           <div className="spacer" />
           <Button variant="primary" size="sm" icon="plus" onClick={() => navigate("/request-new")}>Erişim talep et</Button>
           <NotificationsMenu />
