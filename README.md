@@ -2,6 +2,7 @@
 
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
+One-page operating summary: [`docs/operating-summary.md`](docs/operating-summary.md). First 30 days: [`docs/rollout-30-days.md`](docs/rollout-30-days.md). Browser QA: [`docs/qa-checklist.md`](docs/qa-checklist.md).
 
 > Status: backend milestones M2–M10 (identity, catalog, requests and approvals, API / Manual / Vendor fulfillment, direct grants, expiry, extensions and level changes, suspension, termination, transfer and rehire) and the Turkish web UI on top of them (U1). Then quarterly access reviews, baseline import and orphan accounts (M11, M12), the audit explorer (M13) and Super Admin succession and recovery (M14). M15: local demo mode with ready-to-use accounts and seed data, and the redesigned sign-in page.
 
