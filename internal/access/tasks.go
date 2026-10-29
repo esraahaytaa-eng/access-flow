@@ -42,9 +42,10 @@ func initiates(arg string) string {
 // waitsForEarlier is true while an older operation of operation o's grant is queued or
 // running: a grant's operations reach the tool in the order they were created, so a
 // removal goes after the GRANT that may still apply access (D5) and a RESUME after an
-// in-flight SUSPEND (D7).
+// in-flight SUSPEND (D7). Creation order is the id (uuidv7, set at insert), not created_at:
+// that is the transaction's start time, earlier than a row committed while it waited for a lock.
 const waitsForEarlier = `EXISTS (SELECT 1 FROM operations x WHERE x.grant_id = o.grant_id
-	AND x.status IN ('PENDING', 'IN_PROGRESS') AND (x.created_at, x.id) < (o.created_at, o.id))`
+	AND x.status IN ('PENDING', 'IN_PROGRESS') AND x.id < o.id)`
 
 // Task is a Manual or Vendor operation in its admin group's queue (O4, O7).
 type Task struct {
@@ -145,6 +146,9 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE id = $1 FOR UPDATE", id); err != nil {
 			return err
 		}
+		if err := stillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `SELECT o.type, o.status, o.version, o.ticket_ref, o.claimed_by IS NOT DISTINCT FROM $2,
 			       o.claimed_by IS NOT NULL AND `+member("o.claimed_by")+`
 			       AND (SELECT status FROM employees WHERE id = o.claimed_by) = 'ACTIVE', o.first_attempt_at IS NULL
@@ -162,6 +166,19 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 		return Task{}, err
 	}
 	return ts[0], nil
+}
+
+// stillActive re-checks the actor under the caller's locks: the session was checked before
+// them, and a suspension or termination committing meanwhile ends their authority (D7).
+func stillActive(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
+	var status string
+	if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", actor).Scan(&status); err != nil {
+		return err
+	}
+	if status != "ACTIVE" {
+		return platform.ErrUnauthorized
+	}
+	return nil
 }
 
 // claimedBy checks that the actor works this open task, at the version they saw.

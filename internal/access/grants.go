@@ -224,7 +224,7 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		       (SELECT CASE x.type WHEN 'SUSPEND' THEN 'SUSPENSION' ELSE 'RESUME' END ||
 		               CASE WHEN x.last_error IS NULL THEN '_REQUESTED' ELSE '_FAILED' END
 		        FROM operations x WHERE x.grant_id = g.id AND x.type IN ('SUSPEND', 'RESUME') AND x.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
-		        ORDER BY x.created_at DESC, x.id DESC LIMIT 1)
+		        ORDER BY x.id DESC LIMIT 1)
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id

@@ -136,6 +136,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - *Refinement — [APPROVED 2026-10-29] (M9):*
   - **Suspension state:** a grant is stored as `SUSPENDED` only once its `SUSPEND` is verified or confirmed; until then it stays `ACTIVE` and shows `SUSPENSION_REQUESTED` or `SUSPENSION_FAILED`. Resume mirrors it (`RESUME_REQUESTED`, `RESUME_FAILED`). Suspension intervals are kept as history (A9).
   - **Grants in flight:** at suspension a `GRANT` never sent is cancelled; one sent or failed continues and is suspended in the transaction that activates it. A level change's old grant is suspended and its replacement follows the same rule. Termination removes every open grant, the replacement included. A failed `SUSPEND` stays in Exceptions until verified or confirmed.
+    - *Note — [APPROVED 2026-10-29] (M9 review):* termination also cancels a claimed Manual or Vendor `GRANT` task, so the leaver's removal task is ready at once; an ordinary revoke still lets it finish (M7).
   - **Who acts:** HR Managers and Super Admins suspend, reactivate, terminate and schedule; a target holding Super Admin or InfoSec needs a Super Admin; nobody acts on themselves.
   - **Roles and memberships:** termination closes them (audited); suspension keeps them.
   - **Last Super Admin (with D2):** the last active Super Admin cannot be suspended, terminated or scheduled for termination; a Super Admin whose termination is scheduled does not count. The check is serialized across concurrent actions.

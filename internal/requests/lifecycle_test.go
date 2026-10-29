@@ -361,6 +361,59 @@ func TestRerouteToSomeoneBeingSuspended(t *testing.T) {
 	}
 }
 
+// A step routed to the person after the action locked its items, and withdrawn while the
+// action re-routes, is left as the withdrawal closed it (review 2026-10-29, finding 5).
+func TestRerouteSkipsAStepClosedMeanwhile(t *testing.T) {
+	w := newWorld(t)
+	it := items(w.mustSubmit(w.mgr.c, body(nil, item(w.jiraViewer))))[0] // the Manager step is skip's
+	hr := w.hr()
+	ctx := context.Background()
+	hold, err := w.db.App.Begin(ctx) // holds dev after the action's item locks
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Rollback(ctx)
+	if _, err := hold.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR KEY SHARE", w.dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	suspended := make(chan testutil.Response, 1)
+	go func() { suspended <- w.lifecycle(hr, w.dev.ID, "suspend") }()
+	w.waitForLock()
+	w.exec("UPDATE approval_steps SET assignee_id = $1 WHERE item_id = $2 AND status = 'PENDING'", w.dev.ID, it["id"]) // routed to dev now
+	// mgr's withdrawal, committing
+	withdrawal, err := w.db.App.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer withdrawal.Rollback(ctx)
+	for _, q := range []string{
+		"SELECT 1 FROM request_items WHERE id = $1 FOR UPDATE",
+		"UPDATE request_items SET status = 'WITHDRAWN', closed_at = now(), version = version + 1 WHERE id = $1",
+		"UPDATE approval_steps SET status = 'CANCELLED', version = version + 1 WHERE item_id = $1 AND status IN ('WAITING', 'PENDING')",
+	} {
+		if _, err := withdrawal.Exec(ctx, q, it["id"]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); w.count(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+		AND wait_event_type = 'Lock' AND query LIKE '%request_items WHERE id = $1 FOR UPDATE%'`) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the re-route never waited for the item")
+		}
+	}
+	if err := withdrawal.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	testutil.RequireStatus(t, <-suspended, http.StatusOK, "")
+	if w.audits("STEP_REROUTED") != 0 || w.count(`SELECT count(*) FROM approval_steps WHERE item_id = $1 AND status = 'CANCELLED'
+		AND assignee_id = $2`, it["id"], w.dev.ID) != 1 {
+		t.Fatal("the withdrawn item's step was re-routed")
+	}
+}
+
 func TestSuspendPermissions(t *testing.T) {
 	w := newWorld(t)
 	hr := w.hr()
@@ -844,6 +897,45 @@ func TestStaleSuspensionOperationsAreCancelled(t *testing.T) {
 	})
 }
 
+// A transaction that waited for a lock inserts its operation with its start time, which can
+// be earlier than an operation committed meanwhile; the order is the insert order (uuidv7
+// ids), so a backdated created_at changes nothing (review 2026-10-29, finding 2).
+func TestOperationOrderIsInsertOrder(t *testing.T) {
+	backdate := func(w *world, typ string, before string) {
+		w.exec(`UPDATE operations SET created_at = (SELECT created_at FROM operations WHERE type = $2) - interval '1 minute'
+			WHERE type = $1`, typ, before)
+	}
+	t.Run("a removal waits for the GRANT", func(t *testing.T) {
+		w := newWorld(t)
+		f := w.fulfillers()
+		w.approved(f.manual)
+		w.mustAct(f.fixer, w.mustTask(f.fixer, f.manual, "GRANT"), "claim", nil)
+		w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, f.manual))
+		backdate(w, "REVOKE", "GRANT")
+		if w.task(f.fixer2, f.manual, "REVOKE") != nil {
+			t.Fatal("the removal task is ready while the GRANT task is claimed")
+		}
+	})
+	t.Run("a SUSPEND overtaken by a RESUME", func(t *testing.T) {
+		w := newWorld(t)
+		tl := w.startTools()
+		hr := w.hr()
+		w.approved(w.jiraViewer)
+		tl.drain(t)
+		w.mustLifecycle(hr, w.dev.ID, "suspend")
+		done := w.inFlightThenFail(tl)
+		w.mustLifecycle(hr, w.dev.ID, "reactivate")
+		backdate(w, "RESUME", "SUSPEND")
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		g := w.teamGrant(w.jiraViewer)
+		if w.ops(g, "SUSPEND", "CANCELLED") != 1 || g["suspension"] != "RESUME_REQUESTED" {
+			t.Fatalf("grant %v; the stale SUSPEND must be cancelled", g)
+		}
+	})
+}
+
 func TestReactivateResumeManual(t *testing.T) {
 	w := newWorld(t)
 	f := w.fulfillers()
@@ -923,6 +1015,44 @@ func TestTerminateRemovesEverything(t *testing.T) {
 	requireGrant(t, g, "REVOKED", "REVOKED / VERIFIED")
 	if tl.state(t, g, w.dev.Email) != "" || w.openIntervals(g) != 0 {
 		t.Fatal("the tool still holds the level")
+	}
+}
+
+// A grant never sent to the tool has nothing to remove: termination cancels it with no call.
+func TestTerminateCancelsNeverSentGrant(t *testing.T) {
+	w := newWorld(t)
+	w.approved(w.jiraViewer) // queued, not yet run
+	w.mustLifecycle(w.hr(), w.dev.ID, "terminate")
+	g := w.teamGrant(w.jiraViewer)
+	if g["status"] != "CANCELLED" || w.ops(g, "GRANT", "CANCELLED") != 1 ||
+		w.count("SELECT count(*) FROM operations WHERE grant_id = $1 AND type = 'REVOKE'", g["id"]) != 0 {
+		t.Fatalf("grant = %v", g)
+	}
+	if n := len(w.securityRevocations(w.is1)); n != 0 {
+		t.Fatalf("security revocations = %d", n)
+	}
+}
+
+// An API GRANT call in flight is not cancelled: the removal waits for it, so the GRANT
+// cannot re-apply access after the removal (D5, D7).
+func TestTerminateDuringGrantInFlight(t *testing.T) {
+	w := newWorld(t)
+	tl := w.startTools()
+	w.approved(w.jiraViewer)
+	done := w.inFlight(tl)
+	w.mustLifecycle(w.hr(), w.dev.ID, "terminate")
+	g := w.teamGrant(w.jiraViewer)
+	if w.ops(g, "GRANT", "IN_PROGRESS") != 1 {
+		t.Fatal("the GRANT call in flight was cancelled")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	tl.drain(t)
+	g = w.teamGrant(w.jiraViewer)
+	requireGrant(t, g, "REVOKED", "REVOKED / VERIFIED")
+	if tl.state(t, g, w.dev.Email) != "" {
+		t.Fatal("the leaver still holds the level")
 	}
 }
 
@@ -1162,6 +1292,45 @@ func TestActorSuspendedWhileActing(t *testing.T) {
 	}
 }
 
+// A task action or retry passed its session check, then waited for the grant's employee
+// while its actor was suspended: it is refused, as an approval is (D7).
+func TestTaskActorSuspendedWhileActing(t *testing.T) {
+	for _, action := range []string{"confirm", "retry"} {
+		t.Run(action, func(t *testing.T) {
+			w := newWorld(t)
+			f := w.fulfillers()
+			w.approved(f.manual)
+			task := w.mustAct(f.fixer, w.mustTask(f.fixer, f.manual, "GRANT"), "claim", nil)
+			call := func() testutil.Response { return act(f.fixer, task, "confirm", nil) }
+			if action == "retry" {
+				w.mustAct(f.fixer, task, "fail", map[string]any{"reason": "no seats"})
+				op := w.failedOp(w.admin)
+				call = func() testutil.Response { return retry(f.fixer, op) }
+			}
+			ctx := context.Background()
+			tx, err := w.db.App.Begin(ctx) // holds dev: the action waits after its session check
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", w.dev.ID); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan testutil.Response, 1)
+			go func() { done <- call() }()
+			w.waitForLock()
+			w.mustLifecycle(w.hr(), f.fixer.ID, "suspend")
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			testutil.RequireStatus(t, <-done, http.StatusUnauthorized, "")
+			if w.count("SELECT count(*) FROM operations WHERE id = $1 AND status IN ('SUCCEEDED', 'PENDING')", task["id"]) != 0 {
+				t.Fatalf("the suspended admin's %s went through", action)
+			}
+		})
+	}
+}
+
 // A claimed Manual SUSPEND or RESUME task is a person's to-do, not a call in flight:
 // termination cancels it, so its claimer cannot re-enable a leaver and the removal task is
 // ready at once (D7: termination overrides any pending resume).
@@ -1192,6 +1361,44 @@ func TestTerminateCancelsClaimedSuspensionTasks(t *testing.T) {
 				t.Fatal("the stale task changed the grant")
 			}
 		})
+	}
+}
+
+// A claimed Manual or Vendor GRANT task is cancelled at termination, so the leaver's
+// removal task is ready at once instead of waiting on its claimer (D7, A6), also when an
+// ordinary revoke was already waiting for it. That revoke alone waits (TestRevokeWhileGrantTaskClaimed).
+func TestTerminateCancelsClaimedGrantTask(t *testing.T) {
+	for _, method := range []string{"MANUAL", "VENDOR"} {
+		for _, revokedFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s revoked first %v", method, revokedFirst), func(t *testing.T) {
+				w := newWorld(t)
+				f := w.fulfillers()
+				level := map[string]uuid.UUID{"MANUAL": f.manual, "VENDOR": f.vendor}[method]
+				w.approved(level)
+				claimed := w.mustAct(f.fixer, w.mustTask(f.fixer, level, "GRANT"), "claim", nil)
+				if method == "VENDOR" {
+					claimed = w.mustAct(f.fixer, claimed, "ticket", map[string]any{"ticketRef": "VND-7"})
+				}
+				if revokedFirst {
+					w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, level))
+				}
+				w.mustLifecycle(w.hr(), w.dev.ID, "terminate")
+				if r := act(f.fixer, claimed, "confirm", nil); r.Status != http.StatusConflict {
+					t.Fatalf("confirm of the cancelled GRANT: %d %v; want 409", r.Status, r.Body)
+				}
+				g := w.teamGrant(level)
+				if w.ops(g, "GRANT", "CANCELLED") != 1 || w.count(`SELECT count(*) FROM audit_events
+					WHERE action = 'OPERATION_CANCELLED' AND entity_id = $1`, claimed["id"]) != 1 {
+					t.Fatal("the claimed GRANT task was not cancelled and audited")
+				}
+				task := w.mustAct(f.fixer2, w.mustTask(f.fixer2, level, "REVOKE"), "claim", nil)
+				if method == "VENDOR" {
+					task = w.mustAct(f.fixer2, task, "ticket", map[string]any{"ticketRef": "VND-8"})
+				}
+				w.mustAct(f.fixer2, task, "confirm", nil)
+				requireGrant(t, w.teamGrant(level), "REVOKED", "REVOKED / SELF_REPORTED")
+			})
+		}
 	}
 }
 

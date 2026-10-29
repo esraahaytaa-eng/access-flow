@@ -138,6 +138,9 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			Scan(&typ, &status, &current); err != nil {
 			return err
 		}
+		if err := stillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
 		var employeeStatus string
 		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", employee).Scan(&employeeStatus); err != nil {
 			return err

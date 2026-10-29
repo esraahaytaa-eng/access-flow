@@ -25,8 +25,10 @@ import (
 // shared, the tools of resumed grants (ResumeAll) and the people steps are re-routed to. An
 // approval locks its item before its audit insert takes the approver's key lock, so the
 // items come before the person.
-// shortcut: an approval by the person on another item of a beneficiary whose item names the
-// person can still deadlock with the action (PostgreSQL fails one, a 500); see README.
+// shortcut: these can still deadlock with the action (PostgreSQL fails one, a 500; see README):
+// an approval by the person on another item of a beneficiary whose item names the person; the
+// person, or someone a step is re-routed to, acting on another employee's grant or record; a
+// tool change making the person its owner during reactivation.
 
 var errEmployeeStatus = platform.NewError(http.StatusConflict, "employee_status")
 
@@ -84,6 +86,11 @@ func endFor(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, emp
 			return err
 		}
 		i := slices.IndexFunc(it.steps, func(s Step) bool { return s.ID == ref.step })
+		// Routed to the person after lockFor, the item may have been decided or withdrawn
+		// before its lock here: such a step is no longer theirs to re-route.
+		if s := it.steps[i]; it.status != "PENDING_APPROVAL" || s.Status != "PENDING" || s.AssigneeID == nil || *s.AssigneeID != employee {
+			continue
+		}
 		route, err := routeStep(ctx, tx, it, it.steps[i])
 		if err != nil {
 			return err

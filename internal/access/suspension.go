@@ -76,7 +76,7 @@ func settle(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, gra
 	var effective string
 	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT CASE o.type WHEN 'SUSPEND' THEN 'SUSPENDED' ELSE 'ACTIVE' END
 		FROM operations o WHERE o.grant_id = g.id AND o.type IN ('SUSPEND', 'RESUME') AND o.status = 'IN_PROGRESS'
-		ORDER BY o.created_at DESC, o.id DESC LIMIT 1), g.status) FROM grants g WHERE g.id = $1`, grant).Scan(&effective); err != nil {
+		ORDER BY o.id DESC LIMIT 1), g.status) FROM grants g WHERE g.id = $1`, grant).Scan(&effective); err != nil {
 		return err
 	}
 	if !needsOp(target, effective, sent) {
@@ -138,7 +138,7 @@ func unwanted(ctx context.Context, tx pgx.Tx, op, grant uuid.UUID, typ, grantSta
 	}
 	var newer bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM operations x JOIN operations o ON o.id = $2
-		WHERE x.grant_id = $1 AND x.type IN ('SUSPEND', 'RESUME') AND x.status <> 'CANCELLED' AND (x.created_at, x.id) > (o.created_at, o.id))`,
+		WHERE x.grant_id = $1 AND x.type IN ('SUSPEND', 'RESUME') AND x.status <> 'CANCELLED' AND x.id > o.id)`,
 		grant, op).Scan(&newer)
 	return newer, err
 }
@@ -226,12 +226,30 @@ func ResumeAll(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location
 
 // RemoveAll requests the removal of every open grant of a terminated employee at the
 // highest priority (A6, D7), in the caller's transaction under the employee's lock. A
-// removal already open is raised to that priority; a replacement grant still in flight is
-// removed once its GRANT finishes (waitsForEarlier).
+// removal already open is raised to that priority. An API GRANT in flight finishes first
+// (waitsForEarlier); a claimed Manual or Vendor GRANT task is cancelled, so the removal
+// never waits on its claimer, whose work the removal task undoes. An ordinary revoke lets
+// it finish (M7).
 func RemoveAll(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, employee uuid.UUID) error {
 	grants, err := lockEmployeeGrants(ctx, tx, employee)
 	if err != nil {
 		return err
+	}
+	rows, err := tx.Query(ctx, `UPDATE operations o SET status = 'CANCELLED', completed_at = $2, lease_token = NULL, lease_until = NULL,
+		version = o.version + 1 FROM grants g WHERE g.id = o.grant_id AND g.employee_id = $1 AND o.type = 'GRANT'
+		AND o.status = 'IN_PROGRESS' AND g.method <> 'API' RETURNING o.id`, employee, now)
+	if err != nil {
+		return err
+	}
+	claimed, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return err
+	}
+	for _, op := range claimed {
+		if err := audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "OPERATION_CANCELLED", Entity: "operation", EntityID: &op,
+			SubjectID: &employee, Details: map[string]any{"reason": "employee terminated"}}); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE operations o SET priority = 0, version = o.version + 1 FROM grants g
 		WHERE g.id = o.grant_id AND g.employee_id = $1 AND o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
