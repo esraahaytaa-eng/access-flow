@@ -81,6 +81,14 @@ func Handler(pool *pgxpool.Pool) http.Handler {
 		}
 		platform.WriteJSON(w, http.StatusOK, done)
 	})
+	mux.HandleFunc("GET /v1/tools/{tool}/accounts", func(w http.ResponseWriter, r *http.Request) {
+		accounts, err := list(r.Context(), pool, r.PathValue("tool"))
+		if err != nil {
+			platform.WriteError(w, r, err)
+			return
+		}
+		platform.WriteJSON(w, http.StatusOK, map[string]any{"tool": r.PathValue("tool"), "accounts": accounts})
+	})
 	mux.HandleFunc("GET /v1/tools/{tool}/accounts/{account}", func(w http.ResponseWriter, r *http.Request) {
 		state, err := lookup(r.Context(), pool, r.PathValue("tool"), r.PathValue("account"))
 		if err != nil {
@@ -215,4 +223,27 @@ func lookup(ctx context.Context, pool *pgxpool.Pool, tool, account string) (Acco
 	}
 	state.Levels = append(state.Levels, levels...)
 	return state, nil
+}
+
+// list returns every account of tool with its permissions, for AccessFlow's baseline import
+// (D10). Accounts without permissions are left out: they hold no access.
+func list(ctx context.Context, pool *pgxpool.Pool, tool string) ([]AccountState, error) {
+	rows, err := pool.Query(ctx, "SELECT account, level, status FROM permissions WHERE tool = $1 ORDER BY account, level", tool)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	accounts := []AccountState{}
+	for rows.Next() {
+		var account string
+		var l LevelStatus
+		if err := rows.Scan(&account, &l.Level, &l.Status); err != nil {
+			return nil, err
+		}
+		if n := len(accounts); n == 0 || accounts[n-1].Account != account {
+			accounts = append(accounts, AccountState{Tool: tool, Account: account, Exists: true, Levels: []LevelStatus{}})
+		}
+		accounts[len(accounts)-1].Levels = append(accounts[len(accounts)-1].Levels, l)
+	}
+	return accounts, rows.Err()
 }

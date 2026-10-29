@@ -19,7 +19,7 @@ export function GrantDrawer({ grant, onClose, footer }: { grant: Grant; onClose:
   return (
     <Drawer open onClose={onClose} title={`${grant.tool} · ${grant.level}`} sub={grant.employee?.fullName} footer={footer}>
       <div className="stack" style={{ gap: 20 }}>
-        <div className="row-wrap"><GrantBadges grant={grant} /><MethodTag method={grant.method} />{grant.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>}</div>
+        <div className="row-wrap"><GrantBadges grant={grant} /><MethodTag method={grant.method} />{grant.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>}{grant.imported && <Tag title="AccessFlow’dan önce vardı; onaylayan bilinmiyor">İçe aktarılan</Tag>}</div>
         {grant.status === "FAILED" && <Callout tone="danger" title="Erişim verilemedi">Yetkili bir yönetici işlemi İstisnalar ekranından yeniden deneyebilir.</Callout>}
         {grant.status === "REVOCATION_FAILED" && <Callout tone="danger" title="Kaldırma başarısız">Kaldırma doğrulanana kadar erişim sürmüş sayılır.</Callout>}
         <KeyValueList items={[
@@ -27,6 +27,7 @@ export function GrantDrawer({ grant, onClose, footer }: { grant: Grant; onClose:
           ["Bitiş", <ExpiryCell grant={grant} />],
           ["Kanıt", grant.evidence === "VERIFIED" ? "API durum sorgusuyla doğrulandı" : grant.evidence === "SELF_REPORTED" ? "Yetkili yönetici tarafından onaylandı (beyana dayalı)" : "—"],
           grant.retainedOnTransfer && ["Transferde korunma gerekçesi", grant.retainedOnTransfer.justification],
+          grant.imported && ["Onay kanıtı", "AccessFlow’dan önce vardı; onaylayan bilinmiyor"],
           !!grant.closedReason ? ["Kapanış nedeni", reasonText(grant.closedReason)] : null,
           !!grant.effectiveTo && ["Etkin bitiş", formatDateTime(grant.effectiveTo, timezone)],
         ]} />

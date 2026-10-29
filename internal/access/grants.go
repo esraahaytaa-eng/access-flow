@@ -121,8 +121,11 @@ func requestRemoval(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.U
 	var op uuid.UUID
 	var opStatus string
 	var neverSent bool
-	if err := tx.QueryRow(ctx, "SELECT id, status, first_attempt_at IS NULL FROM operations WHERE grant_id = $1 AND type = 'GRANT'",
-		grant).Scan(&op, &opStatus, &neverSent); err != nil {
+	err = tx.QueryRow(ctx, "SELECT id, status, first_attempt_at IS NULL FROM operations WHERE grant_id = $1 AND type = 'GRANT'",
+		grant).Scan(&op, &opStatus, &neverSent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		opStatus = "SUCCEEDED" // an imported grant (D10): the tool held it before AccessFlow
+	} else if err != nil {
 		return err
 	}
 	if opStatus == "PENDING" && neverSent {
@@ -148,6 +151,24 @@ func requestRemoval(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.U
 	}
 	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "GRANT_REVOCATION_REQUESTED", Entity: "grant",
 		EntityID: &grant, SubjectID: &employee, Reason: reason, Details: map[string]any{"by": by, "grantOperationCancelled": grantCancelled}})
+}
+
+// LockForRemoval takes a grant's removal locks (see lockForRemoval) for a caller that may
+// then change it, such as a review decision (D8).
+func LockForRemoval(ctx context.Context, tx pgx.Tx, grant uuid.UUID) error {
+	_, err := lockForRemoval(ctx, tx, grant)
+	return err
+}
+
+// Remove takes the removal locks (see lockForRemoval) and requests the grant's removal, in
+// the caller's transaction: for review decisions (D8) and orphan accounts (D10). A grant
+// already being removed, or closed, is left as it is.
+func Remove(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, grant uuid.UUID, by, reason string) error {
+	employee, err := lockForRemoval(ctx, tx, grant)
+	if err != nil {
+		return err
+	}
+	return requestRemoval(ctx, tx, now, actor, grant, employee, by, reason)
 }
 
 // endChanges cancels the pending extension or level change of a grant being closed, so it
@@ -213,6 +234,7 @@ type Grant struct {
 	ClosedReason       *string    `json:"closedReason"` // why it was revoked or cancelled
 	Suspension         *string    `json:"suspension"`   // a SUSPEND or RESUME not yet verified or confirmed (D7)
 	RetainedOnTransfer *Retention `json:"retainedOnTransfer"`
+	Imported           bool       `json:"imported"` // existed before AccessFlow; approver unknown (D10)
 	Version            int        `json:"version"`
 	CreatedAt          time.Time  `json:"createdAt"`
 }
@@ -236,7 +258,7 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		               CASE WHEN x.last_error IS NULL THEN '_REQUESTED' ELSE '_FAILED' END
 		        FROM operations x WHERE x.grant_id = g.id AND x.type IN ('SUSPEND', 'RESUME') AND x.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
 		        ORDER BY x.id DESC LIMIT 1),
-		       g.retained_at, g.retention_justification
+		       g.retained_at, g.retention_justification, g.import_id IS NOT NULL
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
@@ -251,7 +273,7 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		var justification *string
 		err := row.Scan(&g.ID, &g.Employee.ID, &g.Employee.FullName, &g.ToolID, &g.Tool, &g.AccessLevelID, &g.Level, &g.Method,
 			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket,
-			&g.Suspension, &retainedAt, &justification)
+			&g.Suspension, &retainedAt, &justification, &g.Imported)
 		if retainedAt != nil {
 			g.RetainedOnTransfer = &Retention{At: *retainedAt, Justification: *justification}
 		}

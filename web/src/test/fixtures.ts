@@ -21,7 +21,7 @@ export const request = (items = [item()], over: Record<string, unknown> = {}) =>
 export const grant = (over: Record<string, unknown> = {}) => ({
   id: "g1", employee: person("e1", "Elif Yılmaz"), toolId: "t1", tool: "Jira", accessLevelId: "l1", level: "Kullanıcı", method: "API",
   status: "ACTIVE", displayStatus: "ACTIVE / VERIFIED", evidence: "VERIFIED", effectiveFrom: "2026-10-01T09:00:00Z", effectiveTo: null,
-  expiresOn: null, closedReason: null, suspension: null, retainedOnTransfer: null, version: 7, createdAt: "2026-10-01T09:00:00Z", ...over,
+  expiresOn: null, closedReason: null, suspension: null, retainedOnTransfer: null, imported: false, version: 7, createdAt: "2026-10-01T09:00:00Z", ...over,
 });
 
 export const employee = (over: Record<string, unknown> = {}) => ({

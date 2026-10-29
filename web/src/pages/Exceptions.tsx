@@ -1,17 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import { useExceptions, useTools } from "../api/queries";
-import type { Approval, Operation, Overlap } from "../api/types";
+import type { Approval, Operation, Orphan, Overlap } from "../api/types";
 import { operationLabel, stepLabel } from "../i18n/labels";
 import { useSession } from "../session";
-import { Badge, Button, Callout, Card, EmptyState, PageHeader, Person, Segmented, StatusBadge, TableSkeleton, ToolCell, useAction } from "../ui/components";
+import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, PageHeader, Person, Segmented, StatusBadge, TableSkeleton, ToolCell, useAction } from "../ui/components";
 import { formatDateTime, relativeTime } from "../ui/format";
 import { statusBadge } from "../ui/status";
 import { DecisionDrawer } from "./Approvals";
 
 type Group = "OPS" | "STATE" | "FLOW";
-type Exception = { key: string; title: string; high: boolean; group: Group; at: string | null; body: ReactNode; op?: Operation; approval?: Approval };
+type Exception = { key: string; title: string; high: boolean; group: Group; at: string | null; body: ReactNode; op?: Operation; approval?: Approval; orphan?: Orphan; finding?: boolean };
 
 const opBody = (op: Operation, note?: string) => (
   <div className="stack-sm">
@@ -42,6 +43,8 @@ export function ExceptionsPage() {
   const query = useExceptions();
   const [filter, setFilter] = useState<"ALL" | Group>("ALL");
   const [openStep, setOpenStep] = useState<Approval | null>(null);
+  const [orphanAction, setOrphanAction] = useState<{ o: Orphan; action: "revoke" | "dismiss" } | null>(null);
+  const navigate = useNavigate();
   const [run, busy] = useAction();
   const readOnly = !hasRole("SUPER_ADMIN", "INFOSEC");
   const x = query.data;
@@ -55,10 +58,24 @@ export function ExceptionsPage() {
     ...fromOps(x.suspensionGaps, "Askıya alma tamamlanmadı", true, "OPS", "Askıdaki çalışanın bu araçtaki erişimi henüz devre dışı bırakılamadı."),
     ...x.overlaps.filter((o) => !seen.has(o.operationId) && seen.add(o.operationId)).map((o): Exception => ({ key: o.operationId, title: "Seviye çakışması", high: true, group: "STATE", at: null, body: overlapBody(o) })),
     ...fromOps(x.staleGrants, "Transferden sonra etkinleşen erişim", true, "STATE", "Transfer sırasında kaldırılması istenen erişim sonradan etkinleşti; kaldırma doğrulanana kadar izlenir."),
+    ...x.orphanAccounts.map((o): Exception => ({
+      key: o.id, title: "Sahipsiz hesap", high: true, group: "STATE", at: o.importedAt, orphan: o,
+      body: (
+        <div className="row-wrap" style={{ gap: 18 }}>
+          <ToolCell tool={o.tool} level={o.level} />
+          <div className="small"><div className="mono">{o.account}</div><div className="muted">Kaynak: {o.source === "MOCK" ? "Araç servisi" : o.fileName}</div></div>
+          <div className="small muted">Hiçbir çalışanla eşleşmedi; otomatik atanmaz.</div>
+        </div>
+      ),
+    })),
     ...fromOps(x.failedOperations, "Başarısız işlem", false, "OPS"),
     ...x.unroutableSteps.map((a): Exception => ({
       key: a.step.id, title: "Uygun onaylayıcı yok", high: false, group: "FLOW", at: a.step.openedAt, approval: a,
       body: <div className="row-wrap" style={{ gap: 18 }}><Person person={a.item.beneficiary} sub={false} /><ToolCell tool={a.item.tool} level={a.item.level} sub={`${stepLabel[a.step.type]} adımı`} /></div>,
+    })),
+    ...x.reviewFindings.map((i): Exception => ({
+      key: i.id, title: "Açık inceleme bulgusu", high: false, group: "FLOW", at: i.findingAt, finding: true,
+      body: <div className="row-wrap" style={{ gap: 18 }}><Person person={i.employee} sub={false} /><ToolCell tool={i.tool} level={i.level} sub={`İnceleyen: ${i.reviewerName ?? "Bilgi Güvenliği havuzu"} · 21 günde yanıtlanmadı`} /></div>,
     })),
   ];
   const count = (g: Group) => list.filter((e) => e.group === g).length;
@@ -69,7 +86,7 @@ export function ExceptionsPage() {
 
   return (
     <>
-      <PageHeader title="İstisnalar" sub="Yalnızca gerçek sorunlar: başarısız işlemler, ayrılanların süren erişimleri, çakışan erişimler ve onaylayıcısı olmayan adımlar. Olağan bekleyen işler burada listelenmez." />
+      <PageHeader title="İstisnalar" sub="Yalnızca gerçek sorunlar: başarısız işlemler, ayrılanların süren erişimleri, çakışan erişimler, sahipsiz hesaplar, açık inceleme bulguları ve onaylayıcısı olmayan adımlar. Olağan bekleyen işler burada listelenmez." />
       {readOnly && <div style={{ marginBottom: 14 }}><Callout icon="eye">Denetçi olarak bu ekranı salt okunur görüntülüyorsunuz.</Callout></div>}
       <div className="toolbar">
         <Segmented<"ALL" | Group> label="İstisna türü" value={filter} onChange={setFilter}
@@ -92,11 +109,25 @@ export function ExceptionsPage() {
                 </div>
                 {!readOnly && e.op?.status === "FAILED" && canRetry(e.op) && <div className="row"><Button size="sm" icon="refresh" loading={busy} onClick={() => retry(e.op!)}>Yeniden dene</Button></div>}
                 {!readOnly && e.approval && e.approval.item.beneficiary.id !== me.id && <div className="row"><Button size="sm" onClick={() => setOpenStep(e.approval!)}>{hasRole("SUPER_ADMIN") ? "Yeniden ata veya geçersiz kıl" : "Yeniden ata"}</Button></div>}
+                {e.orphan && hasRole("INFOSEC") && (
+                  <div className="row">
+                    <Button size="sm" onClick={() => setOrphanAction({ o: e.orphan!, action: "dismiss" })}>Bulguyu kapat</Button>
+                    <Button size="sm" variant="danger-ghost" onClick={() => setOrphanAction({ o: e.orphan!, action: "revoke" })}>Hesabı kaldır</Button>
+                  </div>
+                )}
+                {e.finding && <div className="row"><Button size="sm" onClick={() => navigate("/reviews")}>İncelemeye git</Button></div>}
               </div>
             </Card>
           ))}
         </div>
       )}
+      <ConfirmDialog open={!!orphanAction} onClose={() => setOrphanAction(null)} reason
+        title={orphanAction?.action === "revoke" ? "Sahipsiz hesap kaldırılsın mı?" : "Bulgu kapatılsın mı?"}
+        desc={orphanAction && (orphanAction.action === "revoke" ? `${orphanAction.o.account} hesabı ${orphanAction.o.tool} üzerinde normal iş akışıyla kaldırılır.`
+          : "Hesap meşru bir sistem hesabıysa bulguyu gerekçesiyle kapatabilirsiniz. Karar denetim kaydına işlenir.")}
+        confirmLabel={orphanAction?.action === "revoke" ? "Hesabı kaldır" : "Bulguyu kapat"} tone={orphanAction?.action === "revoke" ? "danger" : "primary"}
+        success={orphanAction?.action === "revoke" ? "Kaldırma başlatıldı" : "Bulgu kapatıldı"}
+        onConfirm={async (reason) => { await api.post(`/orphans/${orphanAction!.o.id}/${orphanAction!.action}`, { reason, version: orphanAction!.o.version }); qc.invalidateQueries({ queryKey: ["exceptions"] }); }} />
       {openStep && <DecisionDrawer approval={openStep} canDecide={false} onClose={() => { setOpenStep(null); qc.invalidateQueries({ queryKey: ["exceptions"] }); }} />}
     </>
   );

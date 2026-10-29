@@ -15,6 +15,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
+	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 )
 
 // decided are the step statuses that count someone as an approver of the item.
@@ -594,6 +595,8 @@ type Exceptions struct {
 	SuspensionGaps      []access.Operation `json:"suspensionGaps"`
 	SecurityRevocations []access.Operation `json:"securityRevocations"`
 	StaleGrants         []access.Operation `json:"staleGrants"`
+	ReviewFindings      []reviews.Item     `json:"reviewFindings"`
+	OrphanAccounts      []access.Orphan    `json:"orphanAccounts"`
 }
 
 func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Exceptions, error) {
@@ -621,8 +624,16 @@ func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Excepti
 		return Exceptions{}, err
 	}
 	stale, err := access.StaleGrants(ctx, s.pool)
+	if err != nil {
+		return Exceptions{}, err
+	}
+	findings, err := reviews.OpenFindings(ctx, s.pool)
+	if err != nil {
+		return Exceptions{}, err
+	}
+	orphans, err := access.OrphanAccounts(ctx, s.pool)
 	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps, SuspensionGaps: gaps, SecurityRevocations: leavers,
-		StaleGrants: stale}, err
+		StaleGrants: stale, ReviewFindings: findings, OrphanAccounts: orphans}, err
 }
 
 // Open lists every open step, unroutable ones marked, for InfoSec and Super Admins, who

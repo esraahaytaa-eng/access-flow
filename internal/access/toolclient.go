@@ -132,6 +132,50 @@ func (c *HTTPToolClient) Account(ctx context.Context, tool, account string) (Too
 	return state, nil
 }
 
+// ToolHolding is one account's permissions in a tool, as the baseline import reads them.
+type ToolHolding struct {
+	Account string
+	Levels  []ToolLevel
+}
+
+// Accounts lists every account holding a permission in tool (D10 baseline import).
+func (c *HTTPToolClient) Accounts(ctx context.Context, tool string) ([]ToolHolding, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/v1/tools/"+url.PathEscape(tool)+"/accounts", nil)
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		Tool     string `json:"tool"`
+		Accounts []struct {
+			Tool    string `json:"tool"`
+			Account string `json:"account"`
+			Exists  bool   `json:"exists"`
+			Levels  []struct {
+				Level  string `json:"level"`
+				Status string `json:"status"`
+			} `json:"levels"`
+		} `json:"accounts"`
+	}
+	if err := c.do(req, &got); err != nil {
+		return nil, err
+	}
+	if got.Tool != tool {
+		return nil, fmt.Errorf("mock tool listed %s", got.Tool)
+	}
+	var out []ToolHolding
+	for _, a := range got.Accounts {
+		h := ToolHolding{Account: a.Account}
+		for _, l := range a.Levels {
+			if l.Status != "ACTIVE" && l.Status != "SUSPENDED" {
+				return nil, fmt.Errorf("mock tool level status %q", l.Status)
+			}
+			h.Levels = append(h.Levels, ToolLevel{l.Level, l.Status})
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
 // do sends req and decodes exactly one JSON value with known fields from a 200 answer.
 func (c *HTTPToolClient) do(req *http.Request, v any) error {
 	resp, err := c.http.Do(req)

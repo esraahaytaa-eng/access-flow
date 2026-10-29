@@ -1,0 +1,392 @@
+package access
+
+import (
+	"context"
+	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/esraahaytaa-eng/access-flow/internal/audit"
+	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/platform"
+)
+
+// ImportLockKey makes imports run one at a time: each checks what was imported before.
+const ImportLockKey int64 = 0x0D10_1A70
+
+var (
+	errInvalidCSV      = platform.ValidationError("content", "invalid_csv")
+	errToolUnavailable = platform.NewError(http.StatusBadGateway, "tool_unavailable")
+	errOrphanClosed    = platform.NewError(http.StatusConflict, "orphan_closed")
+)
+
+// ImportReport is what one baseline import did (D10).
+type ImportReport struct {
+	ID         uuid.UUID  `json:"id"`
+	Source     string     `json:"source"` // MOCK or CSV
+	FileName   *string    `json:"fileName"`
+	ImportedBy Person     `json:"importedBy"`
+	ImportedAt time.Time  `json:"importedAt"`
+	Imported   int        `json:"imported"` // new grants, orphans included
+	Orphans    int        `json:"orphans"`
+	Terminated int        `json:"terminated"` // accounts of terminated employees, removal started
+	Skipped    int        `json:"skipped"`    // imported before, or already granted in AccessFlow
+	Rejected   []Rejected `json:"rejected"`
+}
+
+// Rejected is a row the import could not place: unknown_tool, unknown_level, api_tool
+// (read from the tool itself) or invalid_row.
+type Rejected struct {
+	Line    int    `json:"line,omitempty"` // CSV only
+	Account string `json:"account"`
+	Tool    string `json:"tool"`
+	Level   string `json:"level"`
+	Reason  string `json:"reason"`
+}
+
+// holding is one (tool, account, level) to import; email matches the employee.
+type holding struct {
+	email, account string
+	tool, level    uuid.UUID
+	method         string
+}
+
+// ImportMock imports the accounts the Mock Tool Service holds for every active API tool.
+func (s *Service) ImportMock(ctx context.Context, actor auth.Principal) (ImportReport, error) {
+	if !actor.HasRole("SUPER_ADMIN") {
+		return ImportReport{}, platform.ErrForbidden
+	}
+	rows, err := s.pool.Query(ctx, `SELECT t.id, t.name, l.id FROM tools t JOIN access_levels l ON l.tool_id = t.id
+		WHERE t.fulfillment_method = 'API' AND t.status = 'ACTIVE' ORDER BY t.name, t.id`)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	type toolLevel struct {
+		Tool  uuid.UUID
+		Name  string
+		Level uuid.UUID
+	}
+	pairs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[toolLevel])
+	if err != nil {
+		return ImportReport{}, err
+	}
+	var holdings []holding
+	rejected := []Rejected{}
+	for i, p := range pairs {
+		if i > 0 && pairs[i-1].Tool == p.Tool {
+			continue
+		}
+		accounts, err := s.tools.Accounts(ctx, p.Tool.String())
+		if err != nil {
+			return ImportReport{}, errors.Join(errToolUnavailable, err)
+		}
+		for _, a := range accounts {
+			for _, l := range a.Levels {
+				level, err := uuid.Parse(l.Level)
+				known := err == nil && slices.ContainsFunc(pairs, func(x toolLevel) bool { return x.Tool == p.Tool && x.Level == level })
+				if !known {
+					rejected = append(rejected, Rejected{Account: a.Account, Tool: p.Name, Level: l.Level, Reason: "unknown_level"})
+					continue
+				}
+				holdings = append(holdings, holding{a.Account, a.Account, p.Tool, level, "API"})
+			}
+		}
+	}
+	return s.importHoldings(ctx, actor, "MOCK", nil, holdings, rejected)
+}
+
+// csvHeader is the import file's header row (Turkish, as the UI): email, tool, level, account.
+var csvHeader = []string{"eposta", "arac", "seviye", "hesap"}
+
+// ImportCSV imports a semicolon-separated file of Manual and Vendor tool accounts. An empty
+// account column means the account is the email address.
+func (s *Service) ImportCSV(ctx context.Context, actor auth.Principal, fileName, content string) (ImportReport, error) {
+	if !actor.HasRole("SUPER_ADMIN") {
+		return ImportReport{}, platform.ErrForbidden
+	}
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return ImportReport{}, platform.ValidationError("fileName", "field_required")
+	}
+	if err := platform.CheckText(fileName, "fileName", 200); err != nil {
+		return ImportReport{}, err
+	}
+	r := csv.NewReader(strings.NewReader(content))
+	r.Comma, r.FieldsPerRecord, r.TrimLeadingSpace = ';', -1, true
+	header, err := r.Read()
+	if err != nil || len(header) != len(csvHeader) {
+		return ImportReport{}, errInvalidCSV
+	}
+	for i, h := range header {
+		if strings.ToLower(strings.TrimSpace(strings.TrimPrefix(h, "\ufeff"))) != csvHeader[i] {
+			return ImportReport{}, errInvalidCSV
+		}
+	}
+	type level struct {
+		Tool   uuid.UUID
+		ToolN  string
+		Method string
+		Level  *uuid.UUID
+		LevelN *string
+	}
+	rows, err := s.pool.Query(ctx, `SELECT t.id, lower(t.name), t.fulfillment_method, l.id, lower(l.name)
+		FROM tools t LEFT JOIN access_levels l ON l.tool_id = t.id WHERE t.status = 'ACTIVE'`)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	catalog, err := pgx.CollectRows(rows, pgx.RowToStructByPos[level])
+	if err != nil {
+		return ImportReport{}, err
+	}
+	var holdings []holding
+	rejected := []Rejected{}
+	for {
+		rec, err := r.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return ImportReport{}, errInvalidCSV // a broken quote: nothing after it can be trusted
+		}
+		line, _ := r.FieldPos(0)
+		if len(rec) == 1 && strings.TrimSpace(rec[0]) == "" {
+			continue
+		}
+		for i := range rec {
+			rec[i] = strings.TrimSpace(rec[i])
+		}
+		if len(rec) != len(csvHeader) || rec[0] == "" || rec[1] == "" || rec[2] == "" || platform.CheckText(strings.Join(rec, " "), "row", 1000) != nil {
+			rejected = append(rejected, Rejected{Line: line, Account: strings.Join(rec, ";"), Reason: "invalid_row"})
+			continue
+		}
+		email, toolName, levelName, account := rec[0], rec[1], rec[2], rec[3]
+		if account == "" {
+			account = email
+		}
+		reject := func(reason string) {
+			rejected = append(rejected, Rejected{Line: line, Account: account, Tool: toolName, Level: levelName, Reason: reason})
+		}
+		i := slices.IndexFunc(catalog, func(c level) bool { return c.ToolN == strings.ToLower(toolName) })
+		switch {
+		case i < 0:
+			reject("unknown_tool")
+			continue
+		case catalog[i].Method == "API":
+			reject("api_tool")
+			continue
+		}
+		j := slices.IndexFunc(catalog, func(c level) bool {
+			return c.Tool == catalog[i].Tool && c.LevelN != nil && *c.LevelN == strings.ToLower(levelName)
+		})
+		if j < 0 {
+			reject("unknown_level")
+			continue
+		}
+		holdings = append(holdings, holding{email, account, catalog[j].Tool, *catalog[j].Level, catalog[j].Method})
+	}
+	if len(holdings) == 0 && len(rejected) == 0 {
+		return ImportReport{}, errInvalidCSV
+	}
+	return s.importHoldings(ctx, actor, "CSV", &fileName, holdings, rejected)
+}
+
+// importHoldings records each new holding as an IMPORTED_BASELINE grant, in one transaction
+// with the import report (D10). A holding imported before, or already granted through
+// AccessFlow, is skipped. No approval or activation date is invented. A terminated
+// employee's account is removed at once and a suspended employee's suspended; an account
+// matching no employee is an orphan for InfoSec.
+func (s *Service) importHoldings(ctx context.Context, actor auth.Principal, source string, fileName *string,
+	holdings []holding, rejected []Rejected) (ImportReport, error) {
+	report := ImportReport{ID: uuid.Must(uuid.NewV7()), Source: source, FileName: fileName,
+		ImportedBy: Person{actor.EmployeeID, actor.FullName}, Rejected: rejected}
+	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		report.ImportedAt, report.Imported, report.Orphans, report.Terminated, report.Skipped = now, 0, 0, 0, 0
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", ImportLockKey); err != nil {
+			return err
+		}
+		for _, h := range holdings {
+			var employee *uuid.UUID
+			var status string
+			err := tx.QueryRow(ctx, "SELECT id, status FROM employees WHERE lower(email) = lower($1) FOR UPDATE", h.email).Scan(&employee, &status)
+			if errors.Is(err, pgx.ErrNoRows) {
+				employee, err = nil, nil // an orphan account
+			}
+			if err != nil {
+				return err
+			}
+			var skip bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM grants WHERE import_id IS NOT NULL AND tool_id = $1
+				AND lower(account) = lower($2) AND access_level_id = $3)
+				OR EXISTS (SELECT 1 FROM grants WHERE employee_id = $4 AND access_level_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED'))`,
+				h.tool, h.account, h.level, employee).Scan(&skip); err != nil {
+				return err
+			}
+			if skip {
+				report.Skipped++
+				continue
+			}
+			var grant uuid.UUID
+			if err := tx.QueryRow(ctx, `INSERT INTO grants (employee_id, tool_id, access_level_id, method, status, import_id, account, created_at)
+				VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7) RETURNING id`,
+				employee, h.tool, h.level, h.method, report.ID, h.account, now).Scan(&grant); err != nil {
+				return err
+			}
+			report.Imported++
+			if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "GRANT_IMPORTED", Entity: "grant", EntityID: &grant,
+				SubjectID: employee, Details: map[string]any{"importId": report.ID, "source": source, "account": h.account,
+					"approver": "unknown: existed before AccessFlow", "orphan": employee == nil}}); err != nil {
+				return err
+			}
+			switch {
+			case employee == nil:
+				report.Orphans++
+			case status == "TERMINATED":
+				report.Terminated++
+				err = requestRemoval(ctx, tx, now, &actor.EmployeeID, grant, *employee, "TERMINATION", "account of a terminated employee")
+			case status == "SUSPENDED":
+				err = suspendIfSuspended(ctx, tx, now, grant, *employee)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		raw, err := json.Marshal(report)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO imports (id, source, file_name, imported_by, imported_at, report) VALUES ($1, $2, $3, $4, $5, $6)`,
+			report.ID, source, fileName, actor.EmployeeID, now, raw); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "ACCESS_IMPORTED", Entity: "import", EntityID: &report.ID,
+			Details: map[string]any{"source": source, "fileName": fileName, "imported": report.Imported, "orphans": report.Orphans,
+				"skipped": report.Skipped, "rejected": len(rejected)}})
+	})
+	return report, err
+}
+
+// Imports lists the import reports, newest first, for Super Admins and InfoSec.
+func (s *Service) Imports(ctx context.Context, actor auth.Principal) ([]ImportReport, error) {
+	if !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("INFOSEC") && !actor.HasRole("AUDITOR") {
+		return nil, platform.ErrForbidden
+	}
+	rows, err := s.pool.Query(ctx, "SELECT report FROM imports ORDER BY imported_at DESC, id DESC LIMIT 100")
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ImportReport, error) {
+		var r ImportReport
+		err := row.Scan(&r)
+		return r, err
+	})
+}
+
+// Orphan is an imported account that matches no employee (D10), until InfoSec revokes or
+// dismisses it.
+type Orphan struct {
+	ID            uuid.UUID `json:"id"`
+	ToolID        uuid.UUID `json:"toolId"`
+	Tool          string    `json:"tool"`
+	AccessLevelID uuid.UUID `json:"accessLevelId"`
+	Level         string    `json:"level"`
+	Method        string    `json:"method"`
+	Account       string    `json:"account"`
+	Status        string    `json:"status"`
+	Source        string    `json:"source"`
+	FileName      *string   `json:"fileName"`
+	ImportedAt    time.Time `json:"importedAt"`
+	Version       int       `json:"version"`
+}
+
+// openOrphan is an orphan still waiting for InfoSec.
+const openOrphan = "g.orphan_dismissed_at IS NULL AND g.status IN ('ACTIVE', 'SUSPENDED')"
+
+// OrphanAccounts lists the open orphans (Exceptions). The caller checks who may read them.
+func OrphanAccounts(ctx context.Context, pool *pgxpool.Pool) ([]Orphan, error) {
+	return orphans(ctx, pool, openOrphan)
+}
+
+func orphans(ctx context.Context, pool *pgxpool.Pool, where string, args ...any) ([]Orphan, error) {
+	rows, err := pool.Query(ctx, `SELECT g.id, t.id, t.name, l.id, l.name, g.method, g.account, g.status, i.source, i.file_name,
+		       i.imported_at, g.version
+		FROM grants g JOIN imports i ON i.id = g.import_id JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
+		WHERE g.employee_id IS NULL AND `+where+` ORDER BY t.name, g.account, l.name LIMIT 500`, args...) // shortcut: first 500; page after a bigger import
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Orphan])
+}
+
+// RevokeOrphan removes an orphan account through the normal removal (D10).
+func (s *Service) RevokeOrphan(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (Orphan, error) {
+	return s.orphanAction(ctx, actor, id, version, reason, func(tx pgx.Tx, now time.Time) error {
+		return Remove(ctx, tx, now, &actor.EmployeeID, id, "ORPHAN", reason)
+	})
+}
+
+// DismissOrphan closes an orphan finding, leaving the account as it is, with a reason.
+func (s *Service) DismissOrphan(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (Orphan, error) {
+	return s.orphanAction(ctx, actor, id, version, reason, func(tx pgx.Tx, now time.Time) error {
+		if _, err := tx.Exec(ctx, `UPDATE grants SET orphan_dismissed_at = $2, orphan_dismissed_by = $3, orphan_dismiss_reason = $4,
+			version = version + 1 WHERE id = $1`, id, now, actor.EmployeeID, reason); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "ORPHAN_DISMISSED", Entity: "grant", EntityID: &id,
+			Reason: reason})
+	})
+}
+
+// orphanAction runs do on an open orphan, for InfoSec (D10), at the version they saw.
+func (s *Service) orphanAction(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string,
+	do func(tx pgx.Tx, now time.Time) error) (Orphan, error) {
+	if !actor.HasRole("INFOSEC") {
+		return Orphan{}, platform.ErrForbidden
+	}
+	if strings.TrimSpace(reason) == "" {
+		return Orphan{}, platform.ValidationError("reason", "reason_required")
+	}
+	if err := platform.CheckText(reason, "reason", 1000); err != nil {
+		return Orphan{}, err
+	}
+	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		// Lock order: operations, then the grant (see Runner).
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", id); err != nil {
+			return err
+		}
+		if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
+		var current int
+		var isOpen bool
+		err := tx.QueryRow(ctx, "SELECT g.version, "+openOrphan+" FROM grants g WHERE g.id = $1 AND g.employee_id IS NULL FOR UPDATE",
+			id).Scan(&current, &isOpen)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return platform.ErrNotFound
+		case err != nil:
+			return err
+		case current != version:
+			return errVersionConflict
+		case !isOpen:
+			return errOrphanClosed
+		}
+		return do(tx, now)
+	})
+	if err != nil {
+		return Orphan{}, err
+	}
+	list, err := orphans(ctx, s.pool, "g.id = $1", id)
+	if err != nil || len(list) == 0 {
+		return Orphan{}, err
+	}
+	return list[0], nil
+}

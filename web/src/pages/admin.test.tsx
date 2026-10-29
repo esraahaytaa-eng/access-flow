@@ -17,7 +17,7 @@ const sa = principal({ employee: { id: "sa", email: "sa@x.co", fullName: "Okan A
 const auditor = principal({ employee: { id: "au", email: "au@x.co", fullName: "Gizem Denetçi", roles: ["AUDITOR"] } }) as never;
 const dialog = (name: string) => within(screen.getByRole("dialog", { name }));
 const op = (over: Record<string, unknown> = {}) => ({ id: "op1", grantId: "g1", type: "REVOKE", employee: person("e2", "Deniz Kara"), tool: "Jira", level: "Kullanıcı", status: "FAILED", attempts: 3, lastError: "timeout", failedAt: "2026-10-28T09:00:00Z", version: 4, createdAt: "2026-10-28T08:00:00Z", ...over });
-const noExceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [] };
+const noExceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [], reviewFindings: [], orphanAccounts: [] };
 const people = [employee({ id: "o1", fullName: "Can Owner", roles: [] }), employee({ id: "is1", fullName: "Deniz Güvenlik", roles: ["INFOSEC"] }), employee({ id: "sa", fullName: "Okan Admin", roles: ["SUPER_ADMIN"] })];
 const base = { "GET /employees": { employees: people }, "GET /admin-groups": { groups: [{ id: "grp1", name: "IT", memberIds: ["o1"] }] }, "GET /approvals": { approvals: [] } };
 const jiraAdmin = { id: "t1", name: "Jira", fulfillmentMethod: "API", owner: person("o1", "Can Owner"), adminGroup: { id: "grp1", name: "IT" }, status: "ACTIVE", version: 2,

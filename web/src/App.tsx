@@ -5,6 +5,7 @@ import { api, ApiError, setUnauthorizedHandler } from "./api/client";
 import type { Principal } from "./api/types";
 import { ChangePasswordPage, ForcedPasswordChange } from "./pages/ChangePassword";
 import { ApprovalsPage } from "./pages/Approvals";
+import { ReviewsPage } from "./pages/Reviews";
 import { CatalogPage } from "./pages/Catalog";
 import { EmployeeDetailPage } from "./pages/EmployeeDetail";
 import { DirectGrantPage } from "./pages/DirectGrant";
@@ -71,6 +72,7 @@ function Root() {
           <Route path="/access" element={<MyAccessPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="/team" element={<TeamPage />} />
+          <Route path="/reviews" element={<ReviewsPage />} />
           <Route path="/tasks" element={<Guard allow={(s) => s.adminGroups.length > 0}><TasksPage /></Guard>} />
           <Route path="/employees" element={<Guard allow={(s) => s.hasRole("HR_MANAGER", "SUPER_ADMIN")}><EmployeesPage /></Guard>} />
           <Route path="/employees/:id" element={<Guard allow={(s) => s.hasRole("HR_MANAGER", "SUPER_ADMIN")}><EmployeeDetailPage /></Guard>} />

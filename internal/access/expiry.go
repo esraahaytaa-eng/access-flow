@@ -76,8 +76,8 @@ func expire(ctx context.Context, pool *pgxpool.Pool, loc *time.Location, id uuid
 // or level change (an approval locks its item, then the employee), the employee, then the
 // grant's operations (see Runner). It returns the employee.
 func lockForRemoval(ctx context.Context, tx pgx.Tx, grant uuid.UUID) (uuid.UUID, error) {
-	var employee uuid.UUID // never changes
-	if err := tx.QueryRow(ctx, "SELECT employee_id FROM grants WHERE id = $1", grant).Scan(&employee); err != nil {
+	var employee uuid.UUID // never changes; uuid.Nil for an orphan account (D10), whose locks below match nothing
+	if err := tx.QueryRow(ctx, "SELECT coalesce(employee_id, '00000000-0000-0000-0000-000000000000'::uuid) FROM grants WHERE id = $1", grant).Scan(&employee); err != nil {
 		return employee, err
 	}
 	// shortcut: a change submitted after this lock and approved before the employee's lock

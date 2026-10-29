@@ -66,7 +66,7 @@ export function EmployeeDetailPage() {
                 <tbody>
                   {grants.map((g) => (
                     <tr key={g.id}>
-                      <td><ToolCell tool={g.tool} level={g.level} sub={g.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>} /></td>
+                      <td><ToolCell tool={g.tool} level={g.level} sub={g.retainedOnTransfer ? <Tag warn>Transferde korundu</Tag> : g.imported && <Tag>İçe aktarılan</Tag>} /></td>
                       <td><GrantBadges grant={g} /></td>
                       <td className="small nowrap"><ExpiryCell grant={g} /></td>
                     </tr>

@@ -127,7 +127,8 @@ function TaskDrawer({ task, onClose }: { task: FulfillmentTask; onClose: () => v
           ["Oluşturulma", `${formatDateTime(task.createdAt, timezone)} · ${sinceText(task.createdAt)} bekliyor`],
           task.claimedBy && ["Üstlenen", task.claimedBy.fullName],
           task.ticketRef ? ["Tedarikçi talep no", <span className="mono">{task.ticketRef}</span>] : null,
-          ["İlgili talep", <Link to={`/requests/${task.requestId}`}>{task.requestId.slice(0, 8)}</Link>],
+          ["Hesap", <span className="mono">{task.account}</span>],
+          task.requestId ? ["İlgili talep", <Link to={`/requests/${task.requestId}`}>{task.requestId.slice(0, 8)}</Link>] : ["Kaynak", "İçe aktarılan erişim; onaylayan bilinmiyor"],
         ]} />
         {needsTicket && (
           <Field label="Tedarikçi talep numarası" required error={ticketError} hint="Tedarikçiye açtığınız talebin referansı. Tedarikçi işlemleri bu numara olmadan tamamlanamaz.">

@@ -11,6 +11,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
@@ -22,7 +23,7 @@ func testRouter(t *testing.T, dist fstest.MapFS) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(db.App, svc, time.UTC, dist)
+	return newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), dist)
 }
 
 func TestRouter(t *testing.T) {

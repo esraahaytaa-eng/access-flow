@@ -24,6 +24,7 @@ function navGroups(flags: RoleFlags, counts: ReturnType<typeof useNavCounts>) {
     { label: "İş akışları", items: [
       flags.approvals && { to: "/approvals", label: "Onay kutusu", icon: "inbox", count: counts.approvals },
       flags.manager && { to: "/team", label: "Ekibim", icon: "users" },
+      flags.reviews && { to: "/reviews", label: "Erişim incelemeleri", icon: "review", count: counts.reviews },
       flags.tasks && { to: "/tasks", label: "Karşılama görevleri", icon: "tasks", count: counts.tasks },
     ] },
     { label: "Yönetim", items: [
@@ -78,10 +79,15 @@ function notificationText(n: Notification, timeZone: string): string {
     case "SUPER_ADMIN_OVERRIDE": return "Bir onay adımı Süper Yönetici tarafından geçersiz kılındı.";
     case "APPROVAL_ASSIGNED": return `Size bir onay adımı atandı${d.reason ? `: ${d.reason}` : "."}`;
     case "GRANTS_RETAINED_ON_TRANSFER": return `${d.employee} ekibinize transfer edildi; ${(d.grants as unknown[] | undefined)?.length ?? 0} erişimi korundu.`;
+    case "REVIEW_STARTED": return `Erişim incelemesi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
+    case "REVIEW_REMINDER": return "Yanıt bekleyen bir inceleme kaleminiz var (gün 7 hatırlatması).";
+    case "REVIEW_ESCALATED": return "Yanıtlanmamış inceleme kalemleri Bilgi Güvenliğine eskale edildi.";
   }
 }
 
-const notificationLink: Partial<Record<Notification["kind"], string>> = { APPROVAL_ASSIGNED: "/approvals", GRANTS_RETAINED_ON_TRANSFER: "/team" };
+const notificationLink: Partial<Record<Notification["kind"], string>> = {
+  APPROVAL_ASSIGNED: "/approvals", GRANTS_RETAINED_ON_TRANSFER: "/team", REVIEW_STARTED: "/reviews", REVIEW_REMINDER: "/reviews", REVIEW_ESCALATED: "/reviews",
+};
 
 function NotificationsMenu() {
   const { timezone } = useSession();
