@@ -94,7 +94,7 @@ func run(args []string) error {
 	runner := access.NewRunner(pool, access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second))
 	var wg sync.WaitGroup
 	wg.Go(func() { runner.Run(ctx) })
-	wg.Go(func() { sweeps.New(pool, loc).Run(ctx) })
+	wg.Go(func() { sweeps.New(pool, loc, requests.TerminateDue).Run(ctx) })
 	defer wg.Wait()
 	defer stop() // runs first: a server that fails to start must stop the runner too
 

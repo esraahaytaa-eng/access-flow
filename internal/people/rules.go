@@ -39,9 +39,10 @@ var (
 	errPrivilegedReset = platform.NewError(http.StatusForbidden, "privileged_reset_requires_super_admin")
 )
 
-// checkReset: HR Managers and Super Admins reset others' passwords; an account holding
-// Super Admin or InfoSec needs a Super Admin (F4). Nobody resets their own: they change it.
-func checkReset(actor auth.Principal, target uuid.UUID, targetRoles []string) error {
+// CheckAccountAction: HR Managers and Super Admins reset others' passwords, and suspend,
+// reactivate or terminate others (D7, approved 2026-10-29); an account holding Super Admin
+// or InfoSec needs a Super Admin (F4). Nobody does this to their own account.
+func CheckAccountAction(actor auth.Principal, target uuid.UUID, targetRoles []string) error {
 	if !canManageEmployees(actor) {
 		return platform.ErrForbidden
 	}

@@ -100,6 +100,10 @@ func candidate(ctx context.Context, tx pgx.Tx, id *uuid.UUID) (*Candidate, *uuid
 	if id == nil {
 		return nil, nil, nil
 	}
+	// Lock first, then read: a suspension or termination committing now is seen (D7).
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR SHARE", *id); err != nil {
+		return nil, nil, err
+	}
 	var status string
 	var manager *uuid.UUID
 	if err := tx.QueryRow(ctx, "SELECT status, manager_id FROM employees WHERE id = $1", *id).Scan(&status, &manager); err != nil {
@@ -125,39 +129,46 @@ func advance(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location, 
 	if next == nil {
 		return finish(ctx, tx, now, loc, actor, it)
 	}
-	var route Route
-	switch next.Type {
-	case "MANAGER":
-		var managerID *uuid.UUID
-		if err := tx.QueryRow(ctx, "SELECT manager_id FROM employees WHERE id = $1", it.beneficiary).Scan(&managerID); err != nil {
-			return err
-		}
-		manager, skipID, err := candidate(ctx, tx, managerID)
-		if err != nil {
-			return err
-		}
-		skip, _, err := candidate(ctx, tx, skipID)
-		if err != nil {
-			return err
-		}
-		route = RouteManager(manager, skip, it.excluded())
-	case "TOOL_OWNER":
-		var ownerID uuid.UUID
-		if err := tx.QueryRow(ctx, "SELECT t.owner_id FROM request_items i JOIN tools t ON t.id = i.tool_id WHERE i.id = $1",
-			itemID).Scan(&ownerID); err != nil {
-			return err
-		}
-		owner, _, err := candidate(ctx, tx, &ownerID)
-		if err != nil {
-			return err
-		}
-		route = RouteToolOwner(*owner, it.excluded())
-	default:
-		route = toPool("InfoSec")
+	route, err := routeStep(ctx, tx, it, *next)
+	if err != nil {
+		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE approval_steps SET status = 'PENDING', assignee_id = $2, pool = NULLIF($3, ''), routing_note = $4,
 		opened_at = $5, version = version + 1 WHERE id = $1 AND status = 'WAITING'`, next.ID, route.AssigneeID, route.Pool, route.Note, now)
 	return err
+}
+
+// routeStep finds the step's approver now (F2): the beneficiary's manager or the tool's
+// owner when available, else their fallback.
+func routeStep(ctx context.Context, tx pgx.Tx, it itemState, next Step) (Route, error) {
+	switch next.Type {
+	case "MANAGER":
+		var managerID *uuid.UUID
+		if err := tx.QueryRow(ctx, "SELECT manager_id FROM employees WHERE id = $1", it.beneficiary).Scan(&managerID); err != nil {
+			return Route{}, err
+		}
+		manager, skipID, err := candidate(ctx, tx, managerID)
+		if err != nil {
+			return Route{}, err
+		}
+		skip, _, err := candidate(ctx, tx, skipID)
+		if err != nil {
+			return Route{}, err
+		}
+		return RouteManager(manager, skip, it.excluded()), nil
+	case "TOOL_OWNER":
+		var ownerID uuid.UUID
+		if err := tx.QueryRow(ctx, "SELECT t.owner_id FROM request_items i JOIN tools t ON t.id = i.tool_id WHERE i.id = $1",
+			it.id).Scan(&ownerID); err != nil {
+			return Route{}, err
+		}
+		owner, _, err := candidate(ctx, tx, &ownerID)
+		if err != nil {
+			return Route{}, err
+		}
+		return RouteToolOwner(*owner, it.excluded()), nil
+	}
+	return toPool("InfoSec"), nil
 }
 
 // finish runs when every step is decided. An item that can no longer apply is cancelled
@@ -200,7 +211,7 @@ func finish(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location, a
 		reason = "the access has ended"
 	}
 	if reason != "" {
-		return closeItem(ctx, tx, now, actor, it, "CANCELLED", reason)
+		return closeItem(ctx, tx, now, &actor, it, "CANCELLED", reason)
 	}
 	if added := policySteps(catalog.Steps(owner, infosec), it.steps); len(added) > 0 {
 		for i, typ := range added {
@@ -216,7 +227,7 @@ func finish(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location, a
 		}
 		return advance(ctx, tx, now, loc, actor, it.id)
 	}
-	if err := closeItem(ctx, tx, now, actor, it, "APPROVED", ""); err != nil {
+	if err := closeItem(ctx, tx, now, &actor, it, "APPROVED", ""); err != nil {
 		return err
 	}
 	if kind == "EXTENSION" {
@@ -228,7 +239,7 @@ func finish(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location, a
 
 // closeItem moves the item to a final status and cancels its undecided steps. A system
 // cancellation keeps its reason on the item for the requester.
-func closeItem(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, it itemState, to, reason string) error {
+func closeItem(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, it itemState, to, reason string) error {
 	if !canMove(itemMoves, it.status, to) {
 		return errItemNotPending
 	}
@@ -240,7 +251,7 @@ func closeItem(ctx context.Context, tx pgx.Tx, now time.Time, actor uuid.UUID, i
 		WHERE item_id = $1 AND status IN ('WAITING', 'PENDING')`, it.id); err != nil {
 		return err
 	}
-	return audit.Record(ctx, tx, audit.Event{ActorID: &actor, Action: "ITEM_" + to, Entity: "request_item", EntityID: &it.id,
+	return audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "ITEM_" + to, Entity: "request_item", EntityID: &it.id,
 		SubjectID: &it.beneficiary, Reason: reason})
 }
 
@@ -267,6 +278,15 @@ func (s *Service) decide(ctx context.Context, actor auth.Principal, stepID uuid.
 		if err != nil {
 			return err
 		}
+		// The session was checked before the item's lock: a suspension or termination that
+		// committed meanwhile ends the approver's authority (D7).
+		var status string
+		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", actor.EmployeeID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "ACTIVE" {
+			return platform.ErrUnauthorized
+		}
 		if step.Status == to && step.DecidedBy != nil && *step.DecidedBy == actor.EmployeeID {
 			out, err = loadItem(ctx, tx, it.id) // a repeat: the current state, no new event
 			return err
@@ -291,7 +311,7 @@ func (s *Service) decide(ctx context.Context, actor auth.Principal, stepID uuid.
 			return err
 		}
 		if to == "REJECTED" {
-			err = closeItem(ctx, tx, now, actor.EmployeeID, it, "REJECTED", reason)
+			err = closeItem(ctx, tx, now, &actor.EmployeeID, it, "REJECTED", reason)
 		} else {
 			err = advance(ctx, tx, now, s.loc, actor.EmployeeID, it.id)
 		}
@@ -345,7 +365,7 @@ func (s *Service) Withdraw(ctx context.Context, actor auth.Principal, itemID uui
 					return err
 				}
 			}
-			if err := closeItem(ctx, tx, now, actor.EmployeeID, it, "WITHDRAWN", reason); err != nil {
+			if err := closeItem(ctx, tx, now, &actor.EmployeeID, it, "WITHDRAWN", reason); err != nil {
 				return err
 			}
 		}
@@ -565,11 +585,14 @@ func (s *Service) Inbox(ctx context.Context, actor auth.Principal) ([]Approval, 
 }
 
 // Exceptions are what needs a person (O3, F2, D4): FAILED operations, pool steps nobody may
-// decide and level changes whose old level is still held. Read-only for Auditors (O7).
+// decide, level changes whose old level is still held, failed suspensions and the open
+// removals of terminated employees. Read-only for Auditors (O7).
 type Exceptions struct {
-	FailedOperations []access.Operation `json:"failedOperations"`
-	UnroutableSteps  []Approval         `json:"unroutableSteps"`
-	Overlaps         []access.Overlap   `json:"overlaps"`
+	FailedOperations    []access.Operation `json:"failedOperations"`
+	UnroutableSteps     []Approval         `json:"unroutableSteps"`
+	Overlaps            []access.Overlap   `json:"overlaps"`
+	SuspensionGaps      []access.Operation `json:"suspensionGaps"`
+	SecurityRevocations []access.Operation `json:"securityRevocations"`
 }
 
 func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Exceptions, error) {
@@ -585,7 +608,15 @@ func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Excepti
 		return Exceptions{}, err
 	}
 	overlaps, err := access.Overlaps(ctx, s.pool)
-	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps}, err
+	if err != nil {
+		return Exceptions{}, err
+	}
+	gaps, err := access.SuspensionGaps(ctx, s.pool)
+	if err != nil {
+		return Exceptions{}, err
+	}
+	leavers, err := access.SecurityRevocations(ctx, s.pool)
+	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps, SuspensionGaps: gaps, SecurityRevocations: leavers}, err
 }
 
 // Open lists every open step, unroutable ones marked, for InfoSec and Super Admins, who

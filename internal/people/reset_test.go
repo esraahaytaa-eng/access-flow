@@ -39,7 +39,7 @@ func TestCheckReset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkReset(tc.actor, tc.target, tc.roles)
+			err := CheckAccountAction(tc.actor, tc.target, tc.roles)
 			if tc.code == "" {
 				if err != nil {
 					t.Fatalf("got %v; want allowed", err)

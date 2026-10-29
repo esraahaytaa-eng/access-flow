@@ -39,10 +39,13 @@ func initiates(arg string) string {
 		OR (o.type = 'REVOKE' AND o.reason = 'DIRECT' AND g.revocation_requested_by = ` + arg + `))`
 }
 
-// revokeWaits is true for a removal of operation o while the grant's own GRANT may still
-// apply access: the removal goes after it (D5).
-const revokeWaits = `(o.type = 'REVOKE' AND EXISTS (SELECT 1 FROM operations x
-	WHERE x.grant_id = o.grant_id AND x.type = 'GRANT' AND x.status IN ('PENDING', 'IN_PROGRESS')))`
+// waitsForEarlier is true while an older operation of operation o's grant is queued or
+// running: a grant's operations reach the tool in the order they were created, so a
+// removal goes after the GRANT that may still apply access (D5) and a RESUME after an
+// in-flight SUSPEND (D7). Creation order is the id (uuidv7, set at insert), not created_at:
+// that is the transaction's start time, earlier than a row committed while it waited for a lock.
+const waitsForEarlier = `EXISTS (SELECT 1 FROM operations x WHERE x.grant_id = o.grant_id
+	AND x.status IN ('PENDING', 'IN_PROGRESS') AND x.id < o.id)`
 
 // Task is a Manual or Vendor operation in its admin group's queue (O4, O7).
 type Task struct {
@@ -77,7 +80,7 @@ func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, args
 		JOIN tools t ON t.id = g.tool_id JOIN admin_groups ag ON ag.id = t.admin_group_id
 		JOIN access_levels l ON l.id = g.access_level_id JOIN request_items i ON i.id = g.request_item_id
 		LEFT JOIN employees c ON c.id = o.claimed_by
-		WHERE g.method <> 'API' AND `+where+` ORDER BY o.created_at, o.id LIMIT 200`, // shortcut: oldest 200 only; page when a group falls further behind
+		WHERE g.method <> 'API' AND `+where+` ORDER BY o.priority, o.created_at, o.id LIMIT 200`, // shortcut: first 200 only; page when a group falls further behind
 		append([]any{actor}, args...)...)
 	if err != nil {
 		return nil, err
@@ -97,9 +100,11 @@ func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, args
 }
 
 // Tasks is the actor's Fulfillment Tasks queue: the open tasks of their admin groups,
-// oldest first. A removal is listed once the grant's own task has ended.
+// by priority (A6: leavers' removals, then other removals and suspensions, then grants and
+// resumes), then oldest first. A task is listed once every older task of the same grant has
+// ended (waitsForEarlier).
 func (s *Service) Tasks(ctx context.Context, actor auth.Principal) ([]Task, error) {
-	return s.tasks(ctx, actor.EmployeeID, "o.status IN ('PENDING', 'IN_PROGRESS') AND "+member("$1")+" AND NOT "+revokeWaits)
+	return s.tasks(ctx, actor.EmployeeID, "o.status IN ('PENDING', 'IN_PROGRESS') AND "+member("$1")+" AND NOT "+waitsForEarlier)
 }
 
 // lockedTask is a task locked for an action, with what the actions decide on.
@@ -141,8 +146,12 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE id = $1 FOR UPDATE", id); err != nil {
 			return err
 		}
+		if err := stillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `SELECT o.type, o.status, o.version, o.ticket_ref, o.claimed_by IS NOT DISTINCT FROM $2,
-			       o.claimed_by IS NOT NULL AND `+member("o.claimed_by")+`, o.first_attempt_at IS NULL
+			       o.claimed_by IS NOT NULL AND `+member("o.claimed_by")+`
+			       AND (SELECT status FROM employees WHERE id = o.claimed_by) = 'ACTIVE', o.first_attempt_at IS NULL
 			FROM operations o JOIN grants g ON g.id = o.grant_id JOIN tools t ON t.id = g.tool_id WHERE o.id = $1`,
 			id, actor.EmployeeID).Scan(&t.typ, &t.status, &t.version, &t.ticket, &t.mine, &t.claimerActive, &t.fresh); err != nil {
 			return err
@@ -159,6 +168,19 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 	return ts[0], nil
 }
 
+// stillActive re-checks the actor under the caller's locks: the session was checked before
+// them, and a suspension or termination committing meanwhile ends their authority (D7).
+func stillActive(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
+	var status string
+	if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", actor).Scan(&status); err != nil {
+		return err
+	}
+	if status != "ACTIVE" {
+		return platform.ErrUnauthorized
+	}
+	return nil
+}
+
 // claimedBy checks that the actor works this open task, at the version they saw.
 func (t lockedTask) claimedBy(version int) error {
 	switch {
@@ -172,8 +194,9 @@ func (t lockedTask) claimedBy(version int) error {
 	return nil
 }
 
-// Claim takes a queued task, or takes over one whose claimer has left the group. A grant
-// task never sent whose level or tool was retired is cancelled instead (409 level_retired).
+// Claim takes a queued task, or takes over one whose claimer has left the group or is no
+// longer an active employee (D7). A grant task never sent whose level or tool was retired
+// is cancelled instead (409 level_retired).
 func (s *Service) Claim(ctx context.Context, actor auth.Principal, id uuid.UUID, version int) (Task, error) {
 	retired := false
 	task, err := s.taskAction(ctx, actor, id, func(tx pgx.Tx, now time.Time, t lockedTask) error {
@@ -192,7 +215,7 @@ func (s *Service) Claim(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			return errVersionConflict
 		}
 		var waits bool
-		if err := tx.QueryRow(ctx, "SELECT "+revokeWaits+" FROM operations o WHERE o.id = $1", id).Scan(&waits); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT "+waitsForEarlier+" FROM operations o WHERE o.id = $1", id).Scan(&waits); err != nil {
 			return err
 		}
 		if waits {

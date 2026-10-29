@@ -17,6 +17,7 @@ import (
 
 var (
 	errNotFailed  = platform.NewError(http.StatusConflict, "operation_not_failed")
+	errSuperseded = platform.NewError(http.StatusConflict, "operation_superseded")
 	errSeparation = platform.NewError(http.StatusForbidden, "separation_of_duties")
 )
 
@@ -58,6 +59,15 @@ func operations(ctx context.Context, pool *pgxpool.Pool, where string, args ...a
 // who may read Exceptions.
 func FailedOperations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
 	return operations(ctx, pool, "o.status = 'FAILED'")
+}
+
+// SuspensionGaps lists the access a suspended employee still has in a tool because its
+// SUSPEND has failed at least once: from that attempt until the suspension is verified or
+// confirmed, whether it is retrying, waiting for a manual retry or reworked as a task (D7).
+// The caller checks who may read them.
+func SuspensionGaps(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+	return operations(ctx, pool, `o.type = 'SUSPEND' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND o.last_error IS NOT NULL
+		AND e.status = 'SUSPENDED'`)
 }
 
 // Overlap is a level change whose old level is still held because its removal failed (D4):
@@ -128,6 +138,13 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			Scan(&typ, &status, &current); err != nil {
 			return err
 		}
+		if err := stillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
+		var employeeStatus string
+		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", employee).Scan(&employeeStatus); err != nil {
+			return err
+		}
 		switch {
 		case status == "PENDING" || status == "IN_PROGRESS":
 			return nil
@@ -135,6 +152,8 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			return errNotFailed
 		case current != version:
 			return errVersionConflict
+		case typ == "SUSPEND" && employeeStatus != "SUSPENDED", typ == "RESUME" && employeeStatus != "ACTIVE":
+			return errSuperseded // it would disable or restore access the wrong way (D7)
 		}
 		grantStatus, err := lockGrant(ctx, tx, grant)
 		if err != nil {
@@ -145,9 +164,12 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			"attempts = 0, next_attempt_at = $2, completed_at = NULL, claimed_by = NULL, ticket_ref = NULL", now); err != nil {
 			return err
 		}
-		to := "REVOCATION_REQUESTED"
-		if typ == "GRANT" {
+		to := grantStatus // a SUSPEND or RESUME never moved the grant when it failed
+		switch typ {
+		case "GRANT":
 			to = map[bool]string{true: "PROVISIONING", false: "PENDING_FULFILLMENT"}[method == "API"]
+		case "REVOKE":
+			to = "REVOCATION_REQUESTED"
 		}
 		if err := setGrant(ctx, tx, grant, grantStatus, to, ""); err != nil {
 			return err
@@ -163,4 +185,10 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 		return Operation{}, err
 	}
 	return ops[0], nil
+}
+
+// SecurityRevocations are the open removals of terminated employees (D7, O7): listed until
+// verified or confirmed, whatever their reason. The caller checks who may read them.
+func SecurityRevocations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+	return operations(ctx, pool, `o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND e.status = 'TERMINATED'`)
 }

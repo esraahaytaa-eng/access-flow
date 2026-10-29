@@ -17,7 +17,7 @@ import (
 const ExpiryLockKey int64 = 0x0D6_E8B1
 
 // openStatuses are the grants not yet being removed.
-const openStatuses = `('PROVISIONING', 'PENDING_FULFILLMENT', 'ACTIVE', 'FAILED')`
+const openStatuses = `('PROVISIONING', 'PENDING_FULFILLMENT', 'ACTIVE', 'FAILED', 'SUSPENDED')`
 
 // ExpireDue requests the removal of every open grant whose expiry date is before today in
 // the company timezone (D6: access lasts through its date), each in its own transaction,

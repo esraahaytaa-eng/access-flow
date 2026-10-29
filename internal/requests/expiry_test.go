@@ -17,7 +17,7 @@ import (
 // sweep runs one round of the scheduled jobs.
 func (w *world) sweep() {
 	w.t.Helper()
-	if err := sweeps.New(w.db.App, w.svc.loc).RunOnce(context.Background()); err != nil {
+	if err := sweeps.New(w.db.App, w.svc.loc, TerminateDue).RunOnce(context.Background()); err != nil {
 		w.t.Fatal(err)
 	}
 }
@@ -111,7 +111,7 @@ func TestExpirySweepIsIdempotent(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make(chan error, 4)
 		for range 4 {
-			wg.Go(func() { errs <- sweeps.New(w.db.App, w.svc.loc).RunOnce(context.Background()) })
+			wg.Go(func() { errs <- sweeps.New(w.db.App, w.svc.loc, TerminateDue).RunOnce(context.Background()) })
 		}
 		wg.Wait()
 		close(errs)
@@ -214,7 +214,7 @@ func TestExpiryAndExtensionSerialize(t *testing.T) {
 				_, err := tx.Exec(ctx, "UPDATE grants SET expires_on = $2 WHERE id = $1", g["id"], extended)
 				return err
 			}, func() error {
-				return sweeps.New(w.db.App, w.svc.loc).RunOnce(context.Background())
+				return sweeps.New(w.db.App, w.svc.loc, TerminateDue).RunOnce(context.Background())
 			})
 			if err != nil {
 				t.Fatal(err)

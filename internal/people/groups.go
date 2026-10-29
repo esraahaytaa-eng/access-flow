@@ -83,7 +83,7 @@ func (s *Service) AddMember(ctx context.Context, actor auth.Principal, group, id
 		if err != nil {
 			return err
 		}
-		target, err := lockEmployee(ctx, tx, id)
+		target, err := LockEmployee(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -112,7 +112,7 @@ func (s *Service) RemoveMember(ctx context.Context, actor auth.Principal, group,
 		if err != nil {
 			return err
 		}
-		if _, err := lockEmployee(ctx, tx, id); err != nil {
+		if _, err := LockEmployee(ctx, tx, id); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE admin_group_memberships SET valid_to = GREATEST(valid_from, $3), revoked_by = $4

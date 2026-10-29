@@ -65,6 +65,7 @@ HR creates the employee; the system generates a one-time temporary password show
 - Promotion is two-person: a Super Admin proposes, a **different** Super Admin authorizes; if only one exists, a different InfoSec member authorizes. The nominee never authorizes. Existing roles and groups are preserved.
 - Other application roles and admin group memberships are assigned by a Super Admin, with audit.
   - *Refinement — [APPROVED 2026-10-28]:* nobody changes their own roles or admin group memberships; only `ACTIVE` employees receive roles or memberships; removal closes the interval, nothing is deleted. Admin groups are created by a Super Admin with a unique name and are create-only for now (no rename or retirement).
+- *Note — [APPROVED 2026-10-29]:* until the recovery below exists (M14), the last active Super Admin cannot be suspended, terminated or scheduled for termination (`409 last_super_admin`; see D7). M14 lifts this guard.
 - When the last Super Admin is terminated, termination proceeds immediately (login disabled, sessions ended) and the system enters `ADMIN_RECOVERY_REQUIRED`. An HR Manager nominates (self allowed); a different InfoSec member authorizes.
 - **Last resort:** if no eligible authorizer exists, recovery reuses the initial Super Admin bootstrap mechanism. It is available only when no active Super Admin exists, and it is recorded in the audit history.
 - A health warning shows whenever fewer than two active Super Admins exist. Concurrent cases cannot leave inconsistent state.
@@ -131,6 +132,14 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - History distinguishes active, suspended, revoked and failed-suspension states.
 
 *Trade-off:* two extra operation types and extra manual/vendor tasks, in exchange for reversible suspension without re-approval.
+
+- *Refinement — [APPROVED 2026-10-29] (M9):*
+  - **Suspension state:** a grant is stored as `SUSPENDED` only once its `SUSPEND` is verified or confirmed; until then it stays `ACTIVE` and shows `SUSPENSION_REQUESTED` or `SUSPENSION_FAILED`. Resume mirrors it (`RESUME_REQUESTED`, `RESUME_FAILED`). Suspension intervals are kept as history (A9).
+  - **Grants in flight:** at suspension a `GRANT` never sent is cancelled; one sent or failed continues and is suspended in the transaction that activates it. A level change's old grant is suspended and its replacement follows the same rule. Termination removes every open grant, the replacement included. A failed `SUSPEND` stays in Exceptions until verified or confirmed.
+    - *Note — [APPROVED 2026-10-29] (M9 review):* termination also cancels a claimed Manual or Vendor `GRANT` task, so the leaver's removal task is ready at once; an ordinary revoke still lets it finish (M7).
+  - **Who acts:** HR Managers and Super Admins suspend, reactivate, terminate and schedule; a target holding Super Admin or InfoSec needs a Super Admin; nobody acts on themselves.
+  - **Roles and memberships:** termination closes them (audited); suspension keeps them.
+  - **Last Super Admin (with D2):** the last active Super Admin cannot be suspended, terminated or scheduled for termination; a Super Admin whose termination is scheduled does not count. The check is serialized across concurrent actions.
 
 ## D8. Quarterly access reviews — [CASE] quarterly review with chasing, [POLICY] the rules
 - A campaign starts every 3 months and covers all active and suspended grants, temporary and Until Revoked.
@@ -359,6 +368,7 @@ Two mechanisms inside the Go application; no Redis, RabbitMQ, generic job queue,
 **1. Operation runner** (API grant, revoke, suspend, resume)
 - The `operations` table is the queue. Due operations are claimed with row locking and `SKIP LOCKED`, under a bounded lease so a crashed worker's operations are retried.
 - **Priority:** termination- and suspension-related removals first, then other revocations and suspensions, then grants and resumes; oldest first within a priority.
+  - *Clarification — [APPROVED 2026-10-29] (M9):* "first" means the removals of a terminated employee (priority 0). Every other removal, including a removal made during a suspension or at reactivation (expired or retired access), and every `SUSPEND` is priority 1; grants and `RESUME` are priority 2. The Manual and Vendor task queue is listed in the same order.
 - The Mock Tool Service HTTP call (5-second timeout) runs outside any database transaction and carries the operation ID for idempotency.
 - After a successful call, the actual tool state is verified by status lookup. State transitions and audit events are recorded in one transaction.
 - O3 retries: 5 attempts with backoff 30 s, 1 min, 2 min, 4 min; then `FAILED`, retryable manually from Exceptions.

@@ -1,9 +1,11 @@
 // Package sweeps runs the scheduled business jobs (O8, A6): in M8, temporary access
-// expiry (D6). Each job is idempotent and catches up after downtime.
+// expiry (D6); in M9, scheduled terminations (D7). Each job is idempotent and catches up
+// after downtime.
 package sweeps
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -14,11 +16,17 @@ import (
 
 // Sweeps runs the jobs about once a minute.
 type Sweeps struct {
-	pool *pgxpool.Pool
-	loc  *time.Location // company timezone
+	pool         *pgxpool.Pool
+	loc          *time.Location // company timezone
+	terminateDue Job            // requests.TerminateDue, passed in: requests' tests use this package
 }
 
-func New(pool *pgxpool.Pool, loc *time.Location) *Sweeps { return &Sweeps{pool: pool, loc: loc} }
+// Job runs one scheduled job and returns how many records it changed.
+type Job func(context.Context, *pgxpool.Pool) (int, error)
+
+func New(pool *pgxpool.Pool, loc *time.Location, terminateDue Job) *Sweeps {
+	return &Sweeps{pool: pool, loc: loc, terminateDue: terminateDue}
+}
 
 // Run runs a round at once and then every minute until ctx ends.
 func (s *Sweeps) Run(ctx context.Context) {
@@ -35,9 +43,13 @@ func (s *Sweeps) Run(ctx context.Context) {
 
 // RunOnce runs one round of every job.
 func (s *Sweeps) RunOnce(ctx context.Context) error {
-	n, err := access.ExpireDue(ctx, s.pool, s.loc)
+	n, expiryErr := access.ExpireDue(ctx, s.pool, s.loc)
 	if n > 0 {
 		slog.Info("temporary access expired", "grants", n)
 	}
-	return err
+	n, err := s.terminateDue(ctx, s.pool)
+	if n > 0 {
+		slog.Info("scheduled terminations run", "employees", n)
+	}
+	return errors.Join(expiryErr, err)
 }
