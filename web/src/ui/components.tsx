@@ -40,9 +40,9 @@ export function Icon({ name, size = 16, stroke = 1.8, className, style }: {
 export function Logo({ size = 28 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="8" fill="#1f5f53" />
+      <rect width="32" height="32" rx="8" style={{ fill: "var(--brand)" }} />
       <path d="M9 21.5 14.2 10h3.6L23 21.5" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M11.6 17h9.6" stroke="#9fd3c4" strokeWidth="2.4" strokeLinecap="round" />
+      <path d="M11.6 17h9.6" style={{ stroke: "var(--accent-soft)" }} strokeWidth="2.4" strokeLinecap="round" />
     </svg>
   );
 }
@@ -73,18 +73,31 @@ export function Badge({ tone, dot, children, title }: { tone?: Tone | ""; dot?: 
 
 export const StatusBadge = ({ badge }: { badge: BadgeValue }) => <Badge tone={badge.tone} dot>{badge.label}</Badge>;
 
+// A file input with Turkish text (the browser's own reads "Choose File" in its language); the
+// real input stays focusable and named for keyboard and screen-reader users.
+export function FilePicker({ label, accept, fileName, onFile }: { label: string; accept: string; fileName?: string; onFile: (f: File | undefined) => void }) {
+  return (
+    <label className="file-pick">
+      <input type="file" className="sr-only" accept={accept} aria-label={label} onChange={(e) => onFile(e.target.files?.[0])} />
+      <span className="btn" aria-hidden="true"><Icon name="upload" size={16} />Dosya seç</span>
+      <span className={fileName ? "small" : "muted small"}>{fileName || "Dosya seçilmedi"}</span>
+    </label>
+  );
+}
+
 export function Tag({ warn, children, title }: { warn?: boolean; children: ReactNode; title?: string }) {
   return <span className={`tag ${warn ? "warn" : ""}`} title={title}>{children}</span>;
 }
 
-const avatarColors = ["#1f5f53", "#2950a8", "#5b45a8", "#925a07", "#7a3b5e", "#3d6b2c", "#a2482f", "#30566e", "#6b5b2a", "#4b4f8a"];
+// Muted tones of the olive palette, each dark enough for white initials (WCAG AA).
+const avatarColors = ["#5f6e26", "#2f6b5e", "#3c5a80", "#6a4c7d", "#8a5a1f", "#4a5620", "#7a4636", "#36616f", "#5d5a2c", "#4d527f"];
 const avatarColor = (id: string) => avatarColors[[...id].reduce((s, c) => s + c.charCodeAt(0), 0) % avatarColors.length];
 const initials = (name: string) => name.split(" ").filter(Boolean).map((t) => t[0]).slice(0, 2).join("").toLocaleUpperCase("tr-TR");
 
 type PersonLike = { id: string; fullName: string; status?: string };
 
 export function Avatar({ person, size }: { person?: PersonLike | null; size?: "sm" | "lg" }) {
-  const bg = !person || person.status === "TERMINATED" ? "#a8aaae" : avatarColor(person.id);
+  const bg = !person || person.status === "TERMINATED" ? "var(--muted)" : avatarColor(person.id);
   return <span className={`avatar ${size || ""}`} style={{ background: bg }} aria-hidden="true">{person ? initials(person.fullName) : "?"}</span>;
 }
 

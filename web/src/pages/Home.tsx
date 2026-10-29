@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useNavigate } from "react-router";
 import { useEmployees, useMyGrants, useRequests } from "../api/queries";
 import type { Employee } from "../api/types";
@@ -49,11 +50,11 @@ export function HomePage() {
         <Callout tone="warn" title="Yalnızca bir aktif Süper Yönetici var">Süreklilik için ikinci bir Süper Yönetici gereklidir.</Callout>
       )}
       {tiles.length > 0 && (
-        <div className="grid-3" style={{ gridTemplateColumns: `repeat(${Math.min(tiles.length, 3)}, 1fr)` }}>
+        <div className="grid-3" style={tiles.length === 1 ? { gridTemplateColumns: "1fr" } : ({ "--cols": Math.min(tiles.length, 3) } as CSSProperties)}>
           {tiles.map((t) => (
             <button type="button" key={t.to} className="task-tile" onClick={() => navigate(t.to)}>
               <span className="tile-icon"><Icon name={t.icon} size={18} /></span><span className="num">{t.n}</span>
-              <span style={{ flex: 1 }}><span style={{ display: "block", fontWeight: 560 }}>{t.label}</span><span className="muted small">{t.sub}</span></span>
+              <span style={{ flex: 1 }}><span style={{ display: "block", fontWeight: 600 }}>{t.label}</span><span className="muted small">{t.sub}</span></span>
               <Icon name="chevR" size={16} className="faint" />
             </button>
           ))}
@@ -75,8 +76,8 @@ export function HomePage() {
         <div className="stack">
           <Card title="Erişimlerim" actions={<Button size="sm" variant="ghost" iconRight="chevR" onClick={() => navigate("/access")}>Tümü</Button>}>
             <div className="row" style={{ gap: 24 }}>
-              <div><div style={{ fontSize: 26, fontWeight: 640 }}>{open.filter((g) => g.status === "ACTIVE").length}</div><div className="muted small">aktif erişim</div></div>
-              <div><div style={{ fontSize: 26, fontWeight: 640 }}>{open.filter((g) => g.status !== "ACTIVE").length}</div><div className="muted small">işlemde</div></div>
+              <div><div style={{ fontSize: 26, fontWeight: 700 }}>{open.filter((g) => g.status === "ACTIVE").length}</div><div className="muted small">aktif erişim</div></div>
+              <div><div style={{ fontSize: 26, fontWeight: 700 }}>{open.filter((g) => g.status !== "ACTIVE").length}</div><div className="muted small">işlemde</div></div>
             </div>
             {expiring.length > 0 && (
               <>

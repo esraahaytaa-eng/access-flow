@@ -19,7 +19,7 @@ describe("session gate", () => {
     render(<App />);
     await userEvent.type(await screen.findByLabelText("E-posta"), "elif@example.com");
     await userEvent.type(screen.getByLabelText("Parola"), "correct horse battery");
-    await userEvent.click(screen.getByRole("button", { name: "Oturum aç" }));
+    await userEvent.click(screen.getByRole("button", { name: "Giriş yap" }));
     expect(await screen.findByRole("navigation")).toBeTruthy();
     expect(calls.find((c) => c.path === "/auth/login")?.body).toEqual({ email: "elif@example.com", password: "correct horse battery" });
   });
@@ -32,8 +32,8 @@ describe("session gate", () => {
     render(<App />);
     await userEvent.type(await screen.findByLabelText("E-posta"), "elif@example.com");
     await userEvent.type(screen.getByLabelText("Parola"), "wrong password!");
-    await userEvent.click(screen.getByRole("button", { name: "Oturum aç" }));
-    expect(await screen.findByText("E-posta adresi veya parola hatalı.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Giriş yap" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("E-posta adresi veya parola hatalı.");
   });
 
   it("forces a password change before anything else", async () => {

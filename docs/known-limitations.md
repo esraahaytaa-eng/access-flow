@@ -31,7 +31,7 @@ Every known limitation of the current version, with the decision it follows from
 - Person-level actions (suspend, reactivate, transfer, rehire, terminate, schedule) are serialized by one database lock; they are rare HR actions, so they simply wait for each other.
 - An approved extension cannot be withdrawn (it is already in force); give the access up with revoke instead.
 - Withdrawing an approved item sets its `closed_at` to the withdrawal time; the approval time stays in its steps and the audit log.
-- The UI is Turkish only (DECISIONS.md A7), apart from the English demo sign-in labels; names in the company catalog are shown as defined. It loads the Geist font from Google Fonts; offline, the browser falls back to a system font.
+- The UI is Turkish only (DECISIONS.md A7), apart from the English demo sign-in labels; names in the company catalog are shown as defined. It loads the Inter font from Google Fonts; offline, the browser falls back to a system font.
 - Saving a tool in the UI sends one call per change (the tool, then each level); if one fails, the earlier ones stay saved and the page shows the error.
 - A review round (quarterly start, day steps) runs in one transaction; a campaign of many thousands of grants would hold it longer. Lists show the first 2000 review items and 500 orphans.
 - A quarterly campaign does not start while a manual one runs; it starts when that one closes, later in the quarter.

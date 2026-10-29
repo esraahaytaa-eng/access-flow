@@ -326,7 +326,7 @@ Revocation, suspension and resume follow the same pattern and labels (see O1, D7
   - **`postgres`** — one PostgreSQL server with separate `accessflow` and `mocktools` databases, each with its own database user restricted to its own database. Persistent named volume.
   - **`app`** — one multi-stage image: Go backend, background jobs and the compiled React frontend served from the same origin.
   - **`mocktools`** — a small independent Go HTTP service, reachable only on the internal Docker network.
-- Only `app` is exposed, on port **8080**.
+- Only `app` is exposed, on port **8080**. *(Approved 2026-10-30: the host port can be changed with `ACCESSFLOW_PORT`, default 8080, for machines where 8080 is taken; the container port stays 8080.)*
 - Migrations run automatically at startup. Health checks and startup dependencies ensure services start in order.
 - `docker compose up` works on a clean machine with no manual setup steps.
 - AccessFlow never queries the `mocktools` database; it uses only the Mock Tool Service's HTTP API.

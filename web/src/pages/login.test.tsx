@@ -16,15 +16,32 @@ describe("sign-in page", () => {
   it("is a single sign-in card without marketing text or a demo notice", async () => {
     fakeServer(signedOut);
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Oturum açın" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Giriş yap" })).toBeTruthy();
     expect(screen.queryByText(/Doğru kişiye/)).toBeNull();
     expect(screen.queryByText("Demo Accounts")).toBeNull();
+  });
+
+  it("names the product through the logo", async () => {
+    fakeServer(signedOut);
+    render(<App />);
+    expect(await screen.findByRole("img", { name: "AccessFlow" })).toBeTruthy();
+  });
+
+  it("shows and hides the password on request", async () => {
+    fakeServer(signedOut);
+    render(<App />);
+    const field = await screen.findByLabelText("Parola") as HTMLInputElement;
+    expect(field.type).toBe("password");
+    await userEvent.click(screen.getByRole("button", { name: "Parolayı göster" }));
+    expect(field.type).toBe("text");
+    await userEvent.click(screen.getByRole("button", { name: "Parolayı gizle" }));
+    expect(field.type).toBe("password");
   });
 
   it("checks the fields before calling the server", async () => {
     const calls = fakeServer(signedOut);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Oturum aç" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Giriş yap" }));
     expect(screen.getByText("E-posta adresinizi girin.")).toBeTruthy();
     expect(screen.getByText("Parolanızı girin.")).toBeTruthy();
     expect(calls.some((c) => c.path === "/auth/login")).toBe(false);

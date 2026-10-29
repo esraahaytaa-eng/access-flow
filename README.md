@@ -8,7 +8,7 @@ AccessFlow runs access to a company's internal tools: people request access with
 docker compose up
 ```
 
-Open http://localhost:8080 (health: `GET /api/v1/health`). No other setup is needed: `compose.yaml` starts a **local demo** with ready-to-use accounts and realistic data.
+Open http://localhost:8080 (health: `GET /api/v1/health`). If port 8080 is taken, choose another host port: `ACCESSFLOW_PORT=18080 docker compose up`. No other setup is needed: `compose.yaml` starts a **local demo** with ready-to-use accounts and realistic data.
 
 ### Demo accounts
 

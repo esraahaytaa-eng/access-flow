@@ -154,7 +154,7 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
       <button type="button" className="btn btn-ghost" style={{ height: 40, paddingLeft: 6 }} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
         <Avatar person={me} />
         <span style={{ textAlign: "left", lineHeight: 1.2 }} className="hide-sm">
-          <span style={{ display: "block", fontWeight: 580 }}>{me.fullName}</span>
+          <span style={{ display: "block", fontWeight: 600 }}>{me.fullName}</span>
           <span className="muted" style={{ fontSize: 12 }}>{labels.slice(0, 2).join(" · ")}</span>
         </span>
         <Icon name="chevD" size={14} />
@@ -186,7 +186,7 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
           <Button variant="ghost" icon="menu" className="menu-btn" aria-label="Menüyü aç" onClick={() => setNavOpen(true)} />
           {demo && <Badge tone="amber" dot title="Yerel demo: belgelenmiş demo hesapları ve örnek veriler">Demo Environment</Badge>}
           <div className="spacer" />
-          <Button variant="primary" size="sm" icon="plus" onClick={() => navigate("/request-new")}>Erişim talep et</Button>
+          <Button variant="primary" size="sm" icon="plus" className="topbar-request" aria-label="Erişim talep et" onClick={() => navigate("/request-new")}><span className="hide-xs">Erişim talep et</span></Button>
           <NotificationsMenu />
           <UserMenu onSignOut={onSignOut} />
         </header>

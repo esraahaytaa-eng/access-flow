@@ -98,7 +98,7 @@ function EventsTab() {
               <tr key={e.id}>
                 <td className="nowrap small">{formatDateTime(e.at, timezone)}</td>
                 <td className="small nowrap">{e.actor ? e.actor.fullName : <Tag>Sistem</Tag>}</td>
-                <td style={{ fontWeight: 540 }}>{auditActionText(e.action)}</td>
+                <td style={{ fontWeight: 500 }}>{auditActionText(e.action)}</td>
                 <td className="small nowrap">{e.subject?.fullName ?? "—"}</td>
                 <td className="small" style={{ maxWidth: 380 }}>{detailsText(e.details)}{e.reason && <div className="cell-sub">Gerekçe: {e.reason}</div>}</td>
               </tr>
@@ -285,7 +285,7 @@ function quarterReport(q: QuarterReport, dt: (v: string | null) => string): Rend
         <div className="grid-3">
           {([["Toplam kalem", c.total], ["Korunsun", c.kept], ["Kaldırılsın", c.revoked], ["Yanıt bekliyor", c.unanswered], ["Yanıtsız; kaldırıldı", c.autoRevoked],
             ["Zaten kaldırıldı", c.alreadyRemoved], ["Devreden açık bulgu", c.openFindings]] as const).map(([l, v]) => (
-            <div key={l} className="card" style={{ padding: 14 }}><div className="muted small">{l}</div><div style={{ fontSize: 22, fontWeight: 640 }}>{v}</div></div>
+            <div key={l} className="card" style={{ padding: 14 }}><div className="muted small">{l}</div><div style={{ fontSize: 22, fontWeight: 700 }}>{v}</div></div>
           ))}
         </div>
         <KeyValueList items={[["Kampanya", q.campaign.quarter ?? "Elle başlatılan kampanya"], ["Başlangıç", dt(q.campaign.startedAt)],
