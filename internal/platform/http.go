@@ -23,6 +23,9 @@ type Error struct {
 	Status int
 	Code   string
 	Field  string // set for validation errors
+	// Expected is the configured value the input should have named (e.g. the defined
+	// spelling of a department), when there is one.
+	Expected string
 }
 
 func (e *Error) Error() string {
@@ -63,6 +66,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		body := map[string]string{"error": e.Code}
 		if e.Field != "" {
 			body["field"] = e.Field
+		}
+		if e.Expected != "" {
+			body["expected"] = e.Expected
 		}
 		WriteJSON(w, e.Status, body)
 		return

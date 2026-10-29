@@ -155,6 +155,17 @@ func getLevel(ctx context.Context, tx pgx.Tx, toolID, id uuid.UUID) (Level, erro
 
 // CreateTool adds a tool with its owner and responsible admin group.
 func (s *Service) CreateTool(ctx context.Context, actor auth.Principal, in NewTool) (Tool, error) {
+	var tool Tool
+	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) (err error) {
+		tool, err = CreateToolTx(ctx, tx, now, actor, in)
+		return err
+	})
+	return tool, err
+}
+
+// CreateToolTx is CreateTool in the caller's transaction (the onboarding import, M17), with
+// every check: Super Admin, a valid name and method, an active owner, an existing group.
+func CreateToolTx(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, in NewTool) (Tool, error) {
 	if err := canEdit(actor); err != nil {
 		return Tool{}, err
 	}
@@ -165,27 +176,23 @@ func (s *Service) CreateTool(ctx context.Context, actor auth.Principal, in NewTo
 	if !methods[in.FulfillmentMethod] {
 		return Tool{}, errInvalidMethod
 	}
-	var tool Tool
-	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		if err := checkOwner(ctx, tx, in.OwnerID); err != nil {
-			return err
-		}
-		if err := checkGroup(ctx, tx, in.AdminGroupID); err != nil {
-			return err
-		}
-		tool, err = scanTool(tx.QueryRow(ctx, `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id, seeded, created_by, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+toolColumns,
-			name, in.FulfillmentMethod, in.OwnerID, in.AdminGroupID, actor.EmployeeID == uuid.Nil, actorRef(actor), now))
-		if isUnique(err) {
-			return errToolNameTaken
-		}
-		if err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "TOOL_CREATED", Entity: "tool", EntityID: &tool.ID,
-			Details: map[string]any{"name": name, "fulfillmentMethod": in.FulfillmentMethod, "ownerId": in.OwnerID, "adminGroupId": in.AdminGroupID}})
-	})
-	return tool, err
+	if err := checkOwner(ctx, tx, in.OwnerID); err != nil {
+		return Tool{}, err
+	}
+	if err := checkGroup(ctx, tx, in.AdminGroupID); err != nil {
+		return Tool{}, err
+	}
+	tool, err := scanTool(tx.QueryRow(ctx, `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id, seeded, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+toolColumns,
+		name, in.FulfillmentMethod, in.OwnerID, in.AdminGroupID, actor.EmployeeID == uuid.Nil, actorRef(actor), now))
+	if isUnique(err) {
+		return Tool{}, errToolNameTaken
+	}
+	if err != nil {
+		return Tool{}, err
+	}
+	return tool, audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "TOOL_CREATED", Entity: "tool", EntityID: &tool.ID,
+		Details: map[string]any{"name": name, "fulfillmentMethod": in.FulfillmentMethod, "ownerId": in.OwnerID, "adminGroupId": in.AdminGroupID}})
 }
 
 // UpdateTool changes a tool's name, owner or admin group; an unchanged edit does nothing.
@@ -275,6 +282,18 @@ func notifyPolicy(ctx context.Context, tx pgx.Tx, tool Tool, level Level, from [
 
 // CreateLevel adds an access level with its approval steps and notifies InfoSec.
 func (s *Service) CreateLevel(ctx context.Context, actor auth.Principal, toolID uuid.UUID, in NewLevel) (Level, error) {
+	var level Level
+	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) (err error) {
+		level, err = CreateLevelTx(ctx, tx, now, actor, toolID, in, true)
+		return err
+	})
+	return level, err
+}
+
+// CreateLevelTx is CreateLevel in the caller's transaction. A bulk import passes notify
+// false and sends InfoSec one notification for all its levels (F2, M17); each level is
+// still audited.
+func CreateLevelTx(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, toolID uuid.UUID, in NewLevel, notify bool) (Level, error) {
 	if err := canEdit(actor); err != nil {
 		return Level{}, err
 	}
@@ -282,30 +301,29 @@ func (s *Service) CreateLevel(ctx context.Context, actor auth.Principal, toolID 
 	if err != nil {
 		return Level{}, err
 	}
-	var level Level
-	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		tool, err := lockTool(ctx, tx, toolID)
-		if err != nil {
-			return err
-		}
-		if tool.Status == "RETIRED" {
-			return errToolRetired
-		}
-		level, err = scanLevel(tx.QueryRow(ctx, `INSERT INTO access_levels (tool_id, name, requires_tool_owner, requires_infosec, created_by, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+levelColumns, toolID, name, in.RequiresToolOwner, in.RequiresInfosec, actorRef(actor), now))
-		if isUnique(err) {
-			return errLevelNameTaken
-		}
-		if err != nil {
-			return err
-		}
-		if err := audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "ACCESS_LEVEL_CREATED", Entity: "access_level",
-			EntityID: &level.ID, Details: map[string]any{"tool": tool.Name, "level": name, "steps": level.Steps}}); err != nil {
-			return err
-		}
-		return notifyPolicy(ctx, tx, tool, level, nil)
-	})
-	return level, err
+	tool, err := lockTool(ctx, tx, toolID)
+	if err != nil {
+		return Level{}, err
+	}
+	if tool.Status == "RETIRED" {
+		return Level{}, errToolRetired
+	}
+	level, err := scanLevel(tx.QueryRow(ctx, `INSERT INTO access_levels (tool_id, name, requires_tool_owner, requires_infosec, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+levelColumns, toolID, name, in.RequiresToolOwner, in.RequiresInfosec, actorRef(actor), now))
+	if isUnique(err) {
+		return Level{}, errLevelNameTaken
+	}
+	if err != nil {
+		return Level{}, err
+	}
+	if err := audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "ACCESS_LEVEL_CREATED", Entity: "access_level",
+		EntityID: &level.ID, Details: map[string]any{"tool": tool.Name, "level": name, "steps": level.Steps}}); err != nil {
+		return Level{}, err
+	}
+	if !notify {
+		return level, nil
+	}
+	return level, notifyPolicy(ctx, tx, tool, level, nil)
 }
 
 // UpdateLevel renames a level or changes its steps; a step change notifies InfoSec.

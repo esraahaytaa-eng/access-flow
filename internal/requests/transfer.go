@@ -49,6 +49,9 @@ func (s *Service) Transfer(ctx context.Context, actor auth.Principal, id uuid.UU
 		if !newManager && people.SameText(e.Department, department) {
 			return errNotATransfer
 		}
+		if err := people.CheckPlacement(ctx, tx, e.Department, e.JobTitle, department, jobTitle); err != nil {
+			return err
+		}
 		kept, revoked, err := access.RemoveExcept(ctx, tx, now, by, id, in.Keep)
 		if err != nil {
 			return err

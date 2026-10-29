@@ -27,9 +27,9 @@ func (s *seeder) workflows(ctx context.Context) error {
 	// Before AccessFlow: accounts already in the tools, one of a current employee and two
 	// nobody owns, then the baseline import (D10).
 	for _, a := range []struct{ account, level string }{
-		{"elif.celik" + domain, "Jira/Kullanıcı"},
-		{"eski.stajyer" + domain, "Jira/Kullanıcı"},
-		{"ajans@partner-reklam.com", "Salesforce/Satış Temsilcisi"},
+		{"elif.celik" + domain, "Jira/User"},
+		{"eski.stajyer" + domain, "Jira/User"},
+		{"ajans@partner-reklam.com", "Salesforce/Sales User"},
 	} {
 		tool, _, _ := strings.Cut(a.level, "/")
 		if _, err := s.Tools.Apply(ctx, access.ToolOperation{ID: stableID("legacy/" + a.account + a.level), Type: "GRANT",
@@ -46,7 +46,7 @@ func (s *seeder) workflows(ctx context.Context) error {
 	}
 
 	// Approved and fulfilled: API access the runner grants, Manual access a member confirms.
-	deniz, err := s.request(ctx, "deniz.kara", "Sprint planlaması ve kod incelemeleri", nil, "Jira/Kullanıcı", "GitHub/Geliştirici")
+	deniz, err := s.request(ctx, "deniz.kara", "Sprint planlaması ve kod incelemeleri", nil, "Jira/User", "GitHub/Developer")
 	if err != nil {
 		return err
 	}
@@ -57,15 +57,15 @@ func (s *seeder) workflows(ctx context.Context) error {
 		return err
 	}
 	expires := time.Now().In(s.Location).AddDate(0, 0, 5).Format(time.DateOnly)
-	leyla, err := s.request(ctx, "leyla.ekinci", "Çeyrek sonu müşteri kampanyası", &expires, "Salesforce/Satış Temsilcisi")
+	leyla, err := s.request(ctx, "leyla.ekinci", "Çeyrek sonu müşteri kampanyası", &expires, "Salesforce/Sales User")
 	if err != nil {
 		return err
 	}
-	oya, err := s.request(ctx, "oya.sezer", "Kurumsal müşteri portföyü", nil, "Salesforce/Satış Temsilcisi")
+	oya, err := s.request(ctx, "oya.sezer", "Kurumsal müşteri portföyü", nil, "Salesforce/Sales User")
 	if err != nil {
 		return err
 	}
-	levent, err := s.request(ctx, "levent.uysal", "Fatura tasarımlarının incelenmesi", nil, "Figma/Editör")
+	levent, err := s.request(ctx, "levent.uysal", "Fatura tasarımlarının incelenmesi", nil, "Figma/Editor")
 	if err != nil {
 		return err
 	}
@@ -77,18 +77,18 @@ func (s *seeder) workflows(ctx context.Context) error {
 	}
 
 	// A Vendor task with the vendor's ticket, and a Manual grant the admin could not apply.
-	ece, err := s.request(ctx, "ece.polat", "Aylık bordro kontrolü", nil, "Bordro Portalı/Kullanıcı")
+	ece, err := s.request(ctx, "ece.polat", "Aylık bordro kontrolü", nil, "Payroll Portal/User")
 	if err != nil {
 		return err
 	}
-	mert, err := s.request(ctx, "mert.acar", "Altyapı kodu depoları", nil, "GitHub/Geliştirici")
+	mert, err := s.request(ctx, "mert.acar", "Altyapı kodu depoları", nil, "GitHub/Developer")
 	if err != nil {
 		return err
 	}
 	if err := s.approveAll(ctx, append(ece, mert...)...); err != nil {
 		return err
 	}
-	if err := s.task(ctx, "ece.polat", "Bordro Portalı", "hakan.koc", "ticket"); err != nil {
+	if err := s.task(ctx, "ece.polat", "Payroll Portal", "hakan.koc", "ticket"); err != nil {
 		return err
 	}
 	if err := s.task(ctx, "mert.acar", "GitHub", "emre.kaya", "fail"); err != nil {
@@ -96,17 +96,17 @@ func (s *seeder) workflows(ctx context.Context) error {
 	}
 
 	// Waiting: at the manager, at the tool owner, at InfoSec.
-	if _, err := s.request(ctx, "mert.acar", "Üretim ortamı olay müdahalesi", nil, "AWS Konsolu/Yönetici"); err != nil {
+	if _, err := s.request(ctx, "mert.acar", "Üretim ortamı olay müdahalesi", nil, "AWS Console/Admin"); err != nil {
 		return err
 	}
-	elif, err := s.request(ctx, "elif.celik", "Mobil uygulama deposu", nil, "GitHub/Geliştirici")
+	elif, err := s.request(ctx, "elif.celik", "Mobil uygulama deposu", nil, "GitHub/Developer")
 	if err != nil {
 		return err
 	}
 	if err := s.approveSteps(ctx, 1, elif...); err != nil {
 		return err
 	}
-	zeynep, err := s.request(ctx, "zeynep.yildiz", "Tasarım sistemi panosunun yönetimi", nil, "Jira/Yönetici")
+	zeynep, err := s.request(ctx, "zeynep.yildiz", "Tasarım sistemi panosunun yönetimi", nil, "Jira/Admin")
 	if err != nil {
 		return err
 	}
@@ -115,14 +115,14 @@ func (s *seeder) workflows(ctx context.Context) error {
 	}
 
 	// Rejected and withdrawn.
-	tuna, err := s.request(ctx, "tuna.erdem", "Raporlara göz atmak", nil, "AWS Konsolu/Salt okunur")
+	tuna, err := s.request(ctx, "tuna.erdem", "Raporlara göz atmak", nil, "AWS Console/ReadOnly")
 	if err != nil {
 		return err
 	}
 	if err := s.reject(ctx, tuna[0], "Satış raporları için AWS erişimi gerekmiyor; BI panosunu kullanın."); err != nil {
 		return err
 	}
-	hakan, err := s.request(ctx, "hakan.koc", "Bütçe takibi", nil, "Jira/Kullanıcı")
+	hakan, err := s.request(ctx, "hakan.koc", "Bütçe takibi", nil, "Jira/User")
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (s *seeder) workflows(ctx context.Context) error {
 	// A Super Admin's direct grant (D1): visible in the overrides report.
 	until := time.Now().In(s.Location).AddDate(0, 0, 14).Format(time.DateOnly)
 	if _, _, err := s.Requests.DirectGrant(ctx, admin, requests.DirectGrantInput{SubmissionID: stableID("direct/elif"), BeneficiaryID: s.ids["elif.celik"],
-		AccessLevelID: s.levels["Figma/Editör"], Justification: "Lansman öncesi acil tasarım düzeltmesi", ExpiresOn: &until}); err != nil {
+		AccessLevelID: s.levels["Figma/Editor"], Justification: "Lansman öncesi acil tasarım düzeltmesi", ExpiresOn: &until}); err != nil {
 		return fmt.Errorf("direct grant: %w", err)
 	}
 

@@ -235,8 +235,11 @@ type Grant struct {
 	Suspension         *string    `json:"suspension"`   // a SUSPEND or RESUME not yet verified or confirmed (D7)
 	RetainedOnTransfer *Retention `json:"retainedOnTransfer"`
 	Imported           bool       `json:"imported"` // existed before AccessFlow; approver unknown (D10)
-	Version            int        `json:"version"`
-	CreatedAt          time.Time  `json:"createdAt"`
+	// ToolVerifiedAt: when the tool read found this imported grant in the tool; nil for
+	// access only reported by a spreadsheet (M17).
+	ToolVerifiedAt *time.Time `json:"toolVerifiedAt"`
+	Version        int        `json:"version"`
+	CreatedAt      time.Time  `json:"createdAt"`
 }
 
 // Retention records why a grant was kept when its holder was transferred (D5).
@@ -258,7 +261,7 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		               CASE WHEN x.last_error IS NULL THEN '_REQUESTED' ELSE '_FAILED' END
 		        FROM operations x WHERE x.grant_id = g.id AND x.type IN ('SUSPEND', 'RESUME') AND x.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
 		        ORDER BY x.id DESC LIMIT 1),
-		       g.retained_at, g.retention_justification, g.import_id IS NOT NULL
+		       g.retained_at, g.retention_justification, g.import_id IS NOT NULL, g.tool_verified_at
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
@@ -273,7 +276,7 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		var justification *string
 		err := row.Scan(&g.ID, &g.Employee.ID, &g.Employee.FullName, &g.ToolID, &g.Tool, &g.AccessLevelID, &g.Level, &g.Method,
 			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket,
-			&g.Suspension, &retainedAt, &justification, &g.Imported)
+			&g.Suspension, &retainedAt, &justification, &g.Imported, &g.ToolVerifiedAt)
 		if retainedAt != nil {
 			g.RetainedOnTransfer = &Retention{At: *retainedAt, Justification: *justification}
 		}

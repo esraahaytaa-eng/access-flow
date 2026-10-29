@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx", needed by goose
+	"github.com/pressly/goose/v3"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
@@ -34,17 +37,60 @@ var (
 func NewDB(t testing.TB) DB {
 	t.Helper()
 	ctx := context.Background()
-	ownerURL, appURL := Env(t, "TEST_OWNER_DATABASE_URL"), Env(t, "TEST_APP_DATABASE_URL")
 	admin := connect(t, Env(t, "TEST_ADMIN_DATABASE_URL"))
 	defer admin.Close(ctx)
 
-	templateOnce.Do(func() { templateName, templateErr = ensureTemplate(ctx, admin, ownerURL) })
+	templateOnce.Do(func() { templateName, templateErr = ensureTemplate(ctx, admin, Env(t, "TEST_OWNER_DATABASE_URL")) })
 	if templateErr != nil {
 		t.Fatalf("prepare template database: %v", templateErr)
 	}
 
+	return newDatabase(t, admin, "TEMPLATE "+templateName)
+}
+
+// NewDBAt is a new database migrated only up to version, to test a migration against data
+// written before it. The returned function applies the remaining migrations.
+func NewDBAt(t testing.TB, version int64) (DB, func()) {
+	t.Helper()
+	ctx := context.Background()
+	admin := connect(t, Env(t, "TEST_ADMIN_DATABASE_URL"))
+	defer admin.Close(ctx)
+	db := newDatabase(t, admin, "")
+	ownerURL, err := withDatabase(Env(t, "TEST_OWNER_DATABASE_URL"), db.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := sql.Open("pgx", ownerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+	files, err := fs.Sub(platform.Migrations, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, version); err != nil {
+		t.Fatalf("migrate to %d: %v", version, err)
+	}
+	return db, func() {
+		t.Helper()
+		if _, err := provider.Up(ctx); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
+	}
+}
+
+// newDatabase creates a database (from a template when given), dropped when the test ends.
+func newDatabase(t testing.TB, admin *pgx.Conn, template string) DB {
+	t.Helper()
+	ctx := context.Background()
+	appURL, ownerURL := Env(t, "TEST_APP_DATABASE_URL"), Env(t, "TEST_OWNER_DATABASE_URL")
 	name := "test_" + randomHex(t)
-	exec(t, admin, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s OWNER accessflow_owner", name, templateName))
+	exec(t, admin, fmt.Sprintf("CREATE DATABASE %s %s OWNER accessflow_owner", name, template))
 	t.Cleanup(func() {
 		admin := connect(t, Env(t, "TEST_ADMIN_DATABASE_URL"))
 		defer admin.Close(ctx)

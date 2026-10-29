@@ -28,6 +28,7 @@ export function GrantDrawer({ grant, onClose, footer }: { grant: Grant; onClose:
           ["Kanıt", grant.evidence === "VERIFIED" ? "API durum sorgusuyla doğrulandı" : grant.evidence === "SELF_REPORTED" ? "Yetkili yönetici tarafından onaylandı (beyana dayalı)" : "—"],
           grant.retainedOnTransfer && ["Transferde korunma gerekçesi", grant.retainedOnTransfer.justification],
           grant.imported && ["Onay kanıtı", "AccessFlow’dan önce vardı; onaylayan bilinmiyor"],
+          grant.imported && ["Kaynak", grant.toolVerifiedAt ? `Araçtan doğrulandı (${formatDateTime(grant.toolVerifiedAt, timezone)})` : "Tablo veya dosya ile bildirildi; araçtan doğrulanmadı"],
           !!grant.closedReason ? ["Kapanış nedeni", reasonText(grant.closedReason)] : null,
           !!grant.effectiveTo && ["Etkin bitiş", formatDateTime(grant.effectiveTo, timezone)],
         ]} />

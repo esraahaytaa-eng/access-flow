@@ -219,3 +219,60 @@ func TestChangeOfAnOrphanGrantIsNotFound(t *testing.T) {
 		"accessLevelId": w.jiraAdmin, "justification": "needs more", "duration": map[string]any{"type": "UNTIL_REVOKED"}})
 	testutil.RequireStatus(t, r, http.StatusNotFound, "not_found")
 }
+
+// reported records a spreadsheet-reported baseline grant, as the workbook import does.
+func (w *world) reported(employee uuid.UUID, level uuid.UUID, account string) uuid.UUID {
+	w.t.Helper()
+	var imp, grant uuid.UUID
+	if err := w.db.App.QueryRow(context.Background(), `INSERT INTO imports (source, file_name, imported_by, imported_at, report)
+		VALUES ('WORKBOOK', 'onboarding.xlsx', $1, now(), '{}') RETURNING id`, w.admin.ID).Scan(&imp); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := w.db.App.QueryRow(context.Background(), `INSERT INTO grants (employee_id, tool_id, access_level_id, method, status, import_id, account, created_at)
+		VALUES ($1, $2, $3, 'API', 'ACTIVE', $4, $5, now()) RETURNING id`, employee, w.toolOf(level), level, imp, account).Scan(&grant); err != nil {
+		w.t.Fatal(err)
+	}
+	return grant
+}
+
+// The tool read tells spreadsheet-reported API access apart from access the tool holds: it
+// verifies a reported grant it finds and counts the ones it does not (D10, M17).
+func TestToolReadVerifiesReportedAccess(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	found := w.reported(w.dev.ID, w.jiraViewer, w.dev.Email)
+	missing := w.reported(w.dev.ID, w.github, w.dev.Email)
+	tl.legacy(t, w.jira, w.jiraViewer, w.dev.Email, "ACTIVE")
+	tl.legacy(t, w.jira, w.jiraViewer, w.owner.Email, "ACTIVE")
+
+	r := w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{})
+	testutil.RequireStatus(t, r, http.StatusCreated, "")
+	if r.Body["imported"] != float64(1) || r.Body["skipped"] != float64(1) || r.Body["verified"] != float64(1) || r.Body["unverified"] != float64(1) {
+		t.Fatalf("report = %v", r.Body)
+	}
+	if n := w.count("SELECT count(*) FROM grants WHERE id = $1 AND tool_verified_at IS NOT NULL", found); n != 1 {
+		t.Fatal("the reported grant the tool holds is not verified")
+	}
+	if n := w.count("SELECT count(*) FROM grants WHERE id = $1 AND tool_verified_at IS NULL", missing); n != 1 {
+		t.Fatal("a reported grant the tool does not hold was verified")
+	}
+	if n := w.count("SELECT count(*) FROM grants WHERE employee_id = $1 AND import_id IS NOT NULL AND tool_verified_at IS NOT NULL", w.owner.ID); n != 1 {
+		t.Fatal("a grant read from the tool is not verified")
+	}
+	if n := w.count("SELECT count(*) FROM audit_events WHERE action = 'GRANT_VERIFIED_BY_TOOL' AND entity_id = $1", found); n != 1 {
+		t.Fatalf("GRANT_VERIFIED_BY_TOOL events = %d; want 1", n)
+	}
+	if g := w.myGrant(w.dev.c, w.jiraViewer); g["toolVerifiedAt"] == nil {
+		t.Fatalf("grant = %v; want toolVerifiedAt", g)
+	}
+	if g := w.myGrant(w.dev.c, w.github); g["toolVerifiedAt"] != nil {
+		t.Fatalf("grant = %v; want no toolVerifiedAt", g)
+	}
+
+	// Reading again verifies nothing new, and still counts the grant the tool does not hold.
+	r = w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{})
+	if r.Body["verified"] != float64(0) || r.Body["unverified"] != float64(1) || r.Body["skipped"] != float64(2) {
+		t.Fatalf("second report = %v", r.Body)
+	}
+}

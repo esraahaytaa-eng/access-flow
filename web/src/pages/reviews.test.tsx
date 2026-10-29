@@ -87,6 +87,59 @@ describe("settings: reviews and imports", () => {
   });
 });
 
+describe("settings: Excel workbook import", () => {
+  const plan = (over: Record<string, unknown> = {}) => ({
+    summary: { employeesNew: 2, employeesExisting: 1, toolsNew: 1, toolsExisting: 0, levelsNew: 2, levelsExisting: 0, accessNew: 3, accessExisting: 1 },
+    owners: [{ tool: "Notion", ownerEmail: "can@x.co" }], problems: [], warnings: [], ...over,
+  });
+  const report = { id: "imp2", source: "WORKBOOK", fileName: "ekip.xlsx", importedBy: person("sa", "Okan Admin"), importedAt: "2026-10-29T09:00:00Z",
+    imported: 3, orphans: 0, terminated: 0, skipped: 1, rejected: [], created: { employees: 2, tools: 1, levels: 2 } };
+  const file = new File(["xlsx"], "ekip.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+  it("previews a file and imports it only after a clean preview", async () => {
+    const calls = fakeServer({ ...base, "GET /imports": { imports: [] },
+      "POST /imports/workbook/preview": () => ({ body: plan({ warnings: [{ sheet: "Employees", row: 4, column: "B", value: "Ali V.", reason: "employee_differs", expected: "Ali Veli" }] }) }),
+      "POST /imports/workbook?fileName=ekip.xlsx": () => ({ status: 201, body: { plan: plan(), report } }) });
+    renderPage(<SettingsPage />, { session: sa });
+    await userEvent.click(screen.getByRole("tab", { name: "İçe aktarma" }));
+    expect((await screen.findByRole("button", { name: "Excel’i içe aktar" }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.upload(screen.getByLabelText("Excel dosyası"), file);
+    await userEvent.click(screen.getByRole("button", { name: "Önizle" }));
+    expect(await screen.findByText("2 yeni çalışan")).toBeTruthy();
+    expect(screen.getByText("Notion → can@x.co")).toBeTruthy();
+    expect(screen.getByText("Kayıtlı bilgiden farklı; mevcut kayıt değiştirilmez")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Excel’i içe aktar" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/imports/workbook?fileName=ekip.xlsx")?.body).toEqual({ file: "ekip.xlsx" }));
+    expect(await screen.findByText("2 çalışan · 1 araç · 2 seviye oluşturuldu")).toBeTruthy();
+  });
+
+  it("lists every problem with its sheet, row and expected value and blocks the import", async () => {
+    fakeServer({ ...base, "GET /imports": { imports: [] },
+      "POST /imports/workbook/preview": () => ({ body: plan({ problems: [{ sheet: "Employees", row: 3, column: "C", value: "engineering", reason: "unknown_department", expected: "Engineering" }] }) }) });
+    renderPage(<SettingsPage />, { session: sa });
+    await userEvent.click(screen.getByRole("tab", { name: "İçe aktarma" }));
+    await userEvent.upload(await screen.findByLabelText("Excel dosyası"), file);
+    await userEvent.click(screen.getByRole("button", { name: "Önizle" }));
+    const row = (await screen.findByText("Tanımlı olmayan departman")).closest("tr")!;
+    expect(within(row).getByText("Employees")).toBeTruthy();
+    expect(within(row).getByText("3")).toBeTruthy();
+    expect(within(row).getByText("Engineering")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Excel’i içe aktar" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("downloads the template", async () => {
+    const save = vi.fn();
+    URL.createObjectURL = save.mockReturnValue("blob:x");
+    URL.revokeObjectURL = vi.fn();
+    const calls = fakeServer({ ...base, "GET /imports": { imports: [] }, "GET /imports/workbook/template": {} });
+    renderPage(<SettingsPage />, { session: sa });
+    await userEvent.click(screen.getByRole("tab", { name: "İçe aktarma" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Excel şablonunu indir" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(calls.some((c) => c.path === "/imports/workbook/template")).toBe(true);
+  });
+});
+
 describe("exceptions: findings and orphans", () => {
   const orphan = { id: "g9", toolId: "t2", tool: "GitHub", accessLevelId: "l9", level: "Developer", method: "API", account: "ghost@example.com", status: "ACTIVE",
     source: "MOCK", fileName: null, importedAt: "2026-10-29T09:00:00Z", version: 1 };

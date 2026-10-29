@@ -75,7 +75,7 @@ func TestRouterListsTheDemoAccounts(t *testing.T) {
 	testRouter(t, fstest.MapFS{}, demo.Accounts...).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/demo", nil))
 
 	body := rec.Body.String()
-	if rec.Code != http.StatusOK || !strings.Contains(body, `"email":"admin@accessflow.local"`) || !strings.Contains(body, `"role":"Çalışan"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(body, `"email":"admin@accessflow.local"`) || !strings.Contains(body, `"role":"Employee"`) {
 		t.Fatalf("status = %d %s; want 200 with the accounts", rec.Code, body)
 	}
 	if strings.Contains(strings.ToLower(body), "pass") {

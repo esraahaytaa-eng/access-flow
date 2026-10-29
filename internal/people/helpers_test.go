@@ -32,6 +32,8 @@ func newEnv(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 	svc := NewService(db.App, authSvc)
+	testutil.DefineDepartments(t, db, "Engineering", "Finance")
+	testutil.DefinePositions(t, db, "Analyst", "Developer", "Engineer", "X")
 	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	r := chi.NewRouter()
 	r.Route("/api/v1", func(r chi.Router) {

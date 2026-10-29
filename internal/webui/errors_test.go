@@ -50,6 +50,12 @@ func TestEveryErrorCodeIsTranslated(t *testing.T) {
 	if len(codes) < 50 {
 		t.Fatalf("found only %d codes; the scan is broken", len(codes))
 	}
+	// people.checkEntry builds these codes from a prefix and the catalog kind.
+	delete(codes, "unknown_")
+	delete(codes, "retired_")
+	for _, code := range []string{"unknown_department", "retired_department", "unknown_job_position", "retired_job_position"} {
+		codes[code] = true
+	}
 	// One code per form the scan must read: a struct literal, a helper call, a nested call.
 	for _, code := range []string{"open_request_exists", "justification_required", "field_required"} {
 		if !codes[code] {

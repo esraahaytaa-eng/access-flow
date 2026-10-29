@@ -11,6 +11,8 @@ func TestCatalogSchema(t *testing.T) {
 	ctx := context.Background()
 	db := testutil.NewDB(t)
 	owner := testutil.CreateEmployee(t, db, testutil.EmployeeSpec{})
+	testutil.DefineDepartments(t, db, "Engineering", "engineering") // case variants are refused by the service, not the schema
+	testutil.DefinePositions(t, db, "QA")
 	var group, tool, level string
 	mustScan := func(sql string, dst *string, args ...any) {
 		t.Helper()

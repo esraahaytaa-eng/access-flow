@@ -11,10 +11,10 @@
 - **Manager:** decides Manager steps in the Approval Inbox (one simulated email per new request, O2); requests for and revokes reports' access (D3, D5).
 - **Tool Owner:** decides Tool Owner steps; reviews the tool's access each quarter.
 - **InfoSec:** decides InfoSec steps, reassigns stuck ones (D9), works Exceptions.
-- **HR Manager:** creates, transfers, suspends, terminates and rehires employees.
+- **HR Manager:** creates, transfers, suspends, terminates and rehires employees; keeps the department and job-position catalog (F3).
 - **Admin groups:** work Manual and Vendor tasks: claim, record the vendor ticket, confirm or report failure.
 - **Auditor:** read-only Audit Explorer and evidence reports.
-- **Super Admin:** configures tools, levels and steps; assigns roles; may override a step or grant directly, both reported (D1).
+- **Super Admin:** configures tools, levels and steps; assigns roles; may override a step or grant directly, both reported (D1); imports the onboarding workbook (D10).
 
 **Each quarter:** a review campaign of all active and suspended grants starts on the first day of the calendar quarter (D8).
 
@@ -30,7 +30,8 @@
 - Termination removes everything first; suspension is reversible; a rehire restores nothing (D7, A5).
 - Reviews: reminder on day 7, InfoSec escalation on day 14; on day 21 unanswered InfoSec-level items are revoked, others become open findings. A Super Admin may revoke, never keep (D8).
 - No delegation; absent approvers' steps are reassigned (D9).
-- Existing access is imported and certified; unmatched accounts are orphan findings (D10).
+- Existing access is imported and certified; unmatched accounts are orphan findings. Access reported in the workbook or a CSV is labelled reported until the API tool read verifies it (D10).
+- Departments and job positions come from a company catalog and grant nothing; a retired name stays on its holders (F3).
 - API results are verified. Manual and Vendor results are labelled self-reported (Fulfillment methods, O1).
 - The audit log is append-only, written with every change; nothing is deleted (A9, A5).
 - Real system time only (D12).
@@ -44,11 +45,10 @@
 - Notifications are in-app; the only email is simulated (O2).
 - API tools are reached through a local Mock Tool Service (Fulfillment methods, A1).
 - AccessFlow's own privileged roles get an evidence report, not a review campaign (D11).
-- The UI is Turkish-only (A7).
+- The UI is Turkish (A7); the demo sign-in labels and the demo catalog names are English.
 
 ## Current, planned, and operational
 
-- **AccessFlow does today:** everything above, plus importing existing tool access from CSV or the Mock Tool Service as baseline grants (no approval invented) and flagging unmatched accounts as orphans (D10).
-- **Planned (M17, not implemented):** company-defined department and job-position catalogs, and CSV onboarding of active employees (validated, previewed, audited, without passwords). Until then HR creates employees one at a time.
+- **AccessFlow does today:** everything above, plus the company department and job-position catalog, and one Excel workbook that imports employees (without passwords or roles), tools with their levels and approval steps, and existing access together: previewed, all or nothing, audited per record, never overwriting existing records. Existing access also comes from the Mock Tool Service read or an account CSV. Imported access is baseline (no approval invented); unmatched accounts become orphans (D10).
 - **Operational responsibilities (people, not the software):** secure hosting, HTTPS, secrets and backups; keeping HR data current; tool admins exporting accounts and working their tasks; IT/InfoSec investigating and closing accounts in external tools, including the 14 former employees' accounts. AccessFlow records and tracks these removals but cannot see into the tools.
 - **Out of scope:** SSO, real e-mail and self-service activation, real tool connectors, and investigations of past activity in external tools.
