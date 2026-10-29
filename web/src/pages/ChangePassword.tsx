@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { api, ApiError } from "../api/client";
+import { useDemo } from "../api/queries";
 import type { Principal } from "../api/types";
 import { errorMessage } from "../i18n/errors";
-import { Button, Callout, Card, Field, Input, Logo, PageHeader, useAction } from "../ui/components";
+import { Badge, Button, Callout, Card, Field, Input, Logo, PageHeader, useAction } from "../ui/components";
 
 type Errors = { currentPassword?: string; newPassword?: string; repeat?: string };
 
@@ -45,21 +46,18 @@ function PasswordForm({ onChanged }: { onChanged: (p: Principal) => void }) {
 
 /** Shown instead of the app while the account has a temporary password. */
 export function ForcedPasswordChange({ onChanged, onSignOut }: { onChanged: (p: Principal) => void; onSignOut: () => void }) {
+  const demo = useDemo().data;
   return (
     <div className="login">
-      <div className="login-side">
-        <div className="row" style={{ gap: 10 }}><Logo size={30} /><span style={{ fontWeight: 650, fontSize: 17, color: "#fff" }}>AccessFlow</span></div>
-        <div><div className="big">Hesabınızı güvene alın.</div><p className="lead">Geçici parolanızı kendi belirlediğiniz bir parolayla değiştirin.</p></div>
-        <div />
-      </div>
-      <div className="login-main">
-        <div className="login-box">
-          <h1 style={{ fontSize: 24, fontWeight: 640 }}>Parolanızı değiştirin</h1>
-          <p className="muted" style={{ marginTop: 6, marginBottom: 24 }}>Devam etmeden önce geçici parolanızı değiştirmeniz gerekiyor.</p>
+      <main className="login-box">
+        <div className="login-brand"><Logo size={30} /><span>AccessFlow</span>{demo && <Badge tone="amber" dot>Demo ortamı</Badge>}</div>
+        <div className="login-card">
+          <h1>Parolanızı değiştirin</h1>
+          <p className="muted">Devam etmeden önce geçici parolanızı değiştirmeniz gerekiyor.</p>
           <PasswordForm onChanged={onChanged} />
           <div style={{ marginTop: 16 }}><Button variant="ghost" block onClick={onSignOut}>Çıkış yap</Button></div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

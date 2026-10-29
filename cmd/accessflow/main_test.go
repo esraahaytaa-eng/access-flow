@@ -13,17 +13,19 @@ import (
 
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/demo"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
-func testRouter(t *testing.T, dist fstest.MapFS) http.Handler {
+// testRouter serves dist; demo accounts turn on demo mode.
+func testRouter(t *testing.T, dist fstest.MapFS, demoAccounts ...demo.Account) http.Handler {
 	t.Helper()
 	db := testutil.NewDB(t)
 	svc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), dist)
+	return newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), dist, demoAccounts)
 }
 
 func TestRouter(t *testing.T) {
@@ -45,6 +47,7 @@ func TestRouter(t *testing.T) {
 		{"/api/v1/fulfillment-tasks", "application/json", `{"error":"authentication_required"}`, http.StatusUnauthorized},
 		// Unknown API paths must never fall through to the web page.
 		{"/api/v1/nope", "application/json", `{"error":"not_found"}`, http.StatusNotFound},
+		{"/api/v1/demo", "application/json", `{"error":"not_found"}`, http.StatusNotFound}, // demo mode off
 		{"/api/nope", "application/json", `{"error":"not_found"}`, http.StatusNotFound},
 		{"/", "text/html; charset=utf-8", "<html>app</html>", http.StatusOK},
 		{"/any/route", "text/html; charset=utf-8", "<html>app</html>", http.StatusOK},
@@ -63,6 +66,20 @@ func TestRouter(t *testing.T) {
 				t.Errorf("body = %q; want %q", got, tc.wantBody)
 			}
 		})
+	}
+}
+
+// In demo mode the sign-in page lists the demo accounts, without any password (A4 note 2026-10-29).
+func TestRouterListsTheDemoAccounts(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testRouter(t, fstest.MapFS{}, demo.Accounts...).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/demo", nil))
+
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `"email":"admin@accessflow.local"`) || !strings.Contains(body, `"role":"Çalışan"`) {
+		t.Fatalf("status = %d %s; want 200 with the accounts", rec.Code, body)
+	}
+	if strings.Contains(strings.ToLower(body), "pass") {
+		t.Fatalf("the demo listing mentions passwords: %s", body)
 	}
 }
 

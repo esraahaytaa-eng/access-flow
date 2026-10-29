@@ -19,17 +19,27 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
+// DemoAdmin is the demo-mode initial Super Admin (A4 note 2026-10-29): a documented,
+// permanent password and no bootstrap file.
+type DemoAdmin struct{ FullName, Password string }
+
 // Bootstrap creates the initial Super Admin from email if no Super Admin has ever
 // existed (A4, D2). The temporary password goes to the bootstrap file, never to the
-// log, and does not expire; it is valid until the first password change (F4).
-func (s *Service) Bootstrap(ctx context.Context, email string) error {
+// log, and does not expire; it is valid until the first password change (F4). In demo
+// mode (demo set) the documented password is permanent and nothing is written.
+func (s *Service) Bootstrap(ctx context.Context, email string, demo *DemoAdmin) error {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		return fmt.Errorf("BOOTSTRAP_ADMIN_EMAIL %q is not a valid email address", email)
 	}
 	email = normalized
-	password, err := NewTemporaryPassword()
-	if err != nil {
+	name, password, temporary := "Initial Super Admin", "", true
+	if demo != nil {
+		name, password, temporary = demo.FullName, demo.Password, false
+		if err := ValidatePassword(password); err != nil {
+			return fmt.Errorf("demo Super Admin password: %w", err)
+		}
+	} else if password, err = NewTemporaryPassword(); err != nil {
 		return err
 	}
 	hash, err := HashPassword(password)
@@ -51,24 +61,31 @@ func (s *Service) Bootstrap(ctx context.Context, email string) error {
 		}
 
 		var id uuid.UUID
-		if err := tx.QueryRow(ctx, "INSERT INTO employees (email, full_name) VALUES ($1, 'Initial Super Admin') RETURNING id",
-			email).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, "INSERT INTO employees (email, full_name, seeded) VALUES ($1, $2, $3) RETURNING id",
+			email, name, !temporary).Scan(&id); err != nil {
 			return fmt.Errorf("create initial Super Admin: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary, expires_at)
-			VALUES ($1, $2, true, $3)`, id, hash, TemporaryPasswordExpiry(now, true)); err != nil {
+			VALUES ($1, $2, $3, $4)`, id, hash, temporary, TemporaryPasswordExpiry(now, true)); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO role_assignments (employee_id, role, valid_from) VALUES ($1, 'SUPER_ADMIN', $2)", id, now); err != nil {
 			return err
 		}
+		created := map[string]any{"bootstrap": true}
+		if !temporary {
+			created["seed"] = true // as CreateEmployee marks seeded employees
+		}
 		for _, e := range []audit.Event{
-			{Action: "EMPLOYEE_CREATED", Entity: "employee", EntityID: &id, SubjectID: &id, Details: map[string]any{"bootstrap": true}},
+			{Action: "EMPLOYEE_CREATED", Entity: "employee", EntityID: &id, SubjectID: &id, Details: created},
 			{Action: "ROLE_ASSIGNED", Entity: "employee", EntityID: &id, SubjectID: &id, Details: map[string]any{"role": "SUPER_ADMIN", "bootstrap": true}},
 		} {
 			if err := audit.Record(ctx, tx, e); err != nil {
 				return err
 			}
+		}
+		if demo != nil {
+			return nil
 		}
 		// Written before commit: if the commit fails the file is removed below, so an
 		// admin never exists without a readable password.

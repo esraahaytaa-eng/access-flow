@@ -38,7 +38,7 @@ func NewService(pool *pgxpool.Pool, authSvc *auth.Service) *Service {
 	return &Service{pool: pool, auth: authSvc}
 }
 
-// SystemActor is the system acting with administrative rights; only the dev fixture uses
+// SystemActor is the system acting with administrative rights; only the demo seed uses
 // it. Its nil ID is audited as the system (no actor).
 var SystemActor = auth.Principal{Roles: []string{"HR_MANAGER", "SUPER_ADMIN"}}
 
@@ -113,7 +113,7 @@ type NewEmployee struct {
 	Department, JobTitle *string
 	ManagerID            *uuid.UUID
 	// SeedPassword gives a seeded employee this permanent password instead of a temporary
-	// one. Set only by the dev fixture; never read from HTTP input.
+	// one. Set only by the demo seed; never read from HTTP input.
 	SeedPassword string
 }
 

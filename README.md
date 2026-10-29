@@ -3,7 +3,7 @@
 Access requests, approvals, granting and removal, quarterly reviews and audit proof for internal tools.
 Requirements: [`CASE.md`](CASE.md). Rules and architecture: [`DECISIONS.md`](DECISIONS.md). Plan: [`docs/plans/`](docs/plans/).
 
-> Status: backend milestones M2–M10 (identity, catalog, requests and approvals, API / Manual / Vendor fulfillment, direct grants, expiry, extensions and level changes, suspension, termination, transfer and rehire) and the Turkish web UI on top of them (U1). Then quarterly access reviews, baseline import and orphan accounts (M11, M12), the audit explorer (M13) and Super Admin succession and recovery (M14).
+> Status: backend milestones M2–M10 (identity, catalog, requests and approvals, API / Manual / Vendor fulfillment, direct grants, expiry, extensions and level changes, suspension, termination, transfer and rehire) and the Turkish web UI on top of them (U1). Then quarterly access reviews, baseline import and orphan accounts (M11, M12), the audit explorer (M13) and Super Admin succession and recovery (M14). M15: local demo mode with ready-to-use accounts and seed data, and the redesigned sign-in page.
 
 ## Run
 
@@ -13,9 +13,29 @@ docker compose up
 
 Open http://localhost:8080. Health: `GET /api/v1/health`. No other setup is needed.
 
-### First sign-in
+### Demo accounts
 
-On first start `app` creates the initial Super Admin (`admin@accessflow.local`, or `BOOTSTRAP_ADMIN_EMAIL`) with a one-time password. The password is never logged; read it with:
+`compose.yaml` starts AccessFlow in **local demo mode**. Each documented account has its own password, the sign-in page lists the accounts (without passwords; a click fills the e-mail) and every page shows a "Demo ortamı" badge:
+
+| Account | Password | Role it demonstrates |
+|---|---|---|
+| `admin@accessflow.local` | `Demo-Admin-2026` | Super Admin (Okan Yılmaz) |
+| `selin.aydin@accessflow.local` | `Demo-InfoSec-2026` | InfoSec |
+| `ayse.demir@accessflow.local` | `Demo-HR-2026` | HR Manager, owner of the vendor-fulfilled Bordro Portalı |
+| `gizem.arslan@accessflow.local` | `Demo-Auditor-2026` | Auditor |
+| `burak.sahin@accessflow.local` | `Demo-Manager-2026` | Manager of the product team |
+| `can.ozturk@accessflow.local` | `Demo-Owner-2026` | Tool Owner (Jira, GitHub), IT Operations admin group |
+| `deniz.kara@accessflow.local` | `Demo-Employee-2026` | Employee |
+
+The passwords come from `DEMO_PASSWORDS` in `compose.yaml`; change them there. The other demo employees have random passwords nobody knows, so they cannot sign in.
+
+**Demo data.** Once the operation runner is up, the server seeds a small Turkish company through the real services, at real time, as the people whose role each action needs (DECISIONS.md D12): 18 employees (the Super Admin and 17 others in seven departments, with managers), two InfoSec members, two admin groups, six tools covering API, Manual and Vendor fulfillment, a starter package, and access requests in every state: approvals waiting at the manager, the tool owner and InfoSec; approved, rejected and withdrawn requests; temporary access; a direct grant; an open Manual task, a vendor ticket and a failed fulfillment task; imported legacy access with two orphan accounts; a suspended employee, a terminated one whose removal is pending and a scheduled termination; and an open quarterly review with a first decision. Everything is marked seed-originated. The seed runs once, on a database that holds only the demo Super Admin, and records that it finished; later starts change nothing. If the first start was interrupted, or the `pgdata` volume comes from an earlier version (where `admin@accessflow.local` has a one-time password, so `Demo-Admin-2026` is rejected), the log says `demo seed: the database holds data from an interrupted start or an earlier version`; reset it with `docker compose down -v` (this deletes the local data) and run `docker compose up` again. Nothing time-dependent (overdue reminders, day-21 review findings) is faked; it appears when its real time comes.
+
+**Demo mode is local only.** The server refuses to start with `ACCESSFLOW_DEMO=true` unless `ACCESSFLOW_ENV=local`, `COOKIE_SECURE` and `JWT_SECRET` are unset, `DEMO_PASSWORDS` names a distinct valid password for every account, and both database URLs point at the Compose `postgres` service (DECISIONS.md A4).
+
+### First sign-in outside demo mode
+
+Without the three demo lines in `compose.yaml` (`ACCESSFLOW_DEMO`, `ACCESSFLOW_ENV`, `DEMO_PASSWORDS`), `app` creates the initial Super Admin (`admin@accessflow.local`, or `BOOTSTRAP_ADMIN_EMAIL`) with a one-time password and nothing else. The password is never logged; read it with:
 
 ```bash
 docker compose exec app /accessflow bootstrap-password
@@ -44,28 +64,11 @@ All optional:
 | `COOKIE_SECURE` | `false` | set `true` when served over HTTPS |
 | `BOOTSTRAP_ADMIN_EMAIL` | `admin@accessflow.local` | the initial Super Admin |
 | `BOOTSTRAP_FILE` | `/var/lib/accessflow/bootstrap-admin.txt` | where its one-time password is kept (the `appdata` volume) |
-| `SEED_PASSWORD` | `accessflow-local-demo` (set in `compose.yaml`) | shared password of the development fixture users; local only |
+| `ACCESSFLOW_DEMO` | `false` (`true` in `compose.yaml`) | local demo mode: demo accounts and seed; refused outside the local setup |
+| `ACCESSFLOW_ENV` | none (`local` in `compose.yaml`) | must be `local` for demo mode |
+| `DEMO_PASSWORDS` | none (set in `compose.yaml`) | `account=password,…` for `admin`, `infosec`, `hr`, `auditor`, `manager`, `owner`, `employee` |
 | `COMPANY_TIMEZONE` | `Europe/Istanbul` | the zone request expiry dates are in; an unknown zone stops startup |
 | `MOCK_TOOLS_URL` | `http://mocktools:8081` (set in `compose.yaml`) | the Mock Tool Service the operation runner calls |
-
-### Development fixture
-
-For trying the API by hand, create a few employees (HR Manager, two InfoSec members, an Auditor, a manager with two reports), two admin groups and four tools:
-
-```bash
-docker compose exec app /accessflow dev-fixture
-```
-
-The employees are `hr@`, `infosec1@`, `infosec2@`, `auditor@`, `manager@`, `dev1@` and `dev2@accessflow.local`, all with the `SEED_PASSWORD` value. The tools cover the three fulfillment methods:
-
-| Tool | Method | Owner | Admin group | Levels (approval steps) |
-|---|---|---|---|---|
-| Jira | API | manager@ | IT Operations | Viewer (Manager) · Admin (Manager, Tool Owner, InfoSec) |
-| GitHub | MANUAL | manager@ | IT Operations | Developer (Manager, Tool Owner) |
-| AWS | API | infosec2@ | IT Operations | Admin (Manager, Tool Owner, InfoSec) |
-| Payroll Portal | VENDOR | hr@ | Vendor Desk | User (Manager, Tool Owner) |
-
-Jira Viewer and GitHub Developer form the Engineering starter package (dev1@ and dev2@ see them as recommended). The command never runs on its own, can be run again safely (it skips existing employees, groups and tools by name and leaves them as they are) and marks what it creates as seeded (DECISIONS.md D12).
 
 ## API
 
@@ -73,6 +76,7 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error. S
 
 | Endpoint | |
 |---|---|
+| `GET /api/v1/demo` | demo mode only, no session: `{accounts: [{key, email, role}]}` for the sign-in page, without passwords; `404 not_found` otherwise |
 | `POST /api/v1/auth/login` | `{email, password}` → session cookies and `{employee, mustChangePassword}`; one generic `401 invalid_credentials` for every failure; 5 failures in a row lock the account for 15 minutes |
 | `GET /api/v1/auth/me` | the signed-in employee |
 | `POST /api/v1/auth/password` | `{currentPassword, newPassword}` (12–128 characters, different from the current one); signs out the employee's other sessions |
@@ -230,7 +234,7 @@ This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory P
 ## Layout
 
 ```
-cmd/accessflow      server (and `healthcheck`, `bootstrap-password`, `recover-admin`, `dev-fixture` commands)
+cmd/accessflow      server (and `healthcheck`, `bootstrap-password`, `recover-admin` commands)
 cmd/mocktools       Mock Tool Service
 internal/platform   config, DB pool and transactions, migrations, HTTP helpers
 internal/audit      append-only audit writer
@@ -244,7 +248,7 @@ internal/reviews    access review campaigns, decisions, the day-7/14/21 steps an
 internal/explorer   audit explorer: events, point-in-time access and evidence reports (read-only)
 internal/sweeps     the scheduled jobs loop (expiry, scheduled terminations, review steps)
 internal/mocktools  Mock Tool Service handlers and migrations
-internal/devfixture development employees, groups and tools (opt-in)
+internal/demo       local demo accounts and seed (demo mode only)
 internal/webui      embedded web build and SPA fallback
 internal/testutil   test databases, fixtures, API test client, lock-wait and fault-injection helpers
 web/                React + TypeScript UI (Turkish): pages, shared components, API client, translations

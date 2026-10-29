@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
-  AdminGroupsResponse, AdminHealth, ApprovalsResponse, BasicEmployee, CatalogResponse, Employee, EmployeesResponse, Exceptions,
+  AdminGroupsResponse, AdminHealth, ApprovalsResponse, BasicEmployee, CatalogResponse, DemoResponse, Employee, EmployeesResponse, Exceptions,
   FulfillmentTasksResponse, GrantsResponse, NominationsResponse, NotificationsResponse, RequestsResponse, ReviewPage, StarterPackagesResponse,
 } from "./types";
 
@@ -22,6 +22,9 @@ export const useNominations = (enabled = true) => useQuery({ queryKey: ["nominat
 export const useAdminHealth = (enabled = true) => useQuery({ queryKey: ["admin-health"], enabled, queryFn: () => api.get<AdminHealth>("/admin/health") });
 
 export const useReviews = (enabled = true) => useQuery({ queryKey: ["reviews"], enabled, queryFn: () => api.get<ReviewPage>("/reviews") });
+
+// Demo mode (local only): the server lists the demo accounts; it answers 404 otherwise.
+export const useDemo = () => useQuery({ queryKey: ["demo"], staleTime: Infinity, queryFn: () => api.get<DemoResponse>("/demo") });
 
 export const exceptionCount = (x: Exceptions) =>
   x.failedOperations.length + x.unroutableSteps.length + x.overlaps.length + x.suspensionGaps.length + x.securityRevocations.length + x.staleGrants.length +
