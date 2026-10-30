@@ -1,6 +1,6 @@
 # AccessFlow API
 
-The JSON API the web UI uses, under `/api/v1`, and the Mock Tool Service API that stands in for real tools. Business rules behind each endpoint: [`DECISIONS.md`](../DECISIONS.md).
+The JSON API the web UI uses, under `/api/v1`, and the Mock Tool Service API that stands in for real tools. Business rules behind each endpoint: [`DECISIONS.md`](../DECISIONS.md). The same API as an OpenAPI 3.1 document, browsable in Swagger UI at http://localhost:8080/swagger/ when the app runs: [`web/public/swagger/openapi.json`](../web/public/swagger/openapi.json).
 
 ## AccessFlow API
 

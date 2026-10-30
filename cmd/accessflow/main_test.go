@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -15,6 +18,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/demo"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
+	"github.com/go-chi/chi/v5"
 )
 
 // testRouter serves dist; demo accounts turn on demo mode.
@@ -127,6 +131,66 @@ func TestRouterRejectsCrossOriginWrites(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("same-origin login: %d %s; want 401 (reaches the handler)", rec.Code, rec.Body)
+	}
+}
+
+// The OpenAPI document behind the Swagger UI (/swagger/) lists exactly the API's routes,
+// so it cannot document a route that does not exist or miss a new one, and its references resolve.
+func TestOpenAPIDocumentMatchesTheRoutes(t *testing.T) {
+	raw, err := os.ReadFile("../../web/public/swagger/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Servers []struct{ URL string }                `json:"servers"`
+		Paths   map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("openapi.json is not valid JSON: %v", err)
+	}
+	if len(spec.Servers) != 1 || spec.Servers[0].URL != "/api/v1" {
+		t.Fatalf("servers = %+v; want one, /api/v1", spec.Servers)
+	}
+	var documented []string
+	for p, item := range spec.Paths {
+		for method := range item {
+			if method != "parameters" {
+				documented = append(documented, strings.ToUpper(method)+" /api/v1"+p)
+			}
+		}
+	}
+
+	var routes []string
+	err = chi.Walk(testRouter(t, fstest.MapFS{}, demo.Accounts...).(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if strings.HasPrefix(route, "/api/") {
+			routes = append(routes, method+" "+strings.TrimSuffix(strings.ReplaceAll(route, "/*/", "/"), "/"))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(documented)
+	slices.Sort(routes)
+	for _, r := range routes {
+		if !slices.Contains(documented, r) {
+			t.Errorf("route not documented: %s", r)
+		}
+	}
+	for _, d := range documented {
+		if !slices.Contains(routes, d) {
+			t.Errorf("documented route does not exist: %s", d)
+		}
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range regexp.MustCompile(`"\$ref":\s*"#/components/(\w+)/(\w+)"`).FindAllStringSubmatch(string(raw), -1) {
+		if group, _ := doc["components"].(map[string]any)[m[1]].(map[string]any); group[m[2]] == nil {
+			t.Errorf("unresolved $ref #/components/%s/%s", m[1], m[2])
+		}
 	}
 }
 

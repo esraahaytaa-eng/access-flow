@@ -14,6 +14,8 @@ func TestHandlerServesFilesAndFallsBackToIndex(t *testing.T) {
 	dist := fstest.MapFS{
 		"index.html":    {Data: []byte("<html>app</html>")},
 		"assets/app.js": {Data: []byte("console.log(1)")},
+		// A directory with its own page (the Swagger UI) is served as that page.
+		"swagger/index.html": {Data: []byte("<html>docs</html>")},
 	}
 	cases := []struct{ path, want string }{
 		{"/", "<html>app</html>"},
@@ -22,6 +24,8 @@ func TestHandlerServesFilesAndFallsBackToIndex(t *testing.T) {
 		{"/assets", "<html>app</html>"},
 		{"/index.html", ""}, // redirected to "/" by net/http
 		{"/assets/app.js", "console.log(1)"},
+		{"/swagger/", "<html>docs</html>"},
+		{"/swagger", ""}, // redirected to "/swagger/" by net/http
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {

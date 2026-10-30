@@ -25,7 +25,8 @@ func Dist() fs.FS {
 }
 
 // Handler serves files from dist and answers every other path with index.html,
-// so client-side routes work on reload. Missing files under assets/ (Vite's build
+// so client-side routes work on reload. A directory with its own index.html (the
+// Swagger UI at /swagger/) gets that page. Missing files under assets/ (Vite's build
 // output) get a 404 instead, so a stale bundle fails clearly. Mount it after the API routes.
 func Handler(dist fs.FS) http.Handler {
 	files := http.FileServerFS(dist)
@@ -35,6 +36,12 @@ func Handler(dist fs.FS) http.Handler {
 		if err != nil && strings.HasPrefix(name, "assets/") {
 			http.NotFound(w, r)
 			return
+		}
+		if err == nil && info.IsDir() {
+			if _, err := fs.Stat(dist, path.Join(name, "index.html")); err == nil {
+				files.ServeHTTP(w, r)
+				return
+			}
 		}
 		if err != nil || info.IsDir() {
 			http.ServeFileFS(w, r, dist, "index.html")
