@@ -19,6 +19,8 @@ import (
 
 const goodPassword = "correct horse battery"
 
+var testMailKey = bytes.Repeat([]byte{1}, 32)
+
 // testEnv is a real database plus an HTTP server mounting the auth routes and three
 // probe routes standing in for later business endpoints.
 type testEnv struct {
@@ -38,6 +40,8 @@ func newEnv(t *testing.T) *testEnv {
 		CompanyTimezone: "Europe/Istanbul",
 		BootstrapFile:   filepath.Join(t.TempDir(), "bootstrap-admin.txt"),
 		Logger:          slog.New(slog.NewTextHandler(logs, nil)),
+		LoginRateLimit:  1000, // tests sign in many times from one address; ratelimit_test.go tests the default
+		MailKey:         testMailKey,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +54,7 @@ func newEnv(t *testing.T) *testEnv {
 	r.With(svc.RequireSession).Get("/api/v1/probe", ok)
 	r.With(svc.RequireSession).Post("/api/v1/probe", ok)
 	r.With(svc.RequireSession, RequireRole("SUPER_ADMIN")).Get("/api/v1/probe/admin", ok)
+	r.With(svc.RequireSession).Route("/api/v1/", svc.RegisterActivations)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return &testEnv{t: t, db: db, svc: svc, srv: srv, logs: logs}

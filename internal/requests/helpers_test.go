@@ -51,7 +51,7 @@ func newWorld(t *testing.T) *world {
 	db := testutil.NewDB(t)
 	testutil.DefineDepartments(t, db, "Platform", "Engineering")
 	testutil.DefinePositions(t, db, "Engineer")
-	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
+	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000, MailKey: testutil.MailKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +70,7 @@ func newWorld(t *testing.T) *world {
 		r.Mount("/auth", authSvc.Routes())
 		r.Group(func(r chi.Router) {
 			r.Use(authSvc.RequireSession)
+			authSvc.RegisterActivations(r)
 			svc.Register(r)
 			people.NewService(db.App, authSvc).Register(r)
 			access.NewService(db.App, access.NewHTTPToolClient("http://"+toolsLn.Addr().String(), 5*time.Second)).Register(r)

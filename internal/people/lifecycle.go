@@ -124,35 +124,26 @@ type RehireInput struct {
 }
 
 // Rehire makes a terminated employee active again under the same identity (A5): a new
-// temporary password, and nothing restored, neither access, roles, memberships nor
-// requests (D7). Leaver removals still open keep running. It returns the employee and the
-// password, shown once.
-func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID, in RehireInput) (Employee, string, error) {
+// activation link (M18), and nothing restored, neither access, roles, memberships nor
+// requests (D7). Leaver removals still open keep running.
+func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID, in RehireInput) (Employee, error) {
 	if !canManageEmployees(actor) {
-		return Employee{}, "", platform.ErrForbidden
+		return Employee{}, platform.ErrForbidden
 	}
 	reason := strings.TrimSpace(in.Reason)
 	if reason == "" {
-		return Employee{}, "", platform.ValidationError("reason", "reason_required")
+		return Employee{}, platform.ValidationError("reason", "reason_required")
 	}
 	if err := platform.CheckText(reason, "reason", 1000); err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
 	department, err := CleanText(in.Department, "department")
 	if err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
 	jobTitle, err := CleanText(in.JobTitle, "jobTitle")
 	if err != nil {
-		return Employee{}, "", err
-	}
-	password, err := auth.NewTemporaryPassword()
-	if err != nil {
-		return Employee{}, "", err
-	}
-	hash, err := s.auth.Hash(ctx, password)
-	if err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
 	var out Employee
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
@@ -204,7 +195,7 @@ func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID
 			version = version + 1 WHERE id = $1`, id, in.ManagerID, department, jobTitle); err != nil {
 			return err
 		}
-		if err := issueTemporaryPassword(ctx, tx, now, id, hash); err != nil {
+		if err := s.auth.IssueActivation(ctx, tx, now, &actor.EmployeeID, id, "REHIRED"); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "EMPLOYEE_REHIRED", Entity: "employee",
@@ -216,8 +207,5 @@ func (s *Service) Rehire(ctx context.Context, actor auth.Principal, id uuid.UUID
 		out, err = GetEmployee(ctx, tx, id)
 		return err
 	})
-	if err != nil {
-		return Employee{}, "", err
-	}
-	return out, password, nil
+	return out, err
 }

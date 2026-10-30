@@ -35,6 +35,7 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 func (s *Service) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Post("/login", s.handleLogin)
+	r.Post("/activate", s.handleActivate) // no session: the link is the credential, and it signs nobody in
 	r.Group(func(r chi.Router) {
 		r.Use(func(next http.Handler) http.Handler { return s.authenticate(true, next) })
 		r.Get("/me", s.handleMe)
@@ -102,6 +103,9 @@ func safeMethod(m string) bool {
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.limited(w, r) {
+		return
+	}
 	var in struct{ Email, Password string }
 	if err := platform.DecodeJSON(w, r, &in); err != nil {
 		platform.WriteError(w, r, err)

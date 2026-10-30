@@ -38,6 +38,36 @@ func TestValidatePassword(t *testing.T) {
 	}
 }
 
+func TestValidateNewPassword(t *testing.T) {
+	cases := []struct {
+		name, pw, email, code string
+	}{
+		{"a long random password is fine", "violet-anchor-quiet-29", "ayse.yilmaz@x.com", ""},
+		{"too short", "short-pw-11", "ayse.yilmaz@x.com", "password_length"},
+		{"too long", strings.Repeat("a", 129), "ayse.yilmaz@x.com", "password_length"},
+		{"a common password", "password1234", "ayse.yilmaz@x.com", "common_password"},
+		{"common passwords ignore case", "PassWord1234", "ayse.yilmaz@x.com", "common_password"},
+		{"the email itself", "Ayse.Yilmaz@x.com", "ayse.yilmaz@x.com", "password_contains_email"},
+		{"contains the email name", "ayse.yilmaz-2026!", "ayse.yilmaz@x.com", "password_contains_email"},
+		{"a short email name is not checked", "ab-violet-anchor-quiet", "ab@x.com", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateNewPassword(tc.pw, tc.email)
+			if tc.code == "" {
+				if err != nil {
+					t.Fatalf("got %v; want nil", err)
+				}
+				return
+			}
+			var e *platform.Error
+			if !errors.As(err, &e) || e.Code != tc.code || e.Field != "newPassword" {
+				t.Fatalf("got %v; want %s on newPassword", err, tc.code)
+			}
+		})
+	}
+}
+
 func TestRegisterFailure(t *testing.T) {
 	cases := []struct {
 		before     int
@@ -112,15 +142,6 @@ func TestShouldReissue(t *testing.T) {
 	}
 }
 
-func TestTemporaryPasswordExpiry(t *testing.T) {
-	if got := TemporaryPasswordExpiry(t0, false); got == nil || !got.Equal(t0.Add(72*time.Hour)) {
-		t.Errorf("employee: got %v; want 72 hours later", got)
-	}
-	if got := TemporaryPasswordExpiry(t0, true); got != nil {
-		t.Errorf("bootstrap Super Admin: got %v; want no expiry", got)
-	}
-}
-
 func TestCredentialUsable(t *testing.T) {
 	expires := t0.Add(72 * time.Hour)
 	cases := []struct {
@@ -175,5 +196,27 @@ func TestNormalizeEmail(t *testing.T) {
 				t.Fatalf("NormalizeEmail(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestActivationStatus(t *testing.T) {
+	later, earlier := t0.Add(time.Hour), t0.Add(-time.Hour)
+	cases := []struct {
+		name          string
+		hasLink       bool
+		used, revoked *time.Time
+		expires       time.Time
+		want          string
+	}{
+		{"no link", false, nil, nil, time.Time{}, "NO_LINK"},
+		{"open and in time", true, nil, nil, later, "PENDING"},
+		{"open and expired", true, nil, nil, t0, "EXPIRED"},
+		{"used", true, &earlier, nil, earlier, "COMPLETED"},
+		{"revoked by a key reset", true, nil, &earlier, later, "NO_LINK"},
+	}
+	for _, tc := range cases {
+		if got := ActivationStatus(tc.hasLink, tc.used, tc.revoked, tc.expires, t0); got != tc.want {
+			t.Errorf("%s: %s; want %s", tc.name, got, tc.want)
+		}
 	}
 }

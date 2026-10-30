@@ -76,14 +76,13 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		platform.WriteError(w, r, err)
 		return
 	}
-	e, password, err := s.CreateEmployee(r.Context(), actor(r), NewEmployee{Email: in.Email, FullName: in.FullName,
+	e, err := s.CreateEmployee(r.Context(), actor(r), NewEmployee{Email: in.Email, FullName: in.FullName,
 		Department: in.Department, JobTitle: in.JobTitle, ManagerID: in.ManagerID})
 	if err != nil {
 		platform.WriteError(w, r, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store") // carries a password
-	platform.WriteJSON(w, http.StatusCreated, map[string]any{"employee": e, "temporaryPassword": password})
+	platform.WriteJSON(w, http.StatusCreated, map[string]any{"employee": e})
 }
 
 func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -129,13 +128,12 @@ func (s *Service) handleRehire(w http.ResponseWriter, r *http.Request) {
 		platform.WriteError(w, r, err)
 		return
 	}
-	e, password, err := s.Rehire(r.Context(), actor(r), id, in)
+	e, err := s.Rehire(r.Context(), actor(r), id, in)
 	if err != nil {
 		platform.WriteError(w, r, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store") // carries a password
-	platform.WriteJSON(w, http.StatusOK, map[string]any{"employee": e, "temporaryPassword": password})
+	platform.WriteJSON(w, http.StatusOK, map[string]any{"employee": e})
 }
 
 func (s *Service) handleReset(w http.ResponseWriter, r *http.Request) {
@@ -144,13 +142,11 @@ func (s *Service) handleReset(w http.ResponseWriter, r *http.Request) {
 		platform.WriteError(w, r, err)
 		return
 	}
-	password, err := s.ResetPassword(r.Context(), actor(r), id)
-	if err != nil {
+	if err := s.IssueActivationLink(r.Context(), actor(r), id); err != nil {
 		platform.WriteError(w, r, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store") // carries a password
-	platform.WriteJSON(w, http.StatusOK, map[string]string{"temporaryPassword": password})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) handleAssignRole(w http.ResponseWriter, r *http.Request) {

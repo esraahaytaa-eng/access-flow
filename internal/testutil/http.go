@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Client is a browser-like API client: it keeps cookies and echoes the accessflow_csrf
@@ -90,4 +94,24 @@ func RequireStatus(t testing.TB, r Response, status int, code string) {
 	if code != "" && r.Body["error"] != code {
 		t.Fatalf("error = %v; want %q", r.Body["error"], code)
 	}
+}
+
+// MailKey is the Mock Email Outbox key test services use (auth.Options.MailKey).
+var MailKey = bytes.Repeat([]byte{1}, 32)
+
+// Activate sets password through the newest activation link of employee, revealed by
+// superAdmin (a signed-in Super Admin), and returns the token it used.
+func Activate(t testing.TB, superAdmin *Client, pool *pgxpool.Pool, employee uuid.UUID, password string) string {
+	t.Helper()
+	var mail uuid.UUID
+	if err := pool.QueryRow(context.Background(), "SELECT id FROM email_outbox WHERE recipient_id = $1 AND kind = 'ACTIVATION' ORDER BY id DESC LIMIT 1",
+		employee).Scan(&mail); err != nil {
+		t.Fatalf("activation email: %v", err)
+	}
+	r := superAdmin.Do(http.MethodGet, "/api/v1/email-outbox/"+mail.String()+"/activation-link", nil)
+	RequireStatus(t, r, http.StatusOK, "")
+	token, _ := r.Body["token"].(string)
+	RequireStatus(t, NewClient(t, superAdmin.Srv).Do(http.MethodPost, "/api/v1/auth/activate",
+		map[string]string{"token": token, "newPassword": password}), http.StatusNoContent, "")
+	return token
 }

@@ -5,7 +5,10 @@ Every known limitation of the current version, with the decision it follows from
 ## Current version
 
 - Database credentials are fixed local values in `compose.yaml` (a local case-study setup, DECISIONS.md A2). PostgreSQL applies them only when its volume is first created; to change them, remove the volume (`docker compose down -v`).
-- There is no login rate limiting beyond the lockout (DECISIONS.md A4): 5 wrong passwords lock an account for 15 minutes, so anyone who knows an email can keep that account locked. Every attempt is audited.
+- Sign-in is limited per account (5 wrong passwords lock it for 15 minutes) and per client address (60 attempts a minute by default, `LOGIN_RATE_LIMIT`, shared with activation links; locally all browsers share Docker's address, so this budget is shared too), DECISIONS.md A4. Anyone who knows an email can still keep that account locked. The address is the connection's own: behind a reverse proxy every client would share the proxy's address until a trusted-proxy setting is added, and Docker Desktop's port forwarding may show all clients as one address.
+- **Mock Email Outbox (M18), local demonstration only, not suitable for production.** No e-mail is sent. A Super Admin reveals an employee's activation link in the outbox and passes it on, so while a link is pending a Super Admin could use it; every reveal is audited and recorded on completion, and the real employee then finds the link used. The links are kept encrypted with a key on the `appdata` volume until used, replaced or expired; anyone with access to that volume and the database could read pending links. A revealed link opened in a browser tab stays in that browser's history until it is used or expires (single use, 24 hours). Because a Super Admin can send a new link to another Super Admin or an InfoSec member and reveal it, one Super Admin could take over such an account (as with the earlier temporary passwords); it is audited (`ACTIVATION_COMPLETED` names who revealed the link) and ends with real e-mail delivery. If the key file is lost while links are pending, no link can be shown or issued until `docker compose exec app /accessflow reset-mail-key` (then `docker compose restart app`) and new links are sent.
+- New passwords are checked against an offline list of common passwords, not against breached-password services (no external calls).
+- The session signing secret, when generated, is stored in the database (A4); someone with full read access to the database could forge sessions.
 - One `app` instance is assumed (A2). Initial Super Admin creation is safe across processes (advisory lock), but running several instances is not tested.
 - `app` keeps the migration (owner) connection string in its environment for its whole lifetime, although it uses it only at startup. Separating it would need a one-shot migration service; with fixed local credentials it adds no protection here.
 - A grant whose level or tool is retired after it reached the tool stays active until removed (retirement does not revoke held access).
@@ -44,7 +47,7 @@ Every known limitation of the current version, with the decision it follows from
   - For an API tool, Existing Access accepts only an empty account or the employee's email, because the tool read matches API accounts by email.
   - Existing Access has no Tool or Level dropdowns (a tool can be defined in the same file); the preview names the problem and the defined values.
   - Re-importing never updates existing employees, tools, levels or approval steps; differences are warnings, and changes go through the normal screens.
-  - Departments, job positions and admin groups cannot be renamed; retire and create instead. The workbook only names admin groups; their members are added in the UI. Imported employees have no password until HR resets it.
+  - Departments, job positions and admin groups cannot be renamed; retire and create instead. The workbook only names admin groups; their members are added in the UI. Imported employees have no password until they use their activation link.
   - The file is at most 2 MiB with at most 1,000 employee, 2,000 tool-level and 5,000 access rows. Formulas, macros and encrypted files are refused. The import runs in one transaction and waits for, or blocks, the other access imports.
   - Unknown employees in Existing Access are rejected, not reported as orphans; orphan accounts come from the tool read or the account CSV.
   - An import holds share locks on every employee and tool while it runs, so sign-ins and approvals wait for it; it is a rare rollout action.
@@ -60,11 +63,11 @@ Every known limitation of the current version, with the decision it follows from
 
 ## Planned changes
 
-None.
+- Multi-factor authentication with an authenticator app, mandatory for privileged roles (Super Admin, InfoSec) first. The user menu shows it as "Planlanıyor"; nothing is implemented or stored.
 
 ## Out of scope
 
-- Self-service account activation and real e-mail: HR issues one-time passwords (DECISIONS.md F4, O2).
+- Real e-mail delivery: activation links and the access-request notice go to the local Mock Email Outbox only (DECISIONS.md F4, O2). Real delivery would send each link to its employee and remove the outbox's reveal.
 - SSO.
 - Real tool connectors: API tools are reached through the Mock Tool Service only (DECISIONS.md A1).
 - Investigating past employee activity in external tools. AccessFlow answers who had access in AccessFlow on a date (point-in-time); finding and closing accounts held outside it is an IT/InfoSec task.

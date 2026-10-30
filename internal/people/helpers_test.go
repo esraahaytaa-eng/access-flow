@@ -27,7 +27,7 @@ type testEnv struct {
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 	db := testutil.NewDB(t)
-	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
+	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000, MailKey: testutil.MailKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,7 @@ func newEnv(t *testing.T) *testEnv {
 		r.Mount("/auth", authSvc.Routes())
 		r.Group(func(r chi.Router) {
 			r.Use(authSvc.RequireSession)
+			authSvc.RegisterActivations(r)
 			svc.Register(r)
 			r.With(auth.RequireRole("INFOSEC")).Get("/probe/infosec", ok)
 		})

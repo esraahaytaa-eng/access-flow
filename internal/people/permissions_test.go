@@ -54,16 +54,16 @@ func TestPermissionMatrix(t *testing.T) {
 		}, []int{deny, ok, deny, deny, ok}},
 		{"reset a plain employee", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/employees/"+newTarget().String()+"/password-reset", nil)
-		}, []int{deny, ok, deny, deny, ok}},
+		}, []int{deny, none, deny, deny, none}},
 		{"reset an HR Manager", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/employees/"+newTarget("HR_MANAGER").String()+"/password-reset", nil)
-		}, []int{deny, ok, deny, deny, ok}},
+		}, []int{deny, none, deny, deny, none}},
 		{"reset an InfoSec member (privileged)", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/employees/"+newTarget("INFOSEC").String()+"/password-reset", nil)
-		}, []int{deny, deny, deny, deny, ok}},
+		}, []int{deny, deny, deny, deny, none}},
 		{"reset another Super Admin (privileged)", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/employees/"+newTarget("SUPER_ADMIN").String()+"/password-reset", nil)
-		}, []int{deny, deny, deny, deny, ok}},
+		}, []int{deny, deny, deny, deny, none}},
 		{"assign a role", func(c *testutil.Client) testutil.Response {
 			return roles(c, http.MethodPost, newTarget(), "AUDITOR")
 		}, []int{deny, deny, deny, deny, none}},

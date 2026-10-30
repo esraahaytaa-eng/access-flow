@@ -14,7 +14,7 @@ func TestLoadConfig(t *testing.T) {
 	}
 	defaults := platform.Config{HTTPAddr: ":8080", DatabaseURL: full["DATABASE_URL"], MigrationDatabaseURL: full["MIGRATION_DATABASE_URL"],
 		BootstrapAdminEmail: "admin@accessflow.local", BootstrapFile: "/var/lib/accessflow/bootstrap-admin.txt",
-		CompanyTimezone: "Europe/Istanbul", MockToolsURL: "http://mocktools:8081"}
+		CompanyTimezone: "Europe/Istanbul", MockToolsURL: "http://mocktools:8081", MockEmailKeyFile: "/var/lib/accessflow/mock-email.key"}
 	changed := func(f func(*platform.Config)) platform.Config { c := defaults; f(&c); return c }
 	demo := with(with(with(with(full, "ACCESSFLOW_DEMO", "true"), "ACCESSFLOW_ENV", "local"),
 		"DATABASE_URL", "postgres://accessflow_app:x@postgres:5432/accessflow"), "MIGRATION_DATABASE_URL", "postgres://accessflow_owner:x@postgres:5432/accessflow")
@@ -42,6 +42,12 @@ func TestLoadConfig(t *testing.T) {
 			want: changed(func(c *platform.Config) { c.CompanyTimezone = "America/New_York" })},
 		{name: "Mock Tool Service URL from the environment", env: with(full, "MOCK_TOOLS_URL", "http://localhost:9999"),
 			want: changed(func(c *platform.Config) { c.MockToolsURL = "http://localhost:9999" })},
+		{name: "mock email key file from the environment", env: with(full, "MOCK_EMAIL_KEY_FILE", "/data/mail.key"),
+			want: changed(func(c *platform.Config) { c.MockEmailKeyFile = "/data/mail.key" })},
+		{name: "login rate limit from the environment", env: with(full, "LOGIN_RATE_LIMIT", "120"),
+			want: changed(func(c *platform.Config) { c.LoginRateLimit = 120 })},
+		{name: "LOGIN_RATE_LIMIT must be a number", env: with(full, "LOGIN_RATE_LIMIT", "lots"), wantErr: true},
+		{name: "LOGIN_RATE_LIMIT must be positive", env: with(full, "LOGIN_RATE_LIMIT", "0"), wantErr: true},
 		{name: "unknown company timezone", env: with(full, "COMPANY_TIMEZONE", "Mars/Olympus"), wantErr: true},
 		{name: "runtime database URL is required", env: with(full, "DATABASE_URL", ""), wantErr: true},
 		{name: "migration database URL is required", env: with(full, "MIGRATION_DATABASE_URL", ""), wantErr: true},

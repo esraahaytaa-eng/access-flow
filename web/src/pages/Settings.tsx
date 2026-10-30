@@ -2,16 +2,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, ApiError, saveFile } from "../api/client";
 import { useAdminGroups, useAdminHealth, useCompanyCatalog, useEmployees, useNominations, useReviews, useStarterPackages, useTools } from "../api/queries";
-import type { AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage, WorkbookPlan, WorkbookProblem, WorkbookResult } from "../api/types";
+import type { Activation, ActivationsResponse, ActivationStatus, AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage, WorkbookPlan, WorkbookProblem, WorkbookResult } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
-  Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, FilePicker, Input, KeyValueList, Modal, PageHeader, Person, Select, TableSkeleton, Tabs, Textarea, useAction,
+  Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, FilePicker, Input, KeyValueList, Modal, PageHeader, Person, Segmented, Select, TableSkeleton, Tabs, Textarea, useAction,
 } from "../ui/components";
 import { formatDate, formatDateTime, relativeTime } from "../ui/format";
+import { reissueWarning } from "./EmployeeDetail";
 import { catalogOptions, managerOptions } from "./Employees";
 
-type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "mail" | "system";
+type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "activations" | "mail" | "system";
 const assignable: AssignRoleBody["role"][] = ["INFOSEC", "HR_MANAGER", "AUDITOR"];
 
 export function SettingsPage() {
@@ -20,9 +21,10 @@ export function SettingsPage() {
     <>
       <PageHeader title="Yönetim ayarları" sub="Ayrıcalıklı roller, yönetim grupları, başlangıç paketleri, inceleme takvimi, içe aktarma ve e-posta kutusu." />
       <Tabs value={tab} onChange={setTab} tabs={[{ value: "roles", label: "Roller" }, { value: "groups", label: "Yönetim grupları" }, { value: "packages", label: "Başlangıç paketleri" },
-        { value: "reviews", label: "İnceleme takvimi" }, { value: "imports", label: "İçe aktarma" }, { value: "mail", label: "E-posta kutusu" }, { value: "system", label: "Sistem" }]} />
+        { value: "reviews", label: "İnceleme takvimi" }, { value: "imports", label: "İçe aktarma" },
+        { value: "activations", label: "Hesap etkinleştirme" }, { value: "mail", label: "E-posta kutusu" }, { value: "system", label: "Sistem" }]} />
       {tab === "roles" ? <RolesTab /> : tab === "groups" ? <GroupsTab /> : tab === "packages" ? <PackagesTab /> : tab === "reviews" ? <ReviewScheduleTab />
-        : tab === "imports" ? <ImportsTab /> : tab === "mail" ? <MailboxTab /> : <SystemTab />}
+        : tab === "imports" ? <ImportsTab /> : tab === "activations" ? <ActivationsTab /> : tab === "mail" ? <MailboxTab /> : <SystemTab />}
     </>
   );
 }
@@ -275,13 +277,13 @@ function MailboxTab() {
   const emails = query.data ?? [];
   return (
     <div className="stack">
-      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez. Yönetici onayı gerektiren her talep gönderiminde yöneticiye tek bir bilgilendirme e-postası düşer. E-posta üzerinden onay verilemez.</Callout>
+      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez; bu kutu yalnızca yerel demo içindir. Yönetici onayı gerektiren her talep gönderiminde yöneticiye tek bir bilgilendirme e-postası düşer; e-posta üzerinden onay verilemez. Yeni, içe aktarılan, yeniden işe alınan ve bağlantısı yenilenen çalışanlara etkinleştirme e-postası düşer; bağlantıyı yalnızca Süper Yönetici, her görüntüleme denetim kaydına yazılarak görebilir.</Callout>
       {query.isPending ? <TableSkeleton /> : emails.length === 0 ? <div className="card"><EmptyState icon="mail" title="E-posta yok" /></div> : (
         <div className="card">
           {emails.map((m) => (
             <button key={m.id} className="list-row clickable" style={{ width: "100%", border: 0, background: "none", textAlign: "left", borderBottom: "1px solid var(--line-2)" }} onClick={() => setOpen(m)}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>{m.subject}</div>
+                <div style={{ fontWeight: 600 }}>{m.subject}{m.kind === "ACTIVATION" && <> <Badge tone={m.linkAvailable ? "blue" : "outline"}>{m.linkAvailable ? "Etkinleştirme" : "Bağlantı kullanılamaz"}</Badge></>}</div>
                 <div className="cell-sub" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Alıcı: {m.recipient.fullName} · {m.body}</div>
               </div>
               <span className="small muted nowrap">{relativeTime(m.createdAt)}</span>
@@ -291,7 +293,71 @@ function MailboxTab() {
       )}
       <Modal open={!!open} onClose={() => setOpen(null)} title={open?.subject ?? ""} desc={open ? `Alıcı: ${open.recipient.fullName} · ${formatDateTime(open.createdAt, timezone)}` : undefined} footer={<Button onClick={() => setOpen(null)}>Kapat</Button>}>
         <p style={{ whiteSpace: "pre-wrap" }}>{open?.body}</p>
+        {open?.kind === "ACTIVATION" && <ActivationLink key={open.id} email={open} />}
       </Modal>
+    </div>
+  );
+}
+
+/** Reveals an activation link on request only: fetched into this component, never cached, and audited by the server. */
+function ActivationLink({ email }: { email: Email }) {
+  const [link, setLink] = useState("");
+  const [run, busy] = useAction();
+  if (!email.linkAvailable) return <Callout tone="warn">Bu bağlantı artık kullanılamaz (kullanıldı, süresi doldu veya yenisi gönderildi). Gerekirse Hesap etkinleştirme sekmesinden yeni bağlantı gönderin.</Callout>;
+  if (link) return (
+    <Callout tone="warn" title="Etkinleştirme bağlantısı (tek kullanımlık, 24 saat)">
+      <a href={link} target="_blank" rel="noreferrer noopener" style={{ wordBreak: "break-all" }}>{link}</a>
+      <div className="small muted" style={{ marginTop: 6 }}>Görüntülemeniz denetim kaydına yazıldı. Bağlantıyı yalnızca çalışana iletin.</div>
+    </Callout>
+  );
+  return <Button loading={busy} icon="key" onClick={() => run(() => api.get<{ token: string }>(`/email-outbox/${email.id}/activation-link`))
+    .then((r) => { if (r.ok) setLink(`${window.location.origin}/sifre-belirle#${r.res.token}`); })}>Bağlantıyı göster</Button>;
+}
+
+const activationLabel: Record<ActivationStatus, string> = { PENDING: "Bekliyor", EXPIRED: "Süresi doldu", COMPLETED: "Tamamlandı", NO_LINK: "Bağlantı yok" };
+const activationTone = { PENDING: "amber", EXPIRED: "red", COMPLETED: "green", NO_LINK: "outline" } as const;
+const reasonLabel = { CREATED: "Yeni çalışan", IMPORTED: "Excel içe aktarma", REHIRED: "Yeniden işe alım", RESET: "Yenilendi" };
+
+// Not in the design: the Super Admin's view of first sign-ins (M18). Employees with a password and no link are not listed.
+function ActivationsTab() {
+  const { timezone } = useSession();
+  const qc = useQueryClient();
+  const query = useQuery({ queryKey: ["activations"], queryFn: () => api.get<ActivationsResponse>("/activations").then((r) => r.activations) });
+  const [filter, setFilter] = useState<ActivationStatus | "ALL">("PENDING");
+  const [reissue, setReissue] = useState<Activation | null>(null);
+  const all = query.data ?? [];
+  const rows = filter === "ALL" ? all : all.filter((a) => a.status === filter);
+  const count = (s: ActivationStatus) => all.filter((a) => a.status === s).length;
+  return (
+    <div className="stack">
+      <Callout tone="info">Çalışanlar parolalarını tek kullanımlık, 24 saat geçerli bir bağlantıyla kendileri belirler. Kimse bir çalışanın parolasını göremez. Yeni bağlantı öncekileri geçersiz kılar.</Callout>
+      <Segmented label="Durum" value={filter} onChange={setFilter} options={[
+        { value: "PENDING", label: `Bekleyen (${count("PENDING")})` }, { value: "EXPIRED", label: `Süresi dolan (${count("EXPIRED")})` },
+        { value: "NO_LINK", label: `Bağlantı yok (${count("NO_LINK")})` }, { value: "COMPLETED", label: `Tamamlanan (${count("COMPLETED")})` }, { value: "ALL", label: `Tümü (${all.length})` }]} />
+      <Card pad={false}>
+        {query.isPending ? <TableSkeleton /> : rows.length === 0 ? <EmptyState icon="check" title="Bu durumda çalışan yok" /> : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Çalışan</th><th>Durum</th><th>Neden</th><th>Son geçerlilik</th><th>Tamamlanma</th><th /></tr></thead>
+              <tbody>
+                {rows.map((a) => (
+                  <tr key={a.employee.id}>
+                    <td><Person person={a.employee} sub={a.employee.email} /></td>
+                    <td><Badge tone={activationTone[a.status]} dot>{activationLabel[a.status]}</Badge></td>
+                    <td className="small">{a.reason ? reasonLabel[a.reason] : "—"}</td>
+                    <td className="small nowrap">{a.expiresAt && a.status !== "COMPLETED" ? formatDateTime(a.expiresAt, timezone) : "—"}</td>
+                    <td className="small nowrap">{a.completedAt ? formatDateTime(a.completedAt, timezone) : "—"}</td>
+                    <td className="actions"><Button size="sm" onClick={() => setReissue(a)}>Yeni bağlantı gönder</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <ConfirmDialog open={!!reissue} onClose={() => setReissue(null)} title={`${reissue?.employee.fullName ?? ""} için yeni bağlantı gönderilsin mi?`}
+        desc={reissueWarning(reissue?.status === "COMPLETED")} confirmLabel="Bağlantı gönder" success="Bağlantı gönderildi" successDesc="Etkinleştirme bağlantısı Mock Email Outbox'a gönderildi."
+        onConfirm={async () => { await api.post(`/employees/${reissue!.employee.id}/password-reset`); qc.invalidateQueries({ queryKey: ["activations"] }); qc.invalidateQueries({ queryKey: ["email-outbox"] }); }} />
     </div>
   );
 }

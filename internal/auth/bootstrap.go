@@ -65,8 +65,9 @@ func (s *Service) Bootstrap(ctx context.Context, email string, demo *DemoAdmin) 
 			email, name, !temporary).Scan(&id); err != nil {
 			return fmt.Errorf("create initial Super Admin: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary, expires_at)
-			VALUES ($1, $2, $3, $4)`, id, hash, temporary, TemporaryPasswordExpiry(now, true)); err != nil {
+		// The bootstrap password does not expire; it stays valid until its first change (F4).
+		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary)
+			VALUES ($1, $2, $3)`, id, hash, temporary); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO role_assignments (employee_id, role, valid_from) VALUES ($1, 'SUPER_ADMIN', $2)", id, now); err != nil {

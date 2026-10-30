@@ -19,8 +19,8 @@ const detail = (routes: Record<string, unknown>) => renderPage(<EmployeeDetailPa
 const dialog = (name: string) => within(screen.getByRole("dialog", { name }));
 
 describe("employees", () => {
-  it("creates an employee and shows the temporary password once", async () => {
-    const calls = fakeServer({ ...dir(), "POST /employees": () => ({ status: 201, body: { employee: employee({ id: "n1", fullName: "Kaan Uslu" }), temporaryPassword: "Tmp-Secret-123456" } }) });
+  it("creates an employee, whose activation link goes only to the Mock Email Outbox", async () => {
+    const calls = fakeServer({ ...dir(), "POST /employees": () => ({ status: 201, body: { employee: employee({ id: "n1", fullName: "Kaan Uslu" }) } }) });
     renderPage(<EmployeesPage />, { session: hr });
     await userEvent.click(await screen.findByRole("button", { name: "Yeni çalışan" }));
     const d = dialog("Yeni çalışan");
@@ -31,7 +31,8 @@ describe("employees", () => {
     await userEvent.selectOptions(d.getByLabelText(/Departman/), "Ürün");
     await userEvent.selectOptions(d.getByLabelText(/Yönetici/), "m1");
     await userEvent.click(d.getByRole("button", { name: "Çalışanı oluştur" }));
-    expect(await screen.findByText("Tmp-Secret-123456")).toBeTruthy();
+    expect(await screen.findByText(/Etkinleştirme bağlantısı Mock Email Outbox/)).toBeTruthy();
+    expect(screen.queryByLabelText("Geçici parola")).toBeNull();
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ email: "kaan@x.co", fullName: "Kaan Uslu", department: "Ürün", jobTitle: "Mühendis", managerId: "m1" });
   });
 
@@ -171,7 +172,7 @@ describe("employee detail", () => {
     let refuse = true;
     fakeServer({
       ...dir(), "GET /employees": { employees: [manager, employee({ status: "TERMINATED", managerId: null })] }, "GET /employees/e2/grants": { grants: [] },
-      "POST /employees/e2/rehire": () => refuse ? { status: 409, body: { error: "owns_tools" } } : { body: { employee: employee(), temporaryPassword: "Rehire-Pass-99" } },
+      "POST /employees/e2/rehire": () => refuse ? { status: 409, body: { error: "owns_tools" } } : { body: { employee: employee() } },
     });
     detail({});
     await userEvent.click(await screen.findByRole("button", { name: "Yeniden işe al" }));
@@ -182,7 +183,7 @@ describe("employee detail", () => {
     expect(await screen.findByText(/araç sahibi/i)).toBeTruthy();
     refuse = false;
     await userEvent.click(d.getByRole("button", { name: "Yeniden işe al" }));
-    expect(await screen.findByText("Rehire-Pass-99")).toBeTruthy();
+    expect(await screen.findByText(/Etkinleştirme bağlantısı Mock Email Outbox/)).toBeTruthy();
   });
 
   it("offers no actions on one's own record", async () => {

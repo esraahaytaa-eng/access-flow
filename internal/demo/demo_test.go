@@ -55,7 +55,7 @@ type env struct {
 func setup(t *testing.T) env {
 	t.Helper()
 	db := testutil.NewDB(t)
-	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/a.txt"})
+	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/a.txt", LoginRateLimit: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +117,15 @@ func TestSeedCreatesARealisticIdempotentDemo(t *testing.T) {
 		if r := c.Login("elif.celik@accessflow.local", p); r.Status == http.StatusOK {
 			t.Fatal("a non-account employee signs in with a demo password")
 		}
+	}
+
+	// Only the documented accounts have a password; the other employees have no credential and
+	// no activation link, so the Mock Email Outbox holds no activation email (M18).
+	if n := e.count(t, "SELECT count(*) FROM password_credentials"); n != len(Accounts) {
+		t.Errorf("passwords = %d; want %d (the documented accounts)", n, len(Accounts))
+	}
+	if n := e.count(t, "SELECT count(*) FROM activation_tokens") + e.count(t, "SELECT count(*) FROM email_outbox WHERE kind = 'ACTIVATION'"); n != 0 {
+		t.Errorf("the seed issued %d activation links or emails; want none", n)
 	}
 
 	checks := []struct {

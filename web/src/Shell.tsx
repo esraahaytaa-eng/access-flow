@@ -8,7 +8,7 @@ import { roleLabel } from "./i18n/labels";
 import { useNavCounts, useRoleFlags, type RoleFlags } from "./nav";
 import { useSession } from "./session";
 import { NominateModal } from "./pages/Settings";
-import { Avatar, Badge, Button, Callout, Icon, Logo, Popover, useAction } from "./ui/components";
+import { Avatar, Badge, Button, Callout, Icon, Logo, Modal, Popover, useAction } from "./ui/components";
 import { formatDate, relativeTime } from "./ui/format";
 import type { IconName } from "./ui/icons";
 
@@ -146,6 +146,7 @@ export function useRoleLabels() {
 
 function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
+  const [mfa, setMfa] = useState(false);
   const { me } = useSession();
   const navigate = useNavigate();
   const labels = useRoleLabels();
@@ -166,9 +167,16 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
         </div>
         <div style={{ padding: 6 }}>
           <button type="button" className="menu-item" onClick={() => { setOpen(false); navigate("/password"); }}><Icon name="lock" />Parola değiştir</button>
+          {/* Planned, not implemented: nothing is enabled or stored (M18; see README). */}
+          <button type="button" className="menu-item muted" onClick={() => { setOpen(false); setMfa(true); }}>
+            <Icon name="key" /><span style={{ flex: 1 }}>Google Authenticator ile iki adımlı doğrulama</span><Badge tone="outline">Planlanıyor</Badge>
+          </button>
           <button type="button" className="menu-item" onClick={() => { setOpen(false); onSignOut(); }}><Icon name="logout" />Çıkış yap</button>
         </div>
       </Popover>
+      <Modal open={mfa} onClose={() => setMfa(false)} title="İki adımlı doğrulama" footer={<Button onClick={() => setMfa(false)}>Kapat</Button>}>
+        <p>Bu özellik geliştirme aşamasındadır.</p>
+      </Modal>
     </div>
   );
 }

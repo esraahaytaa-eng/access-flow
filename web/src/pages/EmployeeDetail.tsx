@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
 import { useCompanyCatalog, useEmployees } from "../api/queries";
-import type { Employee, EmployeeWithPassword, Grant, GrantsResponse, PasswordResetResponse } from "../api/types";
+import type { Employee, EmployeeResponse, Grant, GrantsResponse } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
@@ -12,7 +12,12 @@ import {
 import { ExpiryCell, GrantBadges } from "../ui/domain";
 import { addDays, formatDate, formatDateTime, todayIn, zonedInstant } from "../ui/format";
 import { statusBadge } from "../ui/status";
-import { catalogOptions, managerOptions, PasswordResult } from "./Employees";
+import { catalogOptions, CreatedResult, managerOptions } from "./Employees";
+
+/** A new link ends the current password and sessions at once (M18); the admin is told before confirming. */
+export const reissueWarning = (hasPassword: boolean) => hasPassword
+  ? "Bu çalışanın mevcut parolası ve tüm açık oturumları hemen geçersiz olur. Yeni bağlantı 24 saat geçerlidir ve tek kullanımlıktır; Mock Email Outbox'a gönderilir."
+  : "Önceki bağlantılar geçersiz olur. Yeni bağlantı 24 saat geçerlidir ve tek kullanımlıktır; Mock Email Outbox'a gönderilir.";
 
 type ModalName = "pw" | "transfer" | "suspend" | "reactivate" | "terminate" | "cancelTerm" | "rehire" | null;
 
@@ -26,7 +31,6 @@ export function EmployeeDetailPage() {
   const emp = employees.find((e) => e.id === id);
   const grantsQuery = useQuery({ queryKey: ["employee-grants", id], enabled: !!emp, queryFn: () => api.get<GrantsResponse>(`/employees/${id}/grants`).then((r) => r.grants) });
   const [modal, setModal] = useState<ModalName>(null);
-  const [password, setPassword] = useState<string | null>(null);
 
   if (query.isPending) return <TableSkeleton />;
   if (!emp) return <div className="card"><EmptyState title="Çalışan bulunamadı" action={<Button onClick={() => navigate("/employees")}>Çalışanlara dön</Button>} /></div>;
@@ -47,7 +51,7 @@ export function EmployeeDetailPage() {
         title={<span className="row" style={{ gap: 12 }}>{emp.fullName}<Badge tone={badge.tone} dot>{badge.label}</Badge></span>}
         sub={[emp.jobTitle, emp.department].filter(Boolean).join(" · ")}
         actions={!isSelf && (emp.status === "TERMINATED" ? <Button icon="refresh" onClick={() => setModal("rehire")}>Yeniden işe al</Button> : <>
-          {emp.status === "ACTIVE" && <Button icon="key" onClick={() => setModal("pw")}>Parola sıfırla</Button>}
+          {emp.status === "ACTIVE" && <Button icon="key" onClick={() => setModal("pw")}>Etkinleştirme bağlantısı gönder</Button>}
           {emp.status === "ACTIVE" && <Button icon="swap" disabled={!grantsLoaded} onClick={() => setModal("transfer")}>Transfer</Button>}
           {emp.status === "ACTIVE" && <Button icon="pause" onClick={() => setModal("suspend")}>Askıya al</Button>}
           {emp.status === "SUSPENDED" && <Button icon="play" onClick={() => setModal("reactivate")}>Yeniden etkinleştir</Button>}
@@ -107,13 +111,9 @@ export function EmployeeDetailPage() {
         confirmLabel="Yeniden etkinleştir" reason success="Çalışan yeniden etkinleştirildi" successDesc="Uygun erişimler yeniden etkinleştiriliyor." onConfirm={personAction("reactivate")} />
       <ConfirmDialog open={modal === "cancelTerm"} onClose={close} title="Planlı çıkış iptal edilsin mi?" desc="Çalışan aktif kalır; erişimleri değişmez."
         confirmLabel="Planlı çıkışı iptal et" reason success="Planlı çıkış iptal edildi" onConfirm={personAction("termination/cancel")} />
-      <ConfirmDialog open={modal === "pw"} onClose={close} title="Geçici parola oluşturulsun mu?" desc="Mevcut parola geçersiz olur. Yeni geçici parola 72 saat geçerlidir, tek kullanımlıktır ve yalnızca bir kez gösterilir."
-        confirmLabel="Parola oluştur" onConfirm={async () => { const r = await api.post<PasswordResetResponse>(`/employees/${emp.id}/password-reset`); setPassword(r.temporaryPassword); refresh(); }} />
-      {password && (
-        <Modal open onClose={() => setPassword(null)} title="Geçici parola" desc={`${emp.fullName} için yalnızca bir kez gösterilir.`} footer={<Button variant="primary" onClick={() => setPassword(null)}>Kaydettim, kapat</Button>}>
-          <div className="secret" aria-label="Geçici parola">{password}</div>
-        </Modal>
-      )}
+      <ConfirmDialog open={modal === "pw"} onClose={close} title="Yeni etkinleştirme bağlantısı gönderilsin mi?" desc={reissueWarning(emp.hasPassword)}
+        confirmLabel="Bağlantı gönder" success="Bağlantı gönderildi" successDesc="Etkinleştirme bağlantısı Mock Email Outbox'a gönderildi."
+        onConfirm={async () => { await api.post(`/employees/${emp.id}/password-reset`); refresh(); }} />
       {modal === "transfer" && <TransferModal emp={emp} employees={employees} grants={grants} onClose={close} onDone={refresh} />}
       {modal === "terminate" && <TerminateModal emp={emp} employees={employees} openGrants={grants.length} onClose={close} onDone={refresh} />}
       {modal === "rehire" && <RehireModal emp={emp} employees={employees} onClose={close} onDone={refresh} />}
@@ -258,19 +258,19 @@ function TerminateModal({ emp, employees, openGrants, onClose, onDone }: { emp: 
 function RehireModal({ emp, employees, onClose, onDone }: { emp: Employee; employees: Employee[]; onClose: () => void; onDone: () => void }) {
   const [form, setForm] = useState({ managerId: "", department: emp.department ?? "", jobTitle: emp.jobTitle ?? "", reason: "" });
   const [error, setError] = useState("");
-  const [created, setCreated] = useState<EmployeeWithPassword | null>(null);
+  const [created, setCreated] = useState<EmployeeResponse | null>(null);
   const catalog = useCompanyCatalog().data;
   const [run, busy] = useAction();
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   const submit = async () => {
     if (form.reason.trim().length < 3) { setError("Gerekçe girin."); return; }
     setError("");
-    const r = await run(() => api.post<EmployeeWithPassword>(`/employees/${emp.id}/rehire`, {
+    const r = await run(() => api.post<EmployeeResponse>(`/employees/${emp.id}/rehire`, {
       version: emp.version, managerId: form.managerId || null, department: form.department.trim() || null, jobTitle: form.jobTitle.trim() || null, reason: form.reason.trim(),
     }), { success: "Çalışan yeniden işe alındı" });
     if (r.ok) { setCreated(r.res); onDone(); }
   };
-  if (created) return <PasswordResult title={`${emp.fullName} yeniden işe alındı`} employee={created.employee} password={created.temporaryPassword} onClose={onClose} />;
+  if (created) return <CreatedResult title={`${emp.fullName} yeniden işe alındı`} employee={created.employee} onClose={onClose} />;
   return (
     <Modal open wide onClose={onClose} title={`${emp.fullName} · yeniden işe alım`} desc="Aynı kimlikle yeniden etkinleştirilir. Önceki erişimler, roller ve yönetim grupları geri gelmez."
       footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} onClick={submit}>Yeniden işe al</Button></>}>

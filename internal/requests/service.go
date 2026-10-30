@@ -513,29 +513,38 @@ func queueEmail(ctx context.Context, tx pgx.Tx, req Request) error {
 	return err
 }
 
-// Email is one Mock Email Outbox message.
+// Email is one Mock Email Outbox message: an access request (O2) or an activation link (M18),
+// whose link is never listed; a Super Admin reveals it separately while linkAvailable.
 type Email struct {
-	ID        uuid.UUID `json:"id"`
-	Recipient Person    `json:"recipient"`
-	RequestID uuid.UUID `json:"requestId"`
-	Subject   string    `json:"subject"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID            uuid.UUID  `json:"id"`
+	Kind          string     `json:"kind"`
+	Recipient     Person     `json:"recipient"`
+	RequestID     *uuid.UUID `json:"requestId"`
+	Subject       string     `json:"subject"`
+	Body          string     `json:"body"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	LinkAvailable bool       `json:"linkAvailable"`
 }
 
-// Outbox lists the newest 100 simulated emails, for InfoSec, Super Admin and Auditor.
+// Outbox lists the newest 100 simulated emails for InfoSec, Super Admin and Auditor; activation
+// emails only for Super Admins.
 func (s *Service) Outbox(ctx context.Context, actor auth.Principal) ([]Email, error) {
 	if !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("AUDITOR") {
 		return nil, platform.ErrForbidden
 	}
-	rows, err := s.pool.Query(ctx, `SELECT o.id, e.id, e.full_name, o.request_id, o.subject, o.body, o.created_at
-		FROM email_outbox o JOIN employees e ON e.id = o.recipient_id ORDER BY o.id DESC LIMIT 100`)
+	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, e.id, e.full_name, o.request_id, o.subject, o.body, o.created_at,
+		       o.sealed_token IS NOT NULL AND t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now() AND e.status = 'ACTIVE'
+		FROM email_outbox o JOIN employees e ON e.id = o.recipient_id LEFT JOIN activation_tokens t ON t.id = o.activation_id
+		WHERE o.kind = 'ACCESS_REQUEST' OR $1
+		ORDER BY o.id DESC LIMIT 100`, actor.HasRole("SUPER_ADMIN"))
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Email, error) {
 		var m Email
-		err := row.Scan(&m.ID, &m.Recipient.ID, &m.Recipient.FullName, &m.RequestID, &m.Subject, &m.Body, &m.CreatedAt)
+		var available *bool
+		err := row.Scan(&m.ID, &m.Kind, &m.Recipient.ID, &m.Recipient.FullName, &m.RequestID, &m.Subject, &m.Body, &m.CreatedAt, &available)
+		m.LinkAvailable = available != nil && *available
 		return m, err
 	})
 }

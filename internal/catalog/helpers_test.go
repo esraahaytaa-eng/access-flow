@@ -27,7 +27,7 @@ func newEnv(t *testing.T) *testEnv {
 	db := testutil.NewDB(t)
 	testutil.DefineDepartments(t, db, "Engineering", "Finance", "QA")
 	testutil.DefinePositions(t, db, "Backend Developer")
-	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
+	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
