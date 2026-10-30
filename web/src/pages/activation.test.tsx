@@ -54,6 +54,22 @@ describe("Şifreni Belirle page", () => {
     expect((await screen.findByRole("alert")).textContent).toMatch(/Bağlantı geçersiz/);
   });
 
+  it("uses a new link opened in the same tab", async () => {
+    window.history.pushState(null, "", "/sifre-belirle#tok-old");
+    let answer = { status: 400, body: { error: "invalid_activation_link", field: "" } };
+    const calls = fakeServer({ ...signedOut, "POST /auth/activate": () => answer });
+    render(<App />);
+    await setPassword();
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Bağlantı geçersiz/);
+    answer = { status: 204 } as never;
+    window.location.hash = "tok-new"; // the browser does not reload for a link that differs only after "#"
+    await waitFor(() => expect(window.location.hash).toBe(""));
+    expect(screen.queryByRole("alert")).toBeNull();
+    await setPassword();
+    expect(await screen.findByText(/Parolanız belirlendi/)).toBeTruthy();
+    expect(calls.filter((c) => c.path === "/auth/activate").map((c) => (c.body as { token: string }).token)).toEqual(["tok-old", "tok-new"]);
+  });
+
   it("checks the passwords before calling the server", async () => {
     window.history.pushState(null, "", "/sifre-belirle#tok-123");
     const calls = fakeServer(signedOut);

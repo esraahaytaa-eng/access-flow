@@ -10,13 +10,23 @@ import { AuthScreen } from "./Login";
  * posted in the request body. Setting the password signs nobody in: the employee signs in next.
  */
 export function SetPasswordPage() {
-  const [token] = useState(() => window.location.hash.slice(1));
+  const [token, setToken] = useState(() => window.location.hash.slice(1));
   const [form, setForm] = useState({ newPassword: "", repeat: "" });
   const [errors, setErrors] = useState<{ newPassword?: string; repeat?: string }>({});
   const [failure, setFailure] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
-  useEffect(() => { window.history.replaceState(null, "", window.location.pathname); }, []);
+  useEffect(() => {
+    // A new link opened in this tab differs only after "#", so the browser does not reload the page.
+    const take = () => {
+      const next = window.location.hash.slice(1);
+      if (next) { setToken(next); setFailure(""); setDone(false); }
+      window.history.replaceState(null, "", window.location.pathname);
+    };
+    take();
+    window.addEventListener("hashchange", take);
+    return () => window.removeEventListener("hashchange", take);
+  }, []);
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => { setForm({ ...form, [k]: e.target.value }); setErrors({ ...errors, [k]: undefined }); };
 
   const submit = async (e: FormEvent) => {
