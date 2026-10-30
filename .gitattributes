@@ -1,0 +1,6 @@
+# GitHub language statistics (Linguist), as in Smart Campaign Composer.
+# The design references are visual reference pages (fonts, styles and scripts bundled inline),
+# not the app's source: the React app in web/src is.
+design/*.html linguist-generated=true
+# The Vite build and the vendored Swagger UI files are never committed (.gitignore: web/dist,
+# internal/webui/dist, node_modules), so they need no rule here.

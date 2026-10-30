@@ -429,6 +429,7 @@ Two mechanisms inside the Go application; no Redis, RabbitMQ, generic job queue,
   - Built assets embedded in the Go binary; unknown non-API paths return `index.html`.
     - *Refinement — [APPROVED 2026-10-28]:* missing files under `/assets/` (the build output) return `404` instead of `index.html`, so a stale cached bundle fails clearly rather than as HTML. Client routes such as `/dashboard` still return `index.html`; unknown `/api/*` paths return JSON `404`.
   - Exact versions pinned in `package-lock.json`; Docker builds use `npm ci`.
+  - *API documentation — [APPROVED 2026-10-30, user instruction]:* a read-only **Swagger UI** at `/swagger/`, served from the embedded build like the app. The OpenAPI 3.1 document (`web/public/swagger/openapi.json`) is hand-written, still with no code generation; a router test fails when it lists a route that does not exist or misses one. Swagger UI comes from one pinned npm package, **`swagger-ui-dist`** (its prebuilt files are copied into the build; it pulls in `@scarf/scarf`, whose install analytics are turned off in `package.json`). "Try it out" and the external validator are disabled, so the page never calls the API or sends the document elsewhere.
 
 ### A8. Backend module layout — [APPROVED 2026-10-28]
 - One Go module; modular monolith with domain-oriented packages:

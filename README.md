@@ -137,6 +137,10 @@ All optional:
 | `LOGIN_RATE_LIMIT` | `60` | sign-in and activation attempts allowed per client address per minute (local demo default; see Production limitations) |
 | `MOCK_EMAIL_KEY_FILE` | `/var/lib/accessflow/mock-email.key` | the key encrypting pending activation links in the Mock Email Outbox (the `appdata` volume) |
 
+## API documentation
+
+With the app running, the API is documented at **http://localhost:8080/swagger/** (Swagger UI, read-only: it lists every endpoint under `/api/v1` with its roles, request and response schemas and error codes, and never sends requests). The OpenAPI document is `web/public/swagger/openapi.json`; the business rules behind each endpoint are in [`docs/api.md`](docs/api.md).
+
 ## Testing
 
 Go is not needed on the host; tests run only in Docker:
@@ -176,7 +180,7 @@ All limitations, with their reasons: [`docs/known-limitations.md`](docs/known-li
 - [`DECISIONS.md`](DECISIONS.md): approved business rules and architecture.
 - [`docs/operating-summary.md`](docs/operating-summary.md): how it runs each week, its rules and assumptions (one page).
 - [`docs/rollout-30-days.md`](docs/rollout-30-days.md): the first 30 days of adoption.
-- [`docs/api.md`](docs/api.md): API contracts.
+- [`docs/api.md`](docs/api.md): API contracts and the rules behind them; Swagger UI at `/swagger/`.
 - [`docs/known-limitations.md`](docs/known-limitations.md): all limitations, planned changes and out-of-scope items.
 - [`docs/qa-checklist.md`](docs/qa-checklist.md): manual browser QA.
 - [`docs/plans/`](docs/plans/): milestone plans.

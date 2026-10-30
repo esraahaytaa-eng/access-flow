@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && vitest run && vite build",
+    "build": "tsc --noEmit && vitest run && vite build && cd node_modules/swagger-ui-dist && cp swagger-ui-bundle.js swagger-ui-bundle.js.LICENSE.txt swagger-ui.css LICENSE NOTICE ../../dist/swagger/",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -11,7 +11,8 @@
     "@tanstack/react-query": "5.105.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-router": "8.5.1"
+    "react-router": "8.5.1",
+    "swagger-ui-dist": "5.34.1"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.2",
@@ -23,5 +24,8 @@
     "typescript": "7.0.2",
     "vite": "8.3.5",
     "vitest": "5.0.5"
+  },
+  "scarfSettings": {
+    "enabled": false
   }
 }
