@@ -86,9 +86,10 @@ func (s *Service) IssueActivation(ctx context.Context, tx pgx.Tx, now time.Time,
 		EntityID: &employee, SubjectID: &employee, Details: map[string]any{"activationId": id, "reason": reason, "expiresAt": expires}})
 }
 
-// RegisterActivations adds the Super Admin's activation routes; r must already require a session.
+// RegisterActivations adds the activation routes and the nominee's role-link reveal; r must already require a session.
 func (s *Service) RegisterActivations(r chi.Router) {
 	r.Get("/email-outbox/{id}/activation-link", s.handleReveal)
+	r.Get("/email-outbox/{id}/role-link", s.handleRoleLink)
 	r.Get("/activations", s.handleActivations)
 }
 
@@ -145,7 +146,12 @@ func (s *Service) activations(ctx context.Context, actor Principal) ([]Activatio
 func ClearExpiredLinks(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	tag, err := pool.Exec(ctx, `UPDATE email_outbox o SET sealed_token = NULL FROM activation_tokens t
 		WHERE t.id = o.activation_id AND o.sealed_token IS NOT NULL AND t.expires_at <= now()`)
-	return int(tag.RowsAffected()), err
+	if err != nil {
+		return 0, err
+	}
+	roles, err := pool.Exec(ctx, `UPDATE email_outbox o SET sealed_token = NULL FROM super_admin_nominations n
+		WHERE n.id = o.nomination_id AND o.sealed_token IS NOT NULL AND (n.status <> 'PENDING' OR n.expires_at <= now())`)
+	return int(tag.RowsAffected() + roles.RowsAffected()), err
 }
 
 // revealLink decrypts the link of an activation email for a Super Admin, only while it can

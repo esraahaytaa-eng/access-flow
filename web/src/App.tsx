@@ -18,6 +18,8 @@ import { MyRequestsPage } from "./pages/MyRequests";
 import { NewRequestPage } from "./pages/NewRequest";
 import { RequestDetailPage } from "./pages/RequestDetail";
 import { SettingsPage } from "./pages/Settings";
+import { MailboxPage } from "./pages/Mailbox";
+import { RoleAcceptPage } from "./pages/RoleAccept";
 import { TasksPage } from "./pages/Tasks";
 import { TeamPage } from "./pages/Team";
 import { ToolEditPage } from "./pages/ToolEdit";
@@ -87,6 +89,8 @@ function Root() {
           <Route path="/settings" element={<Guard allow={superAdmin}><SettingsPage /></Guard>} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/password" element={<ChangePasswordPage onChanged={setPrincipal} />} />
+          <Route path="/mailbox" element={<MailboxPage />} />
+          <Route path="/rol-kabul" element={<RoleAcceptPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </Shell>

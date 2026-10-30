@@ -104,6 +104,7 @@ func TestOnBehalfSubmitterCannotApprove(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	w.exec("UPDATE tools SET owner_id = $1", w.is2.ID)
+	w.exec("INSERT INTO role_assignments (employee_id, role) VALUES ($1, 'HR_MANAGER')", w.is2.ID) // HR may request for anyone
 	it := w.approve(w.mgr.c, open(t, items(w.mustSubmit(w.is2.c, body(&w.dev.ID, item(w.awsAdmin))))[0]))
 	s := open(t, it)
 	if s["pool"] != "INFOSEC" || s["routingNote"] != "tool owner is the submitter → InfoSec" {

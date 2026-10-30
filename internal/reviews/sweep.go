@@ -116,7 +116,7 @@ func steps(ctx context.Context, tx pgx.Tx, now time.Time, _ *time.Location) (int
 
 // openItems lists the campaign's undecided items, locked against a concurrent decision.
 func openItems(ctx context.Context, tx pgx.Tx, campaign uuid.UUID) ([]openItem, error) {
-	rows, err := tx.Query(ctx, `SELECT i.id, i.grant_id, g.employee_id, i.reviewer_id, i.requires_infosec
+	rows, err := tx.Query(ctx, `SELECT i.id, i.grant_id, g.employee_id, i.reviewer_id
 		FROM review_items i JOIN grants g ON g.id = i.grant_id
 		WHERE i.campaign_id = $1 AND `+open+` ORDER BY i.id FOR UPDATE OF i`, campaign)
 	if err != nil {
@@ -128,7 +128,6 @@ func openItems(ctx context.Context, tx pgx.Tx, campaign uuid.UUID) ([]openItem, 
 type openItem struct {
 	ID, Grant, Employee uuid.UUID
 	Reviewer            *uuid.UUID
-	RequiresInfosec     bool
 }
 
 // remind sends day 7's reminder for every unanswered item: to its reviewer, or to InfoSec
@@ -172,15 +171,15 @@ func escalate(ctx context.Context, tx pgx.Tx, now time.Time, campaign uuid.UUID)
 	return audit.Record(ctx, tx, audit.Event{Action: "REVIEW_ESCALATED", Entity: "review_campaign", EntityID: &campaign, Details: details})
 }
 
-// closeCampaign ends the campaign on day 21: an unanswered item whose level required InfoSec
-// approval at the start is revoked (REVOKED_NO_REVIEW); every other one becomes an open
-// finding, decided late or carried to later campaigns without being added again.
+// closeCampaign ends the campaign on day 21: every unanswered item becomes an open finding,
+// decided late or carried to later campaigns without being added again. A missed deadline
+// never removes access (D8 note 2026-10-30); a leaver's access is removed by termination.
 func closeCampaign(ctx context.Context, tx pgx.Tx, now time.Time, campaign uuid.UUID) (int, error) {
 	items, err := openItems(ctx, tx, campaign)
 	if err != nil {
 		return 0, err
 	}
-	findings, revoked := 0, 0
+	findings := 0
 	for _, it := range items {
 		// Removal locks first (see access.LockForRemoval); a grant already being removed is
 		// left open and closes as already removed when its removal completes.
@@ -193,27 +192,12 @@ func closeCampaign(ctx context.Context, tx pgx.Tx, now time.Time, campaign uuid.
 			}
 			continue
 		}
-		if !it.RequiresInfosec {
-			findings++
-			if _, err := tx.Exec(ctx, "UPDATE review_items SET finding_at = $2, version = version + 1 WHERE id = $1", it.ID, now); err != nil {
-				return 0, err
-			}
-			if err := audit.Record(ctx, tx, audit.Event{Action: "REVIEW_FINDING_OPENED", Entity: "review_item", EntityID: &it.ID,
-				SubjectID: &it.Employee, Details: map[string]any{"grantId": it.Grant}}); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		revoked++
-		if _, err := tx.Exec(ctx, `UPDATE review_items SET closed_reason = 'REVOKED_NO_REVIEW', closed_at = $2, version = version + 1
-			WHERE id = $1`, it.ID, now); err != nil {
+		findings++
+		if _, err := tx.Exec(ctx, "UPDATE review_items SET finding_at = $2, version = version + 1 WHERE id = $1", it.ID, now); err != nil {
 			return 0, err
 		}
-		if err := access.Remove(ctx, tx, now, nil, it.Grant, "REVIEW", "REVOKED_NO_REVIEW"); err != nil {
-			return 0, err
-		}
-		if err := audit.Record(ctx, tx, audit.Event{Action: "REVIEW_AUTO_REVOKED", Entity: "review_item", EntityID: &it.ID,
-			SubjectID: &it.Employee, Reason: "REVOKED_NO_REVIEW", Details: map[string]any{"grantId": it.Grant}}); err != nil {
+		if err := audit.Record(ctx, tx, audit.Event{Action: "REVIEW_FINDING_OPENED", Entity: "review_item", EntityID: &it.ID,
+			SubjectID: &it.Employee, Details: map[string]any{"grantId": it.Grant}}); err != nil {
 			return 0, err
 		}
 	}
@@ -221,5 +205,5 @@ func closeCampaign(ctx context.Context, tx pgx.Tx, now time.Time, campaign uuid.
 		return 0, err
 	}
 	return len(items), audit.Record(ctx, tx, audit.Event{Action: "REVIEW_CAMPAIGN_CLOSED", Entity: "review_campaign", EntityID: &campaign,
-		Details: map[string]any{"findings": findings, "revoked": revoked}})
+		Details: map[string]any{"findings": findings}})
 }

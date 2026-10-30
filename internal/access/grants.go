@@ -47,6 +47,7 @@ func CreateGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uu
 var (
 	errVersionConflict = platform.NewError(http.StatusConflict, "version_conflict")
 	errStarted         = platform.NewError(http.StatusConflict, "fulfillment_started")
+	errOrphanAccount   = platform.NewError(http.StatusConflict, "orphan_account")
 )
 
 // WithdrawGrant cancels the grant of an approved item that is being withdrawn, in the
@@ -332,12 +333,17 @@ func (s *Service) Revoke(ctx context.Context, actor auth.Principal, id uuid.UUID
 		var status string
 		var current int
 		var manager *uuid.UUID
-		if err := tx.QueryRow(ctx, `SELECT g.status, g.version, e.manager_id FROM grants g JOIN employees e ON e.id = g.employee_id
+		if err := tx.QueryRow(ctx, `SELECT g.status, g.version, e.manager_id FROM grants g LEFT JOIN employees e ON e.id = g.employee_id
 			WHERE g.id = $1 FOR UPDATE OF g`, id).Scan(&status, &current, &manager); err != nil {
 			return err
 		}
 		by := "VOLUNTARY"
 		switch {
+		case employee == uuid.Nil: // an orphan account (D10): InfoSec revokes or dismisses its finding
+			if actor.HasRole("SUPER_ADMIN") {
+				return errOrphanAccount
+			}
+			return platform.ErrNotFound
 		case actor.EmployeeID == employee:
 		case manager != nil && *manager == actor.EmployeeID:
 			by = "MANAGER"

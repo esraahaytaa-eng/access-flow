@@ -14,6 +14,7 @@ import {
   type ButtonHTMLAttributes,
   type CSSProperties,
   type InputHTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
   type ReactNode,
   type SelectHTMLAttributes,
@@ -215,6 +216,59 @@ export function Select({ invalid, options, placeholder, ...p }: SelectHTMLAttrib
       {placeholder !== undefined && <option value="">{placeholder}</option>}
       {options.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
     </select>
+  );
+}
+
+/**
+ * A searchable single choice (ARIA combobox with a listbox) for long lists, e.g. ~60 tools:
+ * type to filter, arrows to move, Enter to choose, Escape to keep the current choice.
+ */
+export function ComboBox({ id, value, onChange, options, placeholder, invalid, empty = "Eşleşme yok", ...aria }: {
+  id?: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[];
+  placeholder?: string; invalid?: boolean; empty?: string; "aria-invalid"?: boolean;
+}) {
+  const listId = useId();
+  const [query, setQuery] = useState<string | null>(null); // null: not typing, show the chosen label
+  const [active, setActive] = useState(0);
+  const chosen = options.find((o) => o.value === value)?.label ?? "";
+  const lower = (s: string) => s.toLocaleLowerCase("tr-TR").replace(/ı/g, "i"); // "Intercom" matches "inter"
+  const shown = query === null ? options : options.filter((o) => lower(o.label).includes(lower(query.trim())));
+  const open = query !== null;
+  useEffect(() => { if (query !== null) document.getElementById(`${listId}-${active}`)?.scrollIntoView?.({ block: "nearest" }); }, [listId, active, query]);
+  const close = () => { setQuery(null); setActive(0); };
+  const choose = (v: string) => { onChange(v); close(); };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) { setQuery(""); setActive(0); return; }
+      setActive((i) => Math.max(0, Math.min(shown.length - 1, i + (e.key === "ArrowDown" ? 1 : -1))));
+    } else if (e.key === "Enter" && open) {
+      e.preventDefault();
+      if (shown[active]) choose(shown[active].value);
+    } else if (e.key === "Escape" && open) {
+      e.preventDefault();
+      e.stopPropagation(); // close the list, not a surrounding dialog
+      close();
+    }
+  };
+  return (
+    <div className="combo">
+      <input id={id} className={`input select ${invalid ? "invalid" : ""}`} role="combobox" aria-expanded={open} aria-controls={listId}
+        aria-autocomplete="list" aria-activedescendant={open && shown[active] ? `${listId}-${active}` : undefined} autoComplete="off"
+        value={query ?? chosen} placeholder={placeholder} {...aria}
+        onChange={(e) => { setQuery(e.target.value); setActive(0); }} onKeyDown={onKeyDown} onBlur={close}
+        onClick={() => !open && setQuery("")} />
+      {open && shown.length === 0 && <div className="combo-list combo-empty" role="status">{empty}</div>}
+      {open && shown.length > 0 && (
+        <ul className="combo-list" role="listbox" id={listId}>
+          {shown.map((o, i) => (
+            <li key={o.value} id={`${listId}-${i}`} role="option" aria-selected={o.value === value}
+              className={`combo-option ${i === active ? "active" : ""}`}
+              onMouseDown={(e) => { e.preventDefault(); choose(o.value); }} onMouseEnter={() => setActive(i)}>{o.label}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

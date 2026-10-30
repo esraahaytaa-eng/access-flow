@@ -98,7 +98,7 @@ function GrantTab() {
         {tool && level && (
           <Card title="Atlanacak onay adımları">
             <div className="stack-sm">
-              <ApprovalChain steps={level.steps.map((type) => ({ type, status: "WAITING" }))} />
+              <ApprovalChain steps={level.steps} />
               <div className="row" style={{ gap: 6 }}><span className="muted small">Karşılama:</span><MethodTag method={tool.fulfillmentMethod} /></div>
             </div>
           </Card>

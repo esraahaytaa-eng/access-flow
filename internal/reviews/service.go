@@ -23,6 +23,7 @@ import (
 var (
 	errCampaignActive  = platform.NewError(http.StatusConflict, "campaign_active")
 	errItemClosed      = platform.NewError(http.StatusConflict, "review_item_closed")
+	errTerminated      = platform.NewError(http.StatusConflict, "terminated_access_not_kept")
 	errVersionConflict = platform.NewError(http.StatusConflict, "version_conflict")
 )
 
@@ -215,12 +216,13 @@ func decide(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal,
 	var grant, employee uuid.UUID
 	var reviewer *uuid.UUID
 	var current int
-	var isOpen, finding, escalated, infosec bool
+	var isOpen, finding, escalated, infosec, terminated bool
 	var flags []string
 	err := tx.QueryRow(ctx, `SELECT i.grant_id, g.employee_id, i.reviewer_id, i.version, `+open+`, i.finding_at IS NOT NULL,
-		       c.escalated_at IS NOT NULL, i.requires_infosec, i.flags
+		       c.escalated_at IS NOT NULL, i.requires_infosec, i.flags, e.status = 'TERMINATED'
 		FROM review_items i JOIN grants g ON g.id = i.grant_id JOIN review_campaigns c ON c.id = i.campaign_id
-		WHERE i.id = $1 FOR UPDATE OF i`, id).Scan(&grant, &employee, &reviewer, &current, &isOpen, &finding, &escalated, &infosec, &flags)
+		JOIN employees e ON e.id = g.employee_id
+		WHERE i.id = $1 FOR UPDATE OF i`, id).Scan(&grant, &employee, &reviewer, &current, &isOpen, &finding, &escalated, &infosec, &flags, &terminated)
 	if err == nil {
 		err = access.StillActive(ctx, tx, actor.EmployeeID)
 	}
@@ -232,12 +234,14 @@ func decide(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal,
 	}
 	code := MayDecide(actor, decision, reviewer, employee, escalated || finding)
 	switch {
-	case bulk && (code != "" || !isOpen || version != current || !BulkEligible(infosec, flags)):
+	case bulk && (code != "" || terminated || !isOpen || version != current || !BulkEligible(infosec, flags)):
 		return errSkip
 	case code == "not_reviewer" && !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("AUDITOR"):
 		return platform.ErrNotFound // not theirs to see
 	case code != "":
 		return platform.NewError(http.StatusForbidden, code)
+	case terminated && decision == "KEEP":
+		return errTerminated // a leaver's access is removed by termination (D7), never kept
 	case version != current:
 		return errVersionConflict
 	case !isOpen:

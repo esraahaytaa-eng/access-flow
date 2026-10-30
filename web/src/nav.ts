@@ -30,6 +30,6 @@ export function useNavCounts(flags: RoleFlags) {
   const tasks = useTasks(flags.tasks).data?.filter((t) => t.canAct).length ?? 0;
   const ex = useExceptions(flags.exceptions).data;
   const { me } = useSession();
-  const reviews = useReviews(flags.reviews).data?.items.filter((i) => i.reviewerId === me.id && !i.decision && !i.closedReason).length ?? 0;
+  const reviews = useReviews(flags.reviews).data?.items.filter((i) => i.reviewerId === me.id && !i.decision && !i.closedReason && ["ACTIVE", "SUSPENDED"].includes(i.grantStatus)).length ?? 0;
   return { approvals, tasks, reviews, exceptions: ex ? exceptionCount(ex) : 0 };
 }

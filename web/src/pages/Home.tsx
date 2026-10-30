@@ -4,7 +4,7 @@ import { useEmployees, useMyGrants, useRequests } from "../api/queries";
 import type { Employee } from "../api/types";
 import { useNavCounts, useRoleFlags } from "../nav";
 import { useSession } from "../session";
-import { Button, Callout, Card, EmptyState, Icon, ToolCell } from "../ui/components";
+import { Button, Card, EmptyState, Icon, ToolCell } from "../ui/components";
 import { isOpenGrant, ItemStateCell, RequestKindTag } from "../ui/domain";
 import { daysUntil, formatDate, relativeTime } from "../ui/format";
 import type { IconName } from "../ui/icons";
@@ -30,7 +30,6 @@ export function HomePage() {
     flags.exceptions && { n: counts.exceptions, label: "istisna çözülmeyi bekliyor", sub: "İstisnalar", to: "/exceptions", icon: "alert" as const },
     flags.employees && { n: directory.filter((e) => e.termination || e.status === "SUSPENDED").length, label: "planlı çıkış veya askıdaki çalışan", sub: "Çalışanlar", to: "/employees", icon: "userCog" as const },
   ].filter((t) => !!t);
-  const superAdmins = directory.filter((e) => e.status === "ACTIVE" && e.roles.includes("SUPER_ADMIN")).length;
 
   const recent = requests.flatMap((r) => r.items.map((it) => ({ it, kind: r.kind }))).sort((a, b) => b.it.createdAt.localeCompare(a.it.createdAt)).slice(0, 5);
   const open = grants.filter(isOpenGrant);
@@ -46,9 +45,6 @@ export function HomePage() {
           <Button variant="primary" icon="plus" onClick={() => navigate("/request-new")}>Erişim talep et</Button>
         </div>
       </div>
-      {flags.admin && directory.length > 0 && superAdmins < 2 && (
-        <Callout tone="warn" title="Yalnızca bir aktif Süper Yönetici var">Süreklilik için ikinci bir Süper Yönetici gereklidir.</Callout>
-      )}
       {tiles.length > 0 && (
         <div className="grid-3" style={tiles.length === 1 ? { gridTemplateColumns: "1fr" } : ({ "--cols": Math.min(tiles.length, 3) } as CSSProperties)}>
           {tiles.map((t) => (

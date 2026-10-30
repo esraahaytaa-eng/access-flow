@@ -127,8 +127,10 @@ func rerouteStep(ctx context.Context, tx pgx.Tx, actor *uuid.UUID, it itemState,
 
 // personAction runs one person-level action on id under the lock order above, after the
 // permission (F4, D7), status and version checks.
+// check is people.CheckAccountAction, or people.CheckLeaverAction for the actions HR takes on a
+// leaving Super Admin.
 func (s *Service) personAction(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string, from []string,
-	do func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error) (people.Employee, error) {
+	check func(auth.Principal, uuid.UUID, []string) error, do func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error) (people.Employee, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return people.Employee{}, platform.ValidationError("reason", "reason_required")
@@ -148,7 +150,7 @@ func (s *Service) personAction(ctx context.Context, actor auth.Principal, id uui
 		if err != nil {
 			return err
 		}
-		if err := people.CheckAccountAction(actor, id, e.Roles); err != nil {
+		if err := check(actor, id, e.Roles); err != nil {
 			return err
 		}
 		if !slices.Contains(from, e.Status) {
@@ -169,8 +171,14 @@ func (s *Service) personAction(ctx context.Context, actor auth.Principal, id uui
 // Suspend blocks an active employee (D7): login and sessions end, pending requests are
 // cancelled, their approval steps re-routed and their access suspended in each tool.
 func (s *Service) Suspend(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (people.Employee, error) {
-	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
+	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE"}, people.CheckLeaverAction, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		if err := people.SetStatus(ctx, tx, id, "SUSPENDED"); err != nil {
+			return err
+		}
+		if err := people.AfterLeaving(ctx, tx, now, &actor.EmployeeID, e); err != nil {
+			return err
+		}
+		if err := people.RecordRecovery(ctx, tx, &actor.EmployeeID, e); err != nil {
 			return err
 		}
 		if err := endFor(ctx, tx, now, &actor.EmployeeID, id, "employee suspended"); err != nil {
@@ -188,7 +196,7 @@ func (s *Service) Suspend(ctx context.Context, actor auth.Principal, id uuid.UUI
 // re-evaluates their grants (D7): expired, revoked or retired access is never restored; the
 // rest is resumed, active once verified or confirmed. Cancelled requests stay cancelled.
 func (s *Service) Reactivate(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (people.Employee, error) {
-	return s.personAction(ctx, actor, id, version, reason, []string{"SUSPENDED"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
+	return s.personAction(ctx, actor, id, version, reason, []string{"SUSPENDED"}, people.CheckAccountAction, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		if err := people.SetStatus(ctx, tx, id, "ACTIVE"); err != nil {
 			return err
 		}
@@ -204,13 +212,17 @@ func (s *Service) Reactivate(ctx context.Context, actor auth.Principal, id uuid.
 // admin group memberships close, pending requests are cancelled, their approval steps
 // re-routed and every open grant removed at the highest priority.
 func (s *Service) Terminate(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (people.Employee, error) {
-	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
+	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, people.CheckLeaverAction, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		return terminate(ctx, tx, now, &actor.EmployeeID, e, reason, nil)
 	})
 }
 
-// terminate is shared by Terminate and the scheduled termination sweep (actor nil).
+// terminate is shared by Terminate and the scheduled termination sweep (actor nil). The last
+// active Super Admin is never terminated (people.ErrLastSuperAdmin).
 func terminate(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, e people.Employee, reason string, details map[string]any) error {
+	if err := people.CheckNotLastSuperAdmin(ctx, tx, e); err != nil {
+		return err
+	}
 	if err := people.EndEmployment(ctx, tx, now, actor, e.ID); err != nil {
 		return err
 	}

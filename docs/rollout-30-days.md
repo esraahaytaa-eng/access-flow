@@ -57,7 +57,7 @@ Each step needs the one before it, and AccessFlow enforces this: a workbook row 
 
 | Step | Owner |
 |---|---|
-| When the imports are reconciled (target: day 12), a Super Admin starts the **certification campaign**. Day 7 reminds, day 14 escalates to InfoSec, day 21 (about day 33) revokes unanswered InfoSec-level items and turns the rest into findings (D8, D10). | Super Admin |
+| When the imports are reconciled (target: day 12), a Super Admin starts the first **access review** ("Erişim denetimi"). Day 7 reminds, day 14 escalates to InfoSec, day 21 (about day 33) turns every unanswered item into a security finding for InfoSec; nothing is removed automatically (D8, D10). | Super Admin |
 | Employees set their own password through their activation link (valid 24 hours, single use), department by department on a planned day; the Super Admin follows the activation screen and sends new links to anyone pending or expired. With real e-mail (not part of this version) the links would go straight to the employees. | Super Admin, HR Manager |
 | **Pilot:** one or two departments request all new access through AccessFlow; their tools' admins work only from AccessFlow tasks. Brief managers, tool owners and admin groups (about 30 minutes each). | InfoSec lead, pilot managers |
 | Daily during the pilot: InfoSec checks Exceptions (failed tasks, unroutable steps, orphans, stale grants). | InfoSec |

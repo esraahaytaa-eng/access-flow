@@ -183,20 +183,21 @@ func TestDayStepsRunOnceAndUseTheSnapshot(t *testing.T) {
 	w.sweep()
 	w.sweep()
 	tl.drain(t)
-	if g := w.myGrant(w.dev.c, w.jiraViewer); g["status"] != "REVOKED" || g["closedReason"] != "REVOKED_NO_REVIEW" {
-		t.Fatalf("InfoSec-level item on day 21: %v (%v)", g["status"], g["closedReason"])
+	// A missed deadline never removes an active employee's access, InfoSec level or not
+	// (D8 note 2026-10-30): every unanswered item becomes an open finding.
+	for _, level := range []uuid.UUID{w.jiraViewer, w.github} {
+		if g := w.myGrant(w.dev.c, level); g["status"] != "ACTIVE" {
+			t.Fatalf("item on day 21: %v (%v)", g["status"], g["closedReason"])
+		}
 	}
-	if g := w.myGrant(w.dev.c, w.github); g["status"] != "ACTIVE" {
-		t.Fatalf("other item on day 21: %v", g["status"])
+	if n := w.count("SELECT count(*) FROM review_items WHERE finding_at IS NOT NULL"); n != 3 {
+		t.Fatalf("findings = %d, want 3", n)
 	}
-	if n := w.count("SELECT count(*) FROM review_items WHERE finding_at IS NOT NULL"); n != 2 {
-		t.Fatalf("findings = %d, want 2 (GitHub and the owner's own Viewer)", n)
-	}
-	if w.audits("REVIEW_AUTO_REVOKED") != 1 || w.count("SELECT count(*) FROM review_campaigns WHERE closed_at IS NOT NULL") != 1 {
-		t.Fatal("day 21 not recorded or the campaign not closed")
+	if w.audits("REVIEW_AUTO_REVOKED") != 0 || w.count("SELECT count(*) FROM review_campaigns WHERE closed_at IS NOT NULL") != 1 {
+		t.Fatal("day 21 revoked access or did not close the campaign")
 	}
 	ex := w.get(w.is1.c, "/api/v1/exceptions")
-	if n := len(ex.Body["reviewFindings"].([]any)); n != 2 {
+	if n := len(ex.Body["reviewFindings"].([]any)); n != 3 {
 		t.Fatalf("open findings in Exceptions = %d", n)
 	}
 }
@@ -302,7 +303,7 @@ func TestEarlierPolicyFlagAddedDuringACampaignSurvivesItsDecision(t *testing.T) 
 	}
 }
 
-func TestGrantBeingRemovedIsNeitherDecidedNorAutoRevoked(t *testing.T) {
+func TestGrantBeingRemovedIsNeitherDecidedNorAFinding(t *testing.T) {
 	t.Parallel()
 	w, _ := reviewWorld(t)
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
@@ -315,7 +316,42 @@ func TestGrantBeingRemovedIsNeitherDecidedNorAutoRevoked(t *testing.T) {
 	if n := w.count("SELECT count(*) FROM review_items WHERE grant_id = $1 AND (closed_reason IS NOT NULL OR finding_at IS NOT NULL)", it["grantId"]); n != 0 {
 		t.Fatalf("day 21 acted on a grant already being removed: %d", n)
 	}
-	if w.audits("REVIEW_AUTO_REVOKED") != 2 || w.audits("REVIEW_FINDING_OPENED") != 0 || w.audits("REVIEW_REMINDERS_SENT") != 1 {
+	if w.audits("REVIEW_AUTO_REVOKED") != 0 || w.audits("REVIEW_FINDING_OPENED") != 2 || w.audits("REVIEW_REMINDERS_SENT") != 1 {
 		t.Fatalf("day steps audited: auto %d, findings %d, reminders %d", w.audits("REVIEW_AUTO_REVOKED"), w.audits("REVIEW_FINDING_OPENED"), w.audits("REVIEW_REMINDERS_SENT"))
+	}
+}
+
+// A terminated employee's access is never kept: no new Keep, the earlier Keep stays as
+// history only, and termination's removal runs regardless of it.
+func TestTerminatedEmployeeAccessCannotBeKept(t *testing.T) {
+	t.Parallel()
+	w, tl := reviewWorld(t)
+	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
+	viewer := w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
+	testutil.RequireStatus(t, decideReview(w.owner, viewer, "KEEP", ""), http.StatusOK, "")
+	gh := w.reviewItem(w.owner, w.dev.ID, w.github)
+
+	hr := w.hr()
+	w.mustLifecycle(hr, w.dev.ID, "suspend")
+	gh = w.reviewItem(w.owner, w.dev.ID, w.github) // suspension does not stop reviews (D7)
+	if gh["employee"].(map[string]any)["status"] != "SUSPENDED" {
+		t.Fatalf("employee status on the item = %v", gh["employee"])
+	}
+	w.mustLifecycle(hr, w.dev.ID, "terminate")
+	testutil.RequireStatus(t, decideReview(w.owner, gh, "KEEP", ""), http.StatusConflict, "terminated_access_not_kept")
+	bulk := w.owner.c.Do(http.MethodPost, "/api/v1/review-items/bulk-keep", map[string]any{"items": []any{map[string]any{"id": gh["id"], "version": gh["version"]}}})
+	testutil.RequireStatus(t, bulk, http.StatusOK, "")
+	if bulk.Body["kept"] != 0.0 || bulk.Body["skipped"] != 1.0 {
+		t.Fatalf("bulk keep of a leaver's item = %v", bulk.Body)
+	}
+
+	kept := w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
+	if kept["decision"] != "KEEP" || kept["grantStatus"] != "REVOCATION_REQUESTED" {
+		t.Fatalf("kept item after termination: %v, grant %v", kept["decision"], kept["grantStatus"])
+	}
+	tl.drain(t)
+	kept = w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
+	if kept["decision"] != "KEEP" || kept["grantStatus"] != "REVOKED" || w.audits("REVIEW_KEPT") != 1 {
+		t.Fatalf("history after removal: %v, grant %v, REVIEW_KEPT %d", kept["decision"], kept["grantStatus"], w.audits("REVIEW_KEPT"))
 	}
 }

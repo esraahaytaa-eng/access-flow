@@ -77,7 +77,7 @@ export function CatalogPage() {
                       <div className="between" style={{ alignItems: "flex-start" }}>
                         <div style={{ minWidth: 0 }}>
                           <div className="row" style={{ gap: 8 }}><span className="strong">{l.name}</span>{isMine && <Tag>Sizde var</Tag>}{l.recommended && <Tag>Önerilen</Tag>}</div>
-                          <div style={{ marginTop: 10 }}><ApprovalChain steps={l.steps.map((type) => ({ type, status: "WAITING" }))} /></div>
+                          <div style={{ marginTop: 10 }}><ApprovalChain steps={l.steps} /></div>
                         </div>
                         <Button size="sm" onClick={() => navigate(`/request-new?tool=${tool.id}&level=${l.id}`)}>{isMine ? "Süre uzat" : mine ? "Bu seviyeye geç" : "Talep et"}</Button>
                       </div>

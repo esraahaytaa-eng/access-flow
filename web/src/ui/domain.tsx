@@ -1,5 +1,4 @@
 // Request and grant cells shared by several pages (design/ spec 1.24).
-import { Fragment } from "react";
 import type { ApprovalStep, Duration, FulfillmentMethod, Grant, RequestItem, RequestKind } from "../api/types";
 import { methodLabel, methodTitle, requestKindLabel, stepLabel } from "../i18n/labels";
 import { reasonText } from "../i18n/reasons";
@@ -63,19 +62,19 @@ export const RequestKindTag = ({ kind }: { kind: RequestKind }) => kind === "NEW
 
 export const MethodTag = ({ method }: { method: FulfillmentMethod }) => <Tag title={methodTitle[method]}>{methodLabel[method]}</Tag>;
 
-export function ApprovalChain({ steps }: { steps: Pick<ApprovalStep, "type" | "status">[] }) {
+/** A level's approval steps. The server decides them one after another in this order: a stage opens only once the one before it is approved. */
+export function ApprovalChain({ steps }: { steps: ApprovalStep["type"][] }) {
   return (
     <div className="chain">
-      {steps.map((s, i) => {
-        const st = ["APPROVED", "APPROVED_BY_SUBMISSION", "SUPER_ADMIN_OVERRIDE"].includes(s.status) ? "done"
-          : s.status === "PENDING" ? "current" : s.status === "REJECTED" ? "rejected" : s.status === "CANCELLED" ? "skipped" : "";
-        return (
-          <Fragment key={i}>
+      <span className="chain-count">{steps.length} aşamalı onay</span>
+      <ol className="chain-steps" title="Onaylar sırayla alınır: bir aşama onaylanınca sıradaki açılır.">
+        {steps.map((type, i) => (
+          <li key={i} className="chain-step">
             {i > 0 && <Icon name="chevR" size={12} className="chain-arrow" />}
-            <span className={`chain-step ${st}`}>{st === "done" && <Icon name="check" size={11} stroke={2.6} />}{stepLabel[s.type]}</span>
-          </Fragment>
-        );
-      })}
+            <span className="chain-num">{i + 1}</span>{stepLabel[type]}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

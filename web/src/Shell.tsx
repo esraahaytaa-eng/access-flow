@@ -2,12 +2,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import { api } from "./api/client";
-import { useAdminHealth, useDemo, useEmployees, useNotifications } from "./api/queries";
-import type { Employee, Notification } from "./api/types";
+import { useAdminHealth, useDemo, useNotifications } from "./api/queries";
+import type { Notification } from "./api/types";
 import { roleLabel } from "./i18n/labels";
 import { useNavCounts, useRoleFlags, type RoleFlags } from "./nav";
 import { useSession } from "./session";
-import { NominateModal } from "./pages/Settings";
+import { SuccessionPanel } from "./pages/Succession";
 import { Avatar, Badge, Button, Callout, Icon, Logo, Modal, Popover, useAction } from "./ui/components";
 import { formatDate, relativeTime } from "./ui/format";
 import type { IconName } from "./ui/icons";
@@ -21,11 +21,12 @@ function navGroups(flags: RoleFlags, counts: ReturnType<typeof useNavCounts>) {
       { to: "/catalog", label: "Araç kataloğu", icon: "grid", match: ["/catalog", "/request-new"] },
       { to: "/requests", label: "Taleplerim", icon: "list" },
       { to: "/access", label: "Erişimlerim", icon: "key" },
+      { to: "/mailbox", label: "E-posta kutusu", icon: "mail" },
     ] },
     { label: "İş akışları", items: [
       flags.approvals && { to: "/approvals", label: "Onay kutusu", icon: "inbox", count: counts.approvals },
       flags.manager && { to: "/team", label: "Ekibim", icon: "users" },
-      flags.reviews && { to: "/reviews", label: "Erişim incelemeleri", icon: "review", count: counts.reviews },
+      flags.reviews && { to: "/reviews", label: "Erişim Kontrolü", icon: "review", count: counts.reviews },
       flags.tasks && { to: "/tasks", label: "Karşılama görevleri", icon: "tasks", count: counts.tasks },
     ] },
     { label: "Yönetim", items: [
@@ -84,17 +85,19 @@ function notificationText(n: Notification, timeZone: string): string {
     case "SUPER_ADMIN_OVERRIDE": return "Bir onay adımı Süper Yönetici tarafından geçersiz kılındı.";
     case "APPROVAL_ASSIGNED": return `Size bir onay adımı atandı${d.reason ? `: ${d.reason}` : "."}`;
     case "GRANTS_RETAINED_ON_TRANSFER": return `${d.employee} ekibinize transfer edildi; ${(d.grants as unknown[] | undefined)?.length ?? 0} erişimi korundu.`;
-    case "REVIEW_STARTED": return `Erişim incelemesi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
+    case "REVIEW_STARTED": return `Erişim denetimi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
     case "REVIEW_REMINDER": return "Yanıt bekleyen bir inceleme kaleminiz var (gün 7 hatırlatması).";
     case "REVIEW_ESCALATED": return "Yanıtlanmamış inceleme kalemleri Bilgi Güvenliğine eskale edildi.";
     case "SUPER_ADMIN_NOMINATED": return `${d.nominee} Süper Yönetici olarak önerildi; yetkilendirmeniz bekleniyor.`;
+    case "SUPER_ADMIN_ROLE_OFFERED": return "İK sizi yeni Süper Yönetici olarak belirledi. Kabul bağlantısı e-posta kutunuzda; 24 saat geçerlidir.";
+    case "SUPER_ADMIN_ROLE_ACCEPTED": return `${d.nominee} Süper Yönetici rolünü kabul etti; rol etkin.`;
     case "ADMIN_RECOVERY_REQUIRED": return "Aktif Süper Yönetici kalmadı; sistem kurtarma modunda.";
   }
 }
 
 const notificationLink: Partial<Record<Notification["kind"], string>> = {
   APPROVAL_ASSIGNED: "/approvals", GRANTS_RETAINED_ON_TRANSFER: "/team", REVIEW_STARTED: "/reviews", REVIEW_REMINDER: "/reviews", REVIEW_ESCALATED: "/reviews",
-  SUPER_ADMIN_NOMINATED: "/approvals",
+  SUPER_ADMIN_NOMINATED: "/approvals", SUPER_ADMIN_ROLE_OFFERED: "/mailbox",
 };
 
 function NotificationsMenu() {
@@ -221,21 +224,17 @@ const Blocked = ({ icon, title, desc }: { icon: IconName; title: string; desc: s
 export const NoAccess = () => <Blocked icon="lock" title="Bu sayfaya erişiminiz yok" desc="Bu alan yalnızca ilgili role sahip kişilere açıktır." />;
 export const NotFound = () => <Blocked icon="search" title="Sayfa bulunamadı" desc="Aradığınız sayfa taşınmış veya hiç var olmamış olabilir." />;
 
-/** No active Super Admin (D2): HR, InfoSec and auditors are told; an HR Manager nominates, a different InfoSec member authorizes. */
+/** No active Super Admin (D2): HR, InfoSec and auditors are told; an HR Manager appoints a successor, who accepts the role signed in as themself. */
 export function RecoveryBanner() {
   const { hasRole } = useSession();
   const health = useAdminHealth(hasRole("HR_MANAGER", "INFOSEC", "AUDITOR")).data;
-  const employees = (useEmployees().data ?? []) as Employee[];
-  const [open, setOpen] = useState(false);
   if (!health?.recoveryRequired) return null;
-  const hr = hasRole("HR_MANAGER");
   return (
     <div style={{ marginBottom: 18 }}>
       <Callout tone="danger" title="Aktif Süper Yönetici yok: kurtarma modu">
-        Erişim iş akışları çalışmaya devam eder. Bir İK Yöneticisi yeni bir Süper Yönetici önerir, farklı bir Bilgi Güvenliği üyesi yetkilendirir.
-        {hr && <div style={{ marginTop: 10 }}><Button size="sm" variant="primary" onClick={() => setOpen(true)}>Süper Yönetici öner</Button></div>}
+        Erişim iş akışları çalışmaya devam eder. Bir İK Yöneticisi yeni Süper Yöneticiyi belirler; rol, aday kendi hesabıyla kabul edince etkinleşir.
+        {hasRole("HR_MANAGER") && <SuccessionPanel />}
       </Callout>
-      {open && <NominateModal employees={employees} recovery onClose={() => setOpen(false)} />}
     </div>
   );
 }

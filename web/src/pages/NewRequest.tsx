@@ -8,7 +8,7 @@ import { errorMessage } from "../i18n/errors";
 import { stepLabel } from "../i18n/labels";
 import { useRoleFlags } from "../nav";
 import { useSession } from "../session";
-import { Button, Callout, Card, Field, Icon, Input, PageHeader, Person, Segmented, Select, Tag, Textarea, ToolMark, useAction } from "../ui/components";
+import { Button, Callout, Card, ComboBox, Field, Icon, Input, PageHeader, Person, Segmented, Select, Tag, Textarea, ToolMark, useAction } from "../ui/components";
 import { ApprovalChain, isOpenGrant, MethodTag } from "../ui/domain";
 import { addDays, formatDate, todayIn } from "../ui/format";
 
@@ -143,7 +143,7 @@ export function NewRequestPage() {
                 actions={lines.length > 1 && <Button size="sm" variant="ghost" icon="trash" aria-label="Bu aracı kaldır" onClick={() => setLines((ls) => ls.filter((l) => l.key !== ln.key))} />}>
                 <div className="stack">
                   <Field label="Araç" required>
-                    <Select value={ln.toolId} invalid={!!lineErrors?.length && !tool} placeholder="Araç seçin" options={tools.map((t) => ({ value: t.id, label: t.name }))} onChange={(e) => patch(ln.key, { toolId: e.target.value, levelId: "" })} />
+                    <ComboBox value={ln.toolId} invalid={!!lineErrors?.length && !tool} placeholder="Araç arayın veya seçin" empty="Eşleşen araç yok" options={tools.map((t) => ({ value: t.id, label: t.name }))} onChange={(toolId) => patch(ln.key, { toolId, levelId: "" })} />
                   </Field>
                   {tool && (
                     <div className="field">
@@ -154,7 +154,7 @@ export function NewRequestPage() {
                             <span className="radio" />
                             <span style={{ flex: 1, minWidth: 0 }}>
                               <span className="row" style={{ gap: 8 }}><span className="strong">{l.name}</span>{held?.accessLevelId === l.id && <Tag>Mevcut seviye</Tag>}{l.recommended && <Tag>Önerilen</Tag>}</span>
-                              <span style={{ display: "block", marginTop: 8 }}><ApprovalChain steps={l.steps.map((type) => ({ type, status: "WAITING" }))} /></span>
+                              <span style={{ display: "block", marginTop: 8 }}><ApprovalChain steps={l.steps} /></span>
                             </span>
                           </button>
                         ))}
@@ -175,7 +175,7 @@ export function NewRequestPage() {
                         <span className="radio" /><span><span className="strong" style={{ display: "block" }}>Süreli</span><span className="muted small">Seçtiğiniz tarihte otomatik kaldırılır</span></span>
                       </button>
                       <button type="button" className={`choice ${ln.durationType === "UNTIL_REVOKED" ? "on" : ""}`} onClick={() => patch(ln.key, { durationType: "UNTIL_REVOKED", days: null })}>
-                        <span className="radio" /><span><span className="strong" style={{ display: "block" }}>Kaldırılana kadar</span><span className="muted small">Çeyreklik incelemelere tabidir</span></span>
+                        <span className="radio" /><span><span className="strong" style={{ display: "block" }}>Kaldırılana kadar</span><span className="muted small">Üç aylık erişim denetimlerine tabidir</span></span>
                       </button>
                     </div>
                     {ln.durationType === "TEMPORARY" && (

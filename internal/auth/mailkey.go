@@ -96,6 +96,12 @@ func ResetMailKey(ctx context.Context, pool *pgxpool.Pool, path string) (int, er
 			return err
 		}
 		revoked = tag.RowsAffected()
+		// A role-acceptance link whose copy is cleared cannot be used either: HR reissues it.
+		tag, err = tx.Exec(ctx, "UPDATE super_admin_nominations SET token_hash = NULL WHERE status = 'PENDING' AND token_hash IS NOT NULL")
+		if err != nil {
+			return err
+		}
+		revoked += tag.RowsAffected()
 		if _, err := tx.Exec(ctx, "UPDATE email_outbox SET sealed_token = NULL WHERE sealed_token IS NOT NULL"); err != nil {
 			return err
 		}

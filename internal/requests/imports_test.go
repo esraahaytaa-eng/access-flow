@@ -220,6 +220,51 @@ func TestChangeOfAnOrphanGrantIsNotFound(t *testing.T) {
 	testutil.RequireStatus(t, r, http.StatusNotFound, "not_found")
 }
 
+// An orphan account's grant has no employee: the generic revoke never fails on it (it once
+// answered 500). Nobody may give it up as their own or their report's; a Super Admin is told
+// to use the orphan finding, which InfoSec revokes or dismisses (D10). Nothing is removed.
+func TestDirectRevokeOfAnOrphanGrantPointsToTheFinding(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	tl.legacy(t, w.jira, w.jiraViewer, "ghost@example.com", "ACTIVE")
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{}), http.StatusCreated, "")
+	o := w.orphans()[0]
+	revoke := func(p person) testutil.Response {
+		return p.c.Do(http.MethodPost, "/api/v1/grants/"+o["id"].(string)+"/revoke", map[string]any{"version": o["version"], "reason": "unknown account"})
+	}
+
+	testutil.RequireStatus(t, revoke(w.dev), http.StatusNotFound, "not_found")
+	testutil.RequireStatus(t, revoke(w.admin), http.StatusConflict, "orphan_account")
+	if w.count("SELECT count(*) FROM operations WHERE grant_id = $1", o["id"]) != 0 || len(w.orphans()) != 1 {
+		t.Fatal("the direct revoke changed the orphan")
+	}
+	if tl.permission(t, w.jira, w.jiraViewer, "ghost@example.com") != "ACTIVE" {
+		t.Fatal("the orphan account was touched")
+	}
+}
+
+// A terminated employee's imported access is already being removed (TERMINATION); a direct
+// revoke returns that state and queues nothing more.
+func TestDirectRevokeOfATerminatedEmployeesGrantReturnsTheRemoval(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	tl.legacy(t, w.jira, w.jiraViewer, w.dev.Email, "ACTIVE")
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{}), http.StatusCreated, "")
+	w.mustLifecycle(w.hr(), w.dev.ID, "terminate")
+	var grant uuid.UUID
+	var version int
+	if err := w.db.App.QueryRow(context.Background(), "SELECT id, version FROM grants WHERE employee_id = $1", w.dev.ID).Scan(&grant, &version); err != nil {
+		t.Fatal(err)
+	}
+	r := w.admin.c.Do(http.MethodPost, "/api/v1/grants/"+grant.String()+"/revoke", map[string]any{"version": version, "reason": "left"})
+	testutil.RequireStatus(t, r, http.StatusOK, "")
+	if r.Body["status"] != "REVOCATION_REQUESTED" || w.count("SELECT count(*) FROM operations WHERE grant_id = $1 AND type = 'REVOKE'", grant) != 1 {
+		t.Fatalf("grant = %v; want one TERMINATION removal in progress", r.Body)
+	}
+}
+
 // reported records a spreadsheet-reported baseline grant, as the workbook import does.
 func (w *world) reported(employee uuid.UUID, level uuid.UUID, account string) uuid.UUID {
 	w.t.Helper()

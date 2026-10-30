@@ -28,7 +28,7 @@
 - Direct grants are at most 90 days, never for oneself (D1). Super Admin promotion needs two people (D2).
 - A transfer pre-selects all access for removal; keeping needs a justification (D5).
 - Termination removes everything first; suspension is reversible; a rehire restores nothing (D7, A5).
-- Reviews: reminder on day 7, InfoSec escalation on day 14; on day 21 unanswered InfoSec-level items are revoked, others become open findings. A Super Admin may revoke, never keep (D8).
+- Reviews: reminder on day 7, InfoSec escalation on day 14; on day 21 every unanswered item becomes a security finding that InfoSec follows up in Exceptions; access is never removed automatically. A Super Admin may revoke, never keep (D8).
 - No delegation; absent approvers' steps are reassigned (D9).
 - Existing access is imported and certified; unmatched accounts are orphan findings. Access reported in the workbook or a CSV is labelled reported until the API tool read verifies it (D10).
 - Departments and job positions come from a company catalog and grant nothing; a retired name stays on its holders (F3).

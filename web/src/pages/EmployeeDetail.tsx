@@ -13,6 +13,7 @@ import { ExpiryCell, GrantBadges } from "../ui/domain";
 import { addDays, formatDate, formatDateTime, todayIn, zonedInstant } from "../ui/format";
 import { statusBadge } from "../ui/status";
 import { catalogOptions, CreatedResult, managerOptions } from "./Employees";
+import { SuccessionPanel } from "./Succession";
 
 /** A new link ends the current password and sessions at once (M18); the admin is told before confirming. */
 export const reissueWarning = (hasPassword: boolean) => hasPassword
@@ -25,7 +26,7 @@ export function EmployeeDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { me, timezone } = useSession();
+  const { me, timezone, hasRole } = useSession();
   const query = useEmployees();
   const employees = (query.data ?? []) as Employee[];
   const emp = employees.find((e) => e.id === id);
@@ -54,7 +55,7 @@ export function EmployeeDetailPage() {
           {emp.status === "ACTIVE" && <Button icon="key" onClick={() => setModal("pw")}>Etkinleştirme bağlantısı gönder</Button>}
           {emp.status === "ACTIVE" && <Button icon="swap" disabled={!grantsLoaded} onClick={() => setModal("transfer")}>Transfer</Button>}
           {emp.status === "ACTIVE" && <Button icon="pause" onClick={() => setModal("suspend")}>Askıya al</Button>}
-          {emp.status === "SUSPENDED" && <Button icon="play" onClick={() => setModal("reactivate")}>Yeniden etkinleştir</Button>}
+          {emp.status === "SUSPENDED" && (!emp.roles.includes("SUPER_ADMIN") || hasRole("SUPER_ADMIN")) && <Button icon="play" onClick={() => setModal("reactivate")}>Yeniden etkinleştir</Button>}
           {emp.termination ? <Button onClick={() => setModal("cancelTerm")}>Planlı çıkışı iptal et</Button> : <Button variant="danger-ghost" icon="logout" disabled={!grantsLoaded} onClick={() => setModal("terminate")}>İşten çıkış</Button>}
         </>)} />
       {isSelf && <div style={{ marginBottom: 16 }}><Callout>Kendi çalışan kaydınızı değiştiremezsiniz. Değişiklikleri başka bir İK Yöneticisi veya Süper Yönetici yapmalıdır.</Callout></div>}
@@ -207,21 +208,18 @@ function TransferModal({ emp, employees, grants, onClose, onDone }: { emp: Emplo
 }
 
 function TerminateModal({ emp, employees, openGrants, onClose, onDone }: { emp: Employee; employees: Employee[]; openGrants: number; onClose: () => void; onDone: () => void }) {
-  const { timezone } = useSession();
+  const { timezone, hasRole } = useSession();
   const [mode, setMode] = useState<"NOW" | "SCHEDULED">("NOW");
   const [date, setDate] = useState("");
   const [why, setWhy] = useState("");
-  const [errors, setErrors] = useState<{ date?: string; why?: string; recovery?: string }>({});
-  const [recoveryAck, setRecoveryAck] = useState(false);
+  const [errors, setErrors] = useState<{ date?: string; why?: string }>({});
   const [run, busy] = useAction();
-  // D2: with no other active Super Admin staying (none, or all scheduled to leave), this leaves none.
-  const lastSuperAdmin = emp.roles.includes("SUPER_ADMIN") &&
-    !employees.some((e) => e.id !== emp.id && e.status === "ACTIVE" && e.roles.includes("SUPER_ADMIN") && !e.termination);
+  // D2: the last active Super Admin leaves only once a successor has accepted the role (the server enforces it).
+  const lastSuperAdmin = emp.roles.includes("SUPER_ADMIN") && !employees.some((e) => e.id !== emp.id && e.status === "ACTIVE" && e.roles.includes("SUPER_ADMIN"));
   const submit = async () => {
-    const next = { date: mode === "SCHEDULED" && (!date || date <= todayIn(timezone)) ? "İleri bir tarih seçin." : undefined, why: why.trim().length < 3 ? "Ayrılış nedenini girin." : undefined,
-      recovery: lastSuperAdmin && !recoveryAck ? "Devam etmek için onaylayın." : undefined };
+    const next = { date: mode === "SCHEDULED" && (!date || date <= todayIn(timezone)) ? "İleri bir tarih seçin." : undefined, why: why.trim().length < 3 ? "Ayrılış nedenini girin." : undefined };
     setErrors(next);
-    if (next.date || next.why || next.recovery) return;
+    if (next.date || next.why) return;
     const r = await run(
       () => mode === "NOW"
         ? api.post(`/employees/${emp.id}/terminate`, { version: emp.version, reason: why.trim() })
@@ -232,7 +230,7 @@ function TerminateModal({ emp, employees, openGrants, onClose, onDone }: { emp: 
   };
   return (
     <Modal open onClose={onClose} title={`${emp.fullName} · işten çıkış`} desc="Bu işlem geri alınamaz. Yeniden işe alımda erişimler otomatik geri gelmez."
-      footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="danger" loading={busy} onClick={submit}>{mode === "NOW" ? "Hemen işten çıkar" : "Çıkışı planla"}</Button></>}>
+      footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="danger" loading={busy} disabled={lastSuperAdmin} onClick={submit}>{mode === "NOW" ? "Hemen işten çıkar" : "Çıkışı planla"}</Button></>}>
       <div className="stack">
         <Segmented label="Zamanlama" value={mode} onChange={setMode} options={[{ value: "NOW", label: "Hemen" }, { value: "SCHEDULED", label: "Planlı" }]} />
         {mode === "SCHEDULED" && (
@@ -242,10 +240,10 @@ function TerminateModal({ emp, employees, openGrants, onClose, onDone }: { emp: 
         )}
         <Field label="Ayrılış nedeni" required error={errors.why}><Textarea rows={2} value={why} onChange={(e) => setWhy(e.target.value)} placeholder="Örn. İstifa — son çalışma günü" /></Field>
         {lastSuperAdmin && (
-          <Callout tone="danger" title="Sistem Yönetici Kurtarma moduna girecek">
-            Başka aktif Süper Yönetici kalmayacak. Ayrılış gerçekleştiğinde İK ve Bilgi Güvenliği bilgilendirilir; yeni Süper Yöneticiyi bir İK Yöneticisi önerir, farklı bir Bilgi Güvenliği üyesi yetkilendirir. Erişim iş akışları çalışmaya devam eder.
-            <label className="row" style={{ gap: 8, marginTop: 8 }}><input type="checkbox" checked={recoveryAck} aria-invalid={!!errors.recovery || undefined} onChange={(e) => { setRecoveryAck(e.target.checked); setErrors({ ...errors, recovery: undefined }); }} />Sistemin kurtarma moduna gireceğini anlıyorum</label>
-            {errors.recovery && <div className="error-text">{errors.recovery}</div>}
+          <Callout tone="danger" title="Önce yeni Süper Yönetici atanmalı">
+            Bu çalışan sistemin son Süper Yöneticisidir. İşten çıkış işlemini tamamlamak için önce yeni bir Süper Yönetici atanmalıdır.
+            {emp.status === "ACTIVE" && <div style={{ marginTop: 6 }}>Acil durumda çalışanı hemen <strong>askıya alabilirsiniz</strong>: oturumları kapanır, ayrıcalıklı işlem yapamaz ve araçlardaki erişimleri askıya alınır.</div>}
+            {hasRole("HR_MANAGER") && <SuccessionPanel />}
           </Callout>
         )}
         <Callout tone="danger" title="Gerçekleşecekler">Oturum kapatılır; bekleyen talepler iptal edilir; üzerindeki onaylar başkalarına aktarılır; {openGrants} erişim öncelikli olarak kaldırılır ve doğrulanana kadar izlenir.</Callout>

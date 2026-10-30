@@ -44,7 +44,7 @@ func (s *Service) Transfer(ctx context.Context, actor auth.Principal, id uuid.UU
 		return people.Employee{}, err
 	}
 	by := &actor.EmployeeID
-	return s.personAction(ctx, actor, id, in.Version, in.Reason, []string{"ACTIVE"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
+	return s.personAction(ctx, actor, id, in.Version, in.Reason, []string{"ACTIVE"}, people.CheckAccountAction, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		newManager := !people.SameID(e.ManagerID, in.ManagerID)
 		if !newManager && people.SameText(e.Department, department) {
 			return errNotATransfer

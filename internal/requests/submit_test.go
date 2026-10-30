@@ -118,13 +118,16 @@ func TestOneEmailPerSubmission(t *testing.T) {
 	if n := w.count("SELECT count(*) FROM email_outbox"); n != 1 {
 		t.Fatalf("emails = %d; want 1", n)
 	}
-	// The outbox is readable by InfoSec, not by the employee.
+	// The outbox shows access requests to InfoSec, not to the employee, who sees only their own
+	// role-acceptance emails (none here).
 	r := w.get(w.is1.c, "/api/v1/email-outbox")
 	testutil.RequireStatus(t, r, http.StatusOK, "")
 	if len(r.Body["emails"].([]any)) != 1 {
 		t.Fatalf("outbox = %v", r.Body)
 	}
-	testutil.RequireStatus(t, w.get(w.dev.c, "/api/v1/email-outbox"), http.StatusForbidden, "forbidden")
+	if r := w.get(w.dev.c, "/api/v1/email-outbox"); r.Status != http.StatusOK || len(r.Body["emails"].([]any)) != 0 {
+		t.Fatalf("the employee's outbox = %d %v", r.Status, r.Body)
+	}
 }
 
 // Activation emails (M18) are listed only to Super Admins, never with their link.
@@ -277,7 +280,7 @@ func TestOpenItemPerToolIsUnique(t *testing.T) {
 func TestInvalidSubmissions(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	terminated := testutil.CreateEmployee(t, w.db, testutil.EmployeeSpec{Status: "TERMINATED"})
+	terminated := testutil.CreateEmployee(t, w.db, testutil.EmployeeSpec{Status: "TERMINATED", ManagerID: w.dev.ID}) // dev may request for them
 	retiredTool := testutil.CreateTool(t, w.db, testutil.ToolSpec{})
 	onRetiredTool := testutil.CreateLevel(t, w.db, retiredTool, "User", false, false)
 	w.exec("UPDATE tools SET status = 'RETIRED' WHERE id = $1", retiredTool)
@@ -336,6 +339,34 @@ func TestTemporaryDurationIsStored(t *testing.T) {
 	if d["type"] != "TEMPORARY" || d["expiresOn"] != "2099-06-30" {
 		t.Fatalf("duration = %v", d)
 	}
+}
+
+// Requests on someone's behalf come from their management chain, HR or a Super Admin; anyone
+// else is refused, so nobody starts an approval in another person's name.
+func TestOnBehalfNeedsAManagerHROrSuperAdmin(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	for _, c := range []struct {
+		name      string
+		submitter person
+		for_      uuid.UUID
+	}{
+		{"an employee for their manager", w.dev, w.mgr.ID},
+		{"an InfoSec member for anyone", w.is1, w.dev.ID},
+		{"a tool owner for anyone", w.owner, w.dev.ID},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			testutil.RequireStatus(t, submit(c.submitter.c, body(&c.for_, item(w.jiraViewer))), http.StatusForbidden, "beneficiary_not_allowed")
+		})
+	}
+	if w.count("SELECT count(*) FROM requests") != 0 {
+		t.Fatal("a refused submission was stored")
+	}
+	// Direct and indirect manager and a Super Admin may (HR: TestOnBehalfByOtherNeedsManager);
+	// one tool each, since the manager's own submission may already grant access.
+	w.mustSubmit(w.mgr.c, body(&w.dev.ID, item(w.jiraViewer)))
+	w.mustSubmit(w.skip.c, body(&w.dev.ID, item(w.github)))
+	w.mustSubmit(w.admin.c, body(&w.dev.ID, item(w.awsAdmin)))
 }
 
 func TestCannotReadOthersRequests(t *testing.T) {
