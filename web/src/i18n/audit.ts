@@ -3,6 +3,8 @@
 export const auditActionLabel: Record<string, string> = {
   LOGIN_SUCCEEDED: "Oturum açıldı", LOGIN_FAILED: "Başarısız oturum açma", LOGIN_LOCKED: "Hesap geçici olarak kilitlendi", LOGOUT: "Oturum kapatıldı",
   PASSWORD_CHANGED: "Parola değiştirildi", PASSWORD_CHANGE_FAILED: "Parola değiştirilemedi", PASSWORD_RESET: "Geçici parola oluşturuldu",
+  ACTIVATION_LINK_ISSUED: "Etkinleştirme bağlantısı gönderildi", ACTIVATION_LINK_VIEWED: "Etkinleştirme bağlantısı görüntülendi",
+  ACTIVATION_COMPLETED: "Hesap etkinleştirildi", ACTIVATION_FAILED: "Etkinleştirme başarısız", MOCK_EMAIL_KEY_RESET: "Mock e-posta anahtarı sıfırlandı",
   REQUEST_SUBMITTED: "Talep gönderildi", STEP_APPROVED: "Onay adımı onaylandı", STEP_REJECTED: "Onay adımı reddedildi",
   STEP_REROUTED: "Onay adımı yeniden yönlendirildi", STEP_REASSIGNED: "Onay adımı yeniden atandı", STEP_ADDED_BY_POLICY: "Daha sıkı politika adımı eklendi",
   SUPER_ADMIN_OVERRIDE: "Süper Yönetici geçersiz kılması", APPROVAL_ATTEMPT_REJECTED: "Onay girişimi reddedildi",
@@ -48,7 +50,8 @@ export const auditGroups: { value: string; label: string; actions: string[] }[] 
     "STALE_GRANT_INCIDENT", "OPERATION_FAILED", "OPERATION_ATTEMPT_FAILED", "OPERATION_RETRIED", "OPERATION_CANCELLED", "TASK_CLAIMED", "TICKET_RECORDED"] },
   { value: "people", label: "Çalışan yaşam döngüsü", actions: ["EMPLOYEE_CREATED", "EMPLOYEE_UPDATED", "EMPLOYEE_TRANSFERRED", "EMPLOYEE_SUSPENDED",
     "EMPLOYEE_REACTIVATED", "EMPLOYEE_TERMINATED", "EMPLOYEE_REHIRED", "TERMINATION_SCHEDULED", "TERMINATION_RESCHEDULED", "TERMINATION_CANCELLED",
-    "PASSWORD_RESET", "PASSWORD_CHANGED", "LOGIN_SUCCEEDED", "LOGIN_FAILED", "LOGIN_LOCKED", "LOGOUT"] },
+    "PASSWORD_RESET", "ACTIVATION_LINK_ISSUED", "ACTIVATION_LINK_VIEWED", "ACTIVATION_COMPLETED", "ACTIVATION_FAILED", "MOCK_EMAIL_KEY_RESET",
+    "PASSWORD_CHANGED", "LOGIN_SUCCEEDED", "LOGIN_FAILED", "LOGIN_LOCKED", "LOGOUT"] },
   { value: "config", label: "Yapılandırma ve roller", actions: ["TOOL_CREATED", "TOOL_UPDATED", "TOOL_RETIRED", "ACCESS_LEVEL_CREATED", "ACCESS_LEVEL_UPDATED",
     "ACCESS_LEVEL_RETIRED", "STARTER_PACKAGE_ENTRY_ADDED", "STARTER_PACKAGE_ENTRY_REMOVED", "ROLE_ASSIGNED", "ROLE_REMOVED", "ADMIN_GROUP_CREATED",
     "DEPARTMENT_CREATED", "DEPARTMENT_RETIRED", "JOB_POSITION_CREATED", "JOB_POSITION_RETIRED", "ADMIN_GROUP_MEMBER_ADDED", "ADMIN_GROUP_MEMBER_REMOVED", "SUPER_ADMIN_NOMINATED", "SUPER_ADMIN_NOMINATION_AUTHORIZED",

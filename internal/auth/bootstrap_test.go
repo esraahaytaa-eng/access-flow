@@ -120,7 +120,7 @@ func TestBootstrapAdminMustChangeThePasswordAndTheFileIsDeleted(t *testing.T) {
 	testutil.RequireStatus(t, c.Do(http.MethodGet, "/api/v1/probe/admin", nil), http.StatusForbidden, "password_change_required")
 
 	testutil.RequireStatus(t, c.Do(http.MethodPost, "/api/v1/auth/password",
-		map[string]string{"currentPassword": password, "newPassword": "the admin's own password"}), http.StatusOK, "")
+		map[string]string{"currentPassword": password, "newPassword": "violet anchor quiet 29"}), http.StatusOK, "")
 	if _, err := os.Stat(env.svc.bootstrapFile); !os.IsNotExist(err) {
 		t.Fatalf("bootstrap file still exists after the change (%v)", err)
 	}

@@ -16,7 +16,7 @@ func TestRuntimeUserCannotDeleteIdentityRecords(t *testing.T) {
 	db := testutil.NewDB(t)
 	testutil.CreateEmployee(t, db, testutil.EmployeeSpec{Roles: []string{"INFOSEC"}})
 
-	for _, table := range []string{"employees", "password_credentials", "role_assignments", "settings"} {
+	for _, table := range []string{"employees", "role_assignments", "settings", "activation_tokens", "email_outbox"} {
 		t.Run(table, func(t *testing.T) {
 			_, err := db.App.Exec(ctx, "DELETE FROM "+table)
 			testutil.RequireSQLState(t, err, "42501")
@@ -120,4 +120,43 @@ func TestAdminGroupSchema(t *testing.T) {
 		_, err := db.App.Exec(ctx, "DELETE FROM "+table)
 		testutil.RequireSQLState(t, err, "42501")
 	}
+}
+
+// M18: a reset removes the current password; a mock email's encrypted link can only be
+// cleared, and an employee has at most one open activation link.
+func TestActivationPrivileges(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.NewDB(t)
+	e := testutil.CreateEmployee(t, db, testutil.EmployeeSpec{})
+	if _, err := db.App.Exec(ctx, "INSERT INTO password_credentials (employee_id, password_hash, is_temporary) VALUES ($1, 'x', false)", e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.App.Exec(ctx, "DELETE FROM password_credentials WHERE employee_id = $1", e.ID); err != nil {
+		t.Fatalf("delete a password: %v", err)
+	}
+
+	var token uuid.UUID
+	err := db.App.QueryRow(ctx, `INSERT INTO activation_tokens (employee_id, token_hash, reason, created_at, expires_at)
+		VALUES ($1, sha256('a'), 'CREATED', now(), now() + interval '1 day') RETURNING id`, e.ID).Scan(&token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.App.Exec(ctx, `INSERT INTO activation_tokens (employee_id, token_hash, reason, created_at, expires_at)
+		VALUES ($1, sha256('b'), 'RESET', now(), now() + interval '1 day')`, e.ID)
+	testutil.RequireSQLState(t, err, "23505")
+	_, err = db.App.Exec(ctx, `INSERT INTO activation_tokens (employee_id, token_hash, reason, created_at, expires_at)
+		VALUES ($1, 'short', 'RESET', now(), now())`, e.ID)
+	testutil.RequireSQLState(t, err, "23514")
+
+	if _, err := db.App.Exec(ctx, `INSERT INTO email_outbox (recipient_id, kind, activation_id, subject, body, sealed_token)
+		VALUES ($1, 'ACTIVATION', $2, 's', 'b', 'x')`, e.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.App.Exec(ctx, "UPDATE email_outbox SET sealed_token = NULL"); err != nil {
+		t.Fatalf("clear the encrypted link: %v", err)
+	}
+	_, err = db.App.Exec(ctx, "UPDATE email_outbox SET body = 'changed'")
+	testutil.RequireSQLState(t, err, "42501")
+	_, err = db.App.Exec(ctx, "INSERT INTO email_outbox (recipient_id, kind, subject, body) VALUES ($1, 'ACTIVATION', 's', 'b')", e.ID)
+	testutil.RequireSQLState(t, err, "23514") // an activation email names its link
 }

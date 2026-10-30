@@ -22,7 +22,7 @@ Open http://localhost:8080 (health: `GET /api/v1/health`). If port 8080 is taken
 | `can.ozturk@accessflow.local` | `Demo-Owner-2026` | Tool Owner (Jira, GitHub), IT Operations admin group |
 | `deniz.kara@accessflow.local` | `Demo-Employee-2026` | Employee |
 
-Each account has its own password (`DEMO_PASSWORDS` in `compose.yaml`). The sign-in page lists the accounts without passwords (a click fills the e-mail), and every page shows a "Demo Environment" badge. Demo labels and catalog names are in English; the rest of the UI is Turkish. The other demo employees have random passwords nobody knows.
+Each account has its own password (`DEMO_PASSWORDS` in `compose.yaml`). The sign-in page lists the accounts without passwords (a click fills the e-mail), and every page shows a "Demo Environment" badge. Demo labels and catalog names are in English; the rest of the UI is Turkish. The other demo employees have no password and no activation link; a Super Admin can send them one (see "Account activation").
 
 **Demo data.** On first start the server builds a small company through the real services, at real time, as the people whose role each action needs (DECISIONS.md D12): 18 employees, a company catalog of eight departments and 18 job positions, six tools covering API, Manual and Vendor fulfillment, and requests in every state, from approvals waiting at each step to a failed task, imported legacy access with orphan accounts, a suspended and a terminated employee, and a running quarterly review. Nothing time-dependent is faked; overdue reminders and review findings appear when their real time comes.
 
@@ -44,7 +44,8 @@ Deleting the main project's data instead (`docker compose down -v`) is destructi
 - **Granting and removing:** API tools are changed and verified automatically with retries; Manual and Vendor tools get tracked tasks for their admin groups. Access is removed on expiry, on transfer (pre-selected for removal) and on termination (removed first); suspension is reversible.
 - **Reviews:** a quarterly campaign per tool owner with a reminder on day 7, InfoSec escalation on day 14 and automatic action on day 21.
 - **Proof:** an append-only audit log, point-in-time access for any date with its approvers, and evidence reports for Audit.
-- **Onboarding:** HR keeps a catalog of departments and job positions. A Super Admin imports employees (without passwords or roles), tools with their levels and approval steps, and existing access from one Excel workbook: download the template, preview, then import all or nothing. Existing records are never overwritten.
+- **Account activation:** a new, imported or rehired employee gets no password but a single-use activation link, valid 24 hours, in the local Mock Email Outbox. The link opens "Şifreni Belirle", where the employee chooses a password (12–128 characters, not a common password, not their email name); it signs nobody in. A Super Admin reveals links (each reveal audited), sees pending, expired and completed activations, and sends new links; a new link ends the current password and sessions at once.
+- **Onboarding:** HR keeps a catalog of departments and job positions. A Super Admin imports employees (without passwords or roles; each gets an activation link), tools with their levels and approval steps, and existing access from one Excel workbook: download the template, preview, then import all or nothing. Existing records are never overwritten.
 - **Existing access:** imported as baseline grants (no approval invented) from the workbook, an account CSV or the Mock Tool Service read, which also verifies reported API access; unmatched accounts become orphan findings for InfoSec.
 
 ## Architecture
@@ -92,7 +93,20 @@ Without the three demo lines in `compose.yaml` (`ACCESSFLOW_DEMO`, `ACCESSFLOW_E
 docker compose exec app /accessflow bootstrap-password
 ```
 
-Sign in with it at http://localhost:8080; the app asks for a new password first. Until it is changed every other API call answers `403 password_change_required`. After the change the old password stops working and the file is deleted. This password does not expire. Passwords that admins later issue to employees expire after 72 hours (DECISIONS.md F4).
+Sign in with it at http://localhost:8080; the app asks for a new password first. Until it is changed every other API call answers `403 password_change_required`. After the change the old password stops working and the file is deleted. This password does not expire. Employees get activation links instead of passwords (DECISIONS.md F4).
+
+### Account activation (Mock Email Outbox)
+
+**Mock email delivery is for local demonstration only and is not suitable for production use.** No e-mail is sent. To activate an employee in the demo: sign in as the Super Admin, open Yönetim ayarları → E-posta kutusu, open the activation e-mail and choose "Bağlantıyı göster" (the reveal is audited), then open the link, ideally in a private window, and set a password; then sign in as that employee. Yönetim ayarları → Hesap etkinleştirme lists pending, expired, completed and missing activations and sends new links.
+
+Links are stored only as SHA-256 hashes for authentication. The outbox keeps each pending link encrypted with a key in `/var/lib/accessflow/mock-email.key` on the `appdata` volume (never in the database), so links survive restarts; the encrypted copy is cleared when the link is used, replaced or expires. If that key is lost while links are pending, the app does not replace it silently: links can be neither shown nor issued until you run
+
+```bash
+docker compose exec app /accessflow reset-mail-key   # revokes the pending links, audited
+docker compose restart app
+```
+
+and send new links from the activation screen.
 
 ### Super Admin recovery
 
@@ -120,6 +134,8 @@ All optional:
 | `DEMO_PASSWORDS` | none (set in `compose.yaml`) | `account=password,…` for `admin`, `infosec`, `hr`, `auditor`, `manager`, `owner`, `employee` |
 | `COMPANY_TIMEZONE` | `Europe/Istanbul` | the zone request expiry dates are in; an unknown zone stops startup |
 | `MOCK_TOOLS_URL` | `http://mocktools:8081` (set in `compose.yaml`) | the Mock Tool Service the operation runner calls |
+| `LOGIN_RATE_LIMIT` | `60` | sign-in and activation attempts allowed per client address per minute (local demo default; see Production limitations) |
+| `MOCK_EMAIL_KEY_FILE` | `/var/lib/accessflow/mock-email.key` | the key encrypting pending activation links in the Mock Email Outbox (the `appdata` volume) |
 
 ## Testing
 
@@ -140,7 +156,16 @@ This runs `gofmt`, `go vet` and `go test -race` against a disposable in-memory P
 - A local case-study setup: fixed database credentials in `compose.yaml`, one `app` instance, plain HTTP on port 8080 (put HTTPS in front and set `COOKIE_SECURE=true` for real use).
 - No real tool connectors: API tools are reached through the Mock Tool Service; Manual and Vendor evidence is self-reported by the admin who confirms it.
 - Workbook-reported access is believed as reported: the API tool read verifies it later; Manual and Vendor access is first checked by the certification campaign. Re-imports never update existing employees or tools.
-- No SSO and no real e-mail: HR hands over one-time passwords; notifications are in the app.
+- No SSO and no real e-mail: activation links go to a local Mock Email Outbox that only a Super Admin can read, for demonstration only; notifications are in the app. No multi-factor authentication yet (planned).
+
+### Production limitations and future considerations
+
+This version is a local case-study demo. Before real use:
+- **Real e-mail delivery** would send each activation link to its employee and drop the outbox reveal, so no administrator could see a link. Until then a Super Admin who reveals a pending link could use it (audited; the employee would find the link used).
+- **MFA:** an authenticator app, mandatory for privileged roles first (shown as "Planlanıyor" in the user menu).
+- **Rate limiting:** sign-in and activation together allow 60 attempts per minute per client address (`LOGIN_RATE_LIMIT`), on top of the per-account lockout (5 wrong passwords lock an account for 15 minutes). With Docker Desktop every browser on the machine reaches the app through one Docker address, so the 60 attempts are shared by everyone using the demo; beyond that, sign-ins get "too many attempts" (`429` with `Retry-After`) for the rest of the minute. 60 is chosen for the local demo; review it for any other environment. The limit uses the connection's address and ignores `X-Forwarded-For`, so a reverse proxy needs a trusted-proxy setting first (otherwise all users would share the proxy's budget).
+- **Secrets:** set `JWT_SECRET` from a secret store (a generated one is kept in the database), use HTTPS with `COOKIE_SECURE=true`, and replace the fixed database passwords.
+- **Passwords:** add a breached-password check if an external service is acceptable; today only an offline common-password list is used.
 - The UI is Turkish only.
 
 All limitations, with their reasons: [`docs/known-limitations.md`](docs/known-limitations.md).

@@ -21,7 +21,7 @@ import (
 func testRouter(t *testing.T, dist fstest.MapFS, demoAccounts ...demo.Account) http.Handler {
 	t.Helper()
 	db := testutil.NewDB(t)
-	svc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
+	svc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,45 +12,46 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
-func TestHRCreatesAnEmployeeWhoMustChangeThePassword(t *testing.T) {
+func TestHRCreatesAnEmployeeWhoActivatesThroughALink(t *testing.T) {
 	env := newEnv(t)
 	hr, c := env.user("HR_MANAGER")
 	manager, _ := env.user()
+	_, admin := env.user("SUPER_ADMIN")
 
 	r := c.Do(http.MethodPost, "/api/v1/employees", map[string]any{
 		"email": " New.Person@Example.com ", "fullName": " New Person ", "department": "Engineering", "jobTitle": "Developer",
 		"managerId": manager.ID,
 	})
 	testutil.RequireStatus(t, r, http.StatusCreated, "")
-	if cc := r.Header.Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("Cache-Control = %q; want no-store", cc)
-	}
 	emp := r.Body["employee"].(map[string]any)
 	if emp["email"] != "new.person@example.com" || emp["fullName"] != "New Person" || emp["department"] != "Engineering" ||
-		emp["managerId"] != manager.ID.String() || emp["status"] != "ACTIVE" || emp["mustChangePassword"] != true {
+		emp["managerId"] != manager.ID.String() || emp["status"] != "ACTIVE" || emp["hasPassword"] != false {
 		t.Fatalf("employee = %v", emp)
 	}
-	password, _ := r.Body["temporaryPassword"].(string)
-	if len(password) != 16 {
-		t.Fatalf("temporaryPassword = %q; want 16 characters", password)
+	if _, ok := r.Body["temporaryPassword"]; ok || len(r.Body) != 1 {
+		t.Fatalf("response = %v; want only the employee, no credential (M18)", r.Body)
 	}
 	id := uuid.MustParse(emp["id"].(string))
 
 	var expires time.Time
-	_ = env.db.App.QueryRow(context.Background(), "SELECT expires_at FROM password_credentials WHERE employee_id = $1", id).Scan(&expires)
-	if d := time.Until(expires); d < 71*time.Hour || d > 73*time.Hour {
-		t.Errorf("temporary password expires in %v; want 72h", d)
+	_ = env.db.App.QueryRow(context.Background(), "SELECT expires_at FROM activation_tokens WHERE employee_id = $1 AND reason = 'CREATED' AND issued_by = $2",
+		id, hr.ID).Scan(&expires)
+	if d := time.Until(expires); d < 23*time.Hour || d > 25*time.Hour {
+		t.Errorf("activation link expires in %v; want 24h", d)
 	}
-	if n := env.count(`SELECT count(*) FROM audit_events WHERE action = 'EMPLOYEE_CREATED' AND actor_id = $1 AND subject_employee_id = $2
-		AND details::text NOT LIKE '%' || $3 || '%'`, hr.ID, id, password); n != 1 {
-		t.Errorf("EMPLOYEE_CREATED by HR without the password = %d; want 1", n)
+	if env.count("SELECT count(*) FROM audit_events WHERE action = 'EMPLOYEE_CREATED' AND actor_id = $1 AND subject_employee_id = $2", hr.ID, id) != 1 ||
+		env.count("SELECT count(*) FROM audit_events WHERE action = 'ACTIVATION_LINK_ISSUED' AND actor_id = $1 AND subject_employee_id = $2", hr.ID, id) != 1 {
+		t.Error("creation or link not audited")
 	}
 
-	nc := testutil.NewClient(t, env.srv)
-	r = nc.Login("new.person@example.com", password)
+	token := testutil.Activate(t, admin, env.db.App, id, "violet anchor quiet 29")
+	if env.count("SELECT count(*) FROM audit_events WHERE details::text LIKE '%' || $1 || '%'", token) != 0 {
+		t.Error("the token is in an audit event")
+	}
+	r = testutil.NewClient(t, env.srv).Login("new.person@example.com", "violet anchor quiet 29")
 	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if r.Body["mustChangePassword"] != true {
-		t.Fatal("new employee is not asked to change the password")
+	if r.Body["mustChangePassword"] != false {
+		t.Fatal("the chosen password is treated as temporary")
 	}
 }
 

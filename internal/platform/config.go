@@ -24,6 +24,8 @@ type Config struct {
 	DemoPasswords        string // DEMO_PASSWORDS: "account=password,..." for the documented demo accounts
 	CompanyTimezone      string // COMPANY_TIMEZONE: the zone that dates such as expiry are in (A6)
 	MockToolsURL         string // MOCK_TOOLS_URL: base URL of the Mock Tool Service (A6)
+	MockEmailKeyFile     string // MOCK_EMAIL_KEY_FILE: key encrypting activation links in the Mock Email Outbox (M18)
+	LoginRateLimit       int    // LOGIN_RATE_LIMIT: sign-in and activation attempts per client address per minute; 0 = the default (M18)
 }
 
 // LoadConfig reads the configuration through getenv (os.Getenv in production).
@@ -38,6 +40,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		DemoPasswords:        getenv("DEMO_PASSWORDS"),
 		CompanyTimezone:      getenv("COMPANY_TIMEZONE"),
 		MockToolsURL:         getenv("MOCK_TOOLS_URL"),
+		MockEmailKeyFile:     getenv("MOCK_EMAIL_KEY_FILE"),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"
@@ -47,6 +50,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if cfg.BootstrapFile == "" {
 		cfg.BootstrapFile = "/var/lib/accessflow/bootstrap-admin.txt"
+	}
+	if cfg.MockEmailKeyFile == "" {
+		cfg.MockEmailKeyFile = "/var/lib/accessflow/mock-email.key"
 	}
 	if cfg.CompanyTimezone == "" {
 		cfg.CompanyTimezone = "Europe/Istanbul"
@@ -63,6 +69,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("COOKIE_SECURE must be true or false: %w", err)
 		}
 		cfg.SecureCookies = secure
+	}
+	if v := getenv("LOGIN_RATE_LIMIT"); v != "" {
+		limit, err := strconv.Atoi(v)
+		if err != nil || limit < 1 {
+			return Config{}, fmt.Errorf("LOGIN_RATE_LIMIT must be a positive whole number, got %q", v)
+		}
+		cfg.LoginRateLimit = limit
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")

@@ -1,5 +1,6 @@
 // Package sweeps runs the scheduled business jobs (O8, A6): temporary access expiry (D6),
-// scheduled terminations (D7) and the access review steps (D8). Each job is idempotent and catches up
+// scheduled terminations (D7), the access review steps (D8) and clearing expired mock
+// activation links (M18). Each job is idempotent and catches up
 // after downtime.
 package sweeps
 
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
+	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 )
 
@@ -56,5 +58,9 @@ func (s *Sweeps) RunOnce(ctx context.Context) error {
 	if n > 0 {
 		slog.Info("access review steps run", "changes", n)
 	}
-	return errors.Join(expiryErr, err, reviewErr)
+	n, linkErr := auth.ClearExpiredLinks(ctx, s.pool)
+	if n > 0 {
+		slog.Info("expired activation links cleared from the mock outbox", "links", n)
+	}
+	return errors.Join(expiryErr, err, reviewErr, linkErr)
 }

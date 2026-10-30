@@ -332,6 +332,8 @@ func TestPasswordChange(t *testing.T) {
 
 	r = c.Do(http.MethodPost, "/api/v1/auth/password", map[string]string{"currentPassword": emp.Password, "newPassword": "too short"})
 	testutil.RequireStatus(t, r, http.StatusBadRequest, "password_length")
+	r = c.Do(http.MethodPost, "/api/v1/auth/password", map[string]string{"currentPassword": emp.Password, "newPassword": "Password1234"})
+	testutil.RequireStatus(t, r, http.StatusBadRequest, "common_password")
 	// Otherwise a temporary password the issuer knows could become permanent (F4).
 	r = c.Do(http.MethodPost, "/api/v1/auth/password", map[string]string{"currentPassword": emp.Password, "newPassword": emp.Password})
 	testutil.RequireStatus(t, r, http.StatusBadRequest, "password_unchanged")

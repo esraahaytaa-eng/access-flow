@@ -74,10 +74,10 @@ func (s *Service) RecoverAdmin(ctx context.Context, email string) error {
 		if _, err := tx.Exec(ctx, "UPDATE employees SET token_version = token_version + 1, version = version + 1 WHERE id = $1", id); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary, expires_at)
-			VALUES ($1, $2, true, $3) ON CONFLICT (employee_id) DO UPDATE
-			SET password_hash = EXCLUDED.password_hash, is_temporary = true, expires_at = EXCLUDED.expires_at, updated_at = now()`,
-			id, hash, TemporaryPasswordExpiry(now, true)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary)
+			VALUES ($1, $2, true) ON CONFLICT (employee_id) DO UPDATE
+			SET password_hash = EXCLUDED.password_hash, is_temporary = true, expires_at = NULL, updated_at = now()`,
+			id, hash); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO role_assignments (employee_id, role, valid_from) VALUES ($1, 'SUPER_ADMIN', $2)", id, now); err != nil {

@@ -30,6 +30,12 @@ type Options struct {
 	// CompanyTimezone is shown to the UI, which displays times in it (A7).
 	CompanyTimezone string
 	Logger          *slog.Logger
+	// LoginRateLimit is the sign-in attempts allowed per client address per minute; 0 means
+	// DefaultLoginRateLimit.
+	LoginRateLimit int
+	// MailKey encrypts activation links in the Mock Email Outbox (LoadMailKey); nil when it is
+	// unavailable, and then links can be neither issued nor shown.
+	MailKey []byte
 }
 
 // Service authenticates employees and guards the API.
@@ -42,6 +48,8 @@ type Service struct {
 	log             *slog.Logger
 	dummyHash       string        // verified for unknown emails, so timing does not reveal which exist
 	hashSlots       chan struct{} // limits concurrent argon2 work (19 MiB each), see hashSlot
+	attempts        *attemptLimiter
+	mailKey         []byte
 }
 
 func NewService(pool *pgxpool.Pool, opts Options) (*Service, error) {
@@ -52,9 +60,13 @@ func NewService(pool *pgxpool.Pool, opts Options) (*Service, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.LoginRateLimit == 0 {
+		opts.LoginRateLimit = DefaultLoginRateLimit
+	}
 	return &Service{pool: pool, secret: opts.Secret, secureCookies: opts.SecureCookies,
 		bootstrapFile: opts.BootstrapFile, companyTimezone: opts.CompanyTimezone, log: opts.Logger, dummyHash: dummy,
-		hashSlots: make(chan struct{}, 2)}, nil
+		hashSlots: make(chan struct{}, 2), attempts: newAttemptLimiter(opts.LoginRateLimit),
+		mailKey: opts.MailKey}, nil
 }
 
 // Principal is the signed-in employee, loaded from the database on every request.
@@ -266,7 +278,7 @@ func (s *Service) logout(ctx context.Context, p Principal) error {
 // changePassword replaces the password after checking the current one. A wrong current
 // password counts toward lockout. Other sessions are ended; the caller gets a new one.
 func (s *Service) changePassword(ctx context.Context, p Principal, current, next string) (Session, error) {
-	if err := ValidatePassword(next); err != nil {
+	if err := ValidateNewPassword(next, p.Email); err != nil {
 		return Session{}, err
 	}
 	if next == current {

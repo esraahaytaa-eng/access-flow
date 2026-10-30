@@ -3,12 +3,12 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
 import { useCompanyCatalog, useEmployees, useStarterPackages } from "../api/queries";
-import type { CatalogEntry, Employee, EmployeeStatus, EmployeeWithPassword } from "../api/types";
+import type { CatalogEntry, Employee, EmployeeResponse, EmployeeStatus } from "../api/types";
 import { errorMessage } from "../i18n/errors";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
-  Button, Callout, EmptyState, Field, Input, Modal, PageHeader, Person, SearchBox, Segmented, Select, StatusBadge, TableSkeleton, Tag, ToolCell, useAction, useToast,
+  Button, Callout, EmptyState, Field, Input, Modal, PageHeader, Person, SearchBox, Segmented, Select, StatusBadge, TableSkeleton, Tag, ToolCell, useAction,
 } from "../ui/components";
 import { formatDate } from "../ui/format";
 import { statusBadge } from "../ui/status";
@@ -94,7 +94,7 @@ function CreateEmployeeModal({ employees, onClose }: { employees: Employee[]; on
   const catalog = useCompanyCatalog().data;
   const [form, setForm] = useState<Form>({ fullName: "", email: "", jobTitle: "", department: "", managerId: "" });
   const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({});
-  const [created, setCreated] = useState<EmployeeWithPassword | null>(null);
+  const [created, setCreated] = useState<EmployeeResponse | null>(null);
   const [run, busy] = useAction();
   const set = (k: keyof Form) => (e: { target: { value: string } }) => { setForm({ ...form, [k]: e.target.value }); setErrors({ ...errors, [k]: undefined }); };
 
@@ -107,16 +107,16 @@ function CreateEmployeeModal({ employees, onClose }: { employees: Employee[]; on
     };
     setErrors(next);
     if (Object.values(next).some(Boolean)) return;
-    const r = await run(() => api.post<EmployeeWithPassword>("/employees", {
+    const r = await run(() => api.post<EmployeeResponse>("/employees", {
       email: form.email.trim(), fullName: form.fullName.trim(), department: form.department.trim(), jobTitle: form.jobTitle.trim(), managerId: form.managerId || null,
     }), { success: "Çalışan oluşturuldu" });
     if (r.ok) { setCreated(r.res); qc.invalidateQueries({ queryKey: ["employees"] }); }
     else if (r.err instanceof ApiError && r.err.field && r.err.field in form) setErrors({ [r.err.field]: errorMessage(r.err) });
   };
 
-  if (created) return <PasswordResult title={`${created.employee.fullName} oluşturuldu`} employee={created.employee} password={created.temporaryPassword} onClose={onClose} />;
+  if (created) return <CreatedResult title={`${created.employee.fullName} oluşturuldu`} employee={created.employee} onClose={onClose} />;
   return (
-    <Modal open wide onClose={onClose} title="Yeni çalışan" desc="İşe giriş kaydı oluşturun. Geçici parola otomatik üretilir."
+    <Modal open wide onClose={onClose} title="Yeni çalışan" desc="İşe giriş kaydı oluşturun. Çalışan parolasını etkinleştirme bağlantısıyla kendisi belirler."
       footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} onClick={submit}>Çalışanı oluştur</Button></>}>
       <div className="form-grid">
         <Field label="Ad soyad" required error={errors.fullName}><Input value={form.fullName} invalid={!!errors.fullName} onChange={set("fullName")} placeholder="Örn. Kaan Uslu" /></Field>
@@ -174,21 +174,15 @@ function CatalogList({ title, list, entries }: { title: string; list: "departmen
   );
 }
 
-/** A temporary password is shown exactly once (the response is not cached). */
-export function PasswordResult({ title, employee, password, onClose }: { title: string; employee: Employee; password: string; onClose: () => void }) {
+/** After a create or rehire: the activation link went to the Mock Email Outbox, never to this screen (M18). */
+export function CreatedResult({ title, employee, onClose }: { title: string; employee: Employee; onClose: () => void }) {
   const navigate = useNavigate();
-  const toast = useToast();
   const packages = (useStarterPackages().data ?? []).filter((p) => p.requestable && p.department === employee.department && (!p.jobTitle || p.jobTitle === employee.jobTitle));
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(password); toast({ type: "info", title: "Parola kopyalandı" }); } catch { /* clipboard blocked: the password stays visible */ }
-  };
   return (
-    <Modal open onClose={onClose} title={title} desc="Geçici parola yalnızca bir kez gösterilir."
+    <Modal open onClose={onClose} title={title}
       footer={<><Button onClick={onClose}>Kapat</Button>{packages.length > 0 && <Button variant="primary" icon="send" onClick={() => navigate(`/request-new?for=${employee.id}&pkg=1`)}>Başlangıç paketini talep et</Button>}</>}>
       <div className="stack">
-        <div className="secret" aria-label="Geçici parola">{password}</div>
-        <div className="row" style={{ justifyContent: "center" }}><Button size="sm" icon="copy" onClick={copy}>Kopyala</Button></div>
-        <Callout tone="warn">Parola 72 saat geçerlidir ve tek kullanımlıktır. İlk girişte çalışan yeni parola belirlemek zorundadır. Bu pencereyi kapattıktan sonra parola tekrar görüntülenemez.</Callout>
+        <Callout tone="info">Etkinleştirme bağlantısı Mock Email Outbox'a gönderildi. Bağlantı 24 saat geçerlidir ve tek kullanımlıktır; yalnızca Süper Yönetici e-posta kutusunda görüntüleyebilir.</Callout>
         {packages.length > 0 && (
           <div>
             <div className="section-title">Önerilen başlangıç paketi · {employee.department}</div>

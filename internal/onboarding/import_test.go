@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
@@ -32,7 +33,7 @@ type env struct {
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	db := testutil.NewDB(t)
-	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt"})
+	authSvc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000, MailKey: testutil.MailKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,8 @@ func newEnv(t *testing.T) *env {
 		r.Mount("/auth", authSvc.Routes())
 		r.Group(func(r chi.Router) {
 			r.Use(authSvc.RequireSession)
-			NewService(db.App).Register(r)
+			authSvc.RegisterActivations(r)
+			NewService(db.App, authSvc).Register(r)
 			people.NewService(db.App, authSvc).Register(r)
 			catalog.NewService(db.App).Register(r)
 			access.NewService(db.App, nil).Register(r)
@@ -193,6 +195,16 @@ func TestWorkbookImport(t *testing.T) {
 		WHERE e.email IN ('ann@co.test', 'bob@co.test')`); n != 0 {
 		t.Fatalf("imported employees have %d credentials; want none", n)
 	}
+	// Each gets one activation link in the Mock Email Outbox, issued by the importer (M18).
+	if n := e.count(`SELECT count(*) FROM activation_tokens t JOIN employees e ON e.id = t.employee_id
+		JOIN email_outbox o ON o.activation_id = t.id AND o.recipient_id = e.id AND o.sealed_token IS NOT NULL
+		WHERE e.email IN ('ann@co.test', 'bob@co.test') AND t.reason = 'IMPORTED' AND t.issued_by = $1`, e.admin.ID); n != 2 {
+		t.Fatalf("activation links = %d; want 2", n)
+	}
+	if n := e.count(`SELECT count(*) FROM audit_events WHERE action = 'ACTIVATION_LINK_ISSUED' AND actor_id = $1
+		AND details->>'reason' = 'IMPORTED'`, e.admin.ID); n != 2 {
+		t.Fatalf("ACTIVATION_LINK_ISSUED = %d; want 2", n)
+	}
 	if n := e.count(`SELECT count(*) FROM role_assignments ra JOIN employees e ON e.id = ra.employee_id
 		WHERE e.email IN ('ann@co.test', 'bob@co.test')`); n != 0 {
 		t.Fatal("the import assigned a role")
@@ -257,14 +269,13 @@ func TestWorkbookImport(t *testing.T) {
 		t.Errorf("bulk notifications after re-import = %d; want 1", n)
 	}
 
-	// HR issues the one-time password with the existing reset; then the employee signs in.
-	var id string
+	// The employee sets a password through the link, then signs in.
+	var id uuid.UUID
 	if err := e.db.App.QueryRow(context.Background(), "SELECT id FROM employees WHERE email = 'ann@co.test'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	reset := e.hr.Do(http.MethodPost, "/api/v1/employees/"+id+"/password-reset", map[string]any{})
-	testutil.RequireStatus(t, reset, http.StatusOK, "")
-	testutil.RequireStatus(t, ann.Login("ann@co.test", reset.Body["temporaryPassword"].(string)), http.StatusOK, "")
+	testutil.Activate(t, e.sa, e.db.App, id, "violet anchor quiet 29")
+	testutil.RequireStatus(t, ann.Login("ann@co.test", "violet anchor quiet 29"), http.StatusOK, "")
 }
 
 func problemReasons(r testutil.Response) []string {
@@ -299,7 +310,9 @@ func TestWorkbookImportIsAllOrNothing(t *testing.T) {
 		"SELECT count(*) FROM tools WHERE name = 'GitHub'",
 		"SELECT count(*) FROM grants",
 		"SELECT count(*) FROM imports",
-		"SELECT count(*) FROM audit_events WHERE action IN ('EMPLOYEE_CREATED', 'TOOL_CREATED', 'GRANT_IMPORTED')",
+		"SELECT count(*) FROM audit_events WHERE action IN ('EMPLOYEE_CREATED', 'TOOL_CREATED', 'GRANT_IMPORTED', 'ACTIVATION_LINK_ISSUED')",
+		"SELECT count(*) FROM activation_tokens",
+		"SELECT count(*) FROM email_outbox",
 	} {
 		if n := e.count(sql); n != 0 {
 			t.Fatalf("%s = %d after a failed import", sql, n)

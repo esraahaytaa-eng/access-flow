@@ -43,6 +43,8 @@ export type Employee = {
   roles: Role[];
   adminGroups: AdminGroupRef[];
   mustChangePassword: boolean;
+  /** False until the employee sets a password through an activation link (M18). */
+  hasPassword: boolean;
   /** A scheduled termination, else null. */
   termination: Termination | null;
   version: number;
@@ -61,10 +63,19 @@ export type BasicEmployee = {
 
 export type EmployeesResponse = { employees: Employee[] | BasicEmployee[] };
 
-/** Shown once; the response carries Cache-Control: no-store. */
-export type EmployeeWithPassword = { employee: Employee; temporaryPassword: string };
+/** Create and rehire answer with the employee only; the activation link goes to the Mock Email Outbox. */
+export type EmployeeResponse = { employee: Employee };
 
-export type PasswordResetResponse = { temporaryPassword: string };
+export type ActivationStatus = "PENDING" | "EXPIRED" | "COMPLETED" | "NO_LINK";
+export type Activation = {
+  employee: { id: string; fullName: string; email: string };
+  status: ActivationStatus;
+  reason: "CREATED" | "IMPORTED" | "REHIRED" | "RESET" | null;
+  createdAt: string | null;
+  expiresAt: string | null;
+  completedAt: string | null;
+};
+export type ActivationsResponse = { activations: Activation[] };
 
 export type AssignRoleBody = { role: "INFOSEC" | "HR_MANAGER" | "AUDITOR" };
 
@@ -238,11 +249,14 @@ export type ApprovalsResponse = { approvals: Approval[] };
 
 export type Email = {
   id: string;
+  kind: "ACCESS_REQUEST" | "ACTIVATION";
   recipient: Person;
-  requestId: string;
+  requestId: string | null;
   subject: string;
   body: string;
   createdAt: string;
+  /** An activation link a Super Admin can still reveal (never listed itself). */
+  linkAvailable: boolean;
 };
 export type EmailOutboxResponse = { emails: Email[] };
 

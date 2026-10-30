@@ -44,12 +44,17 @@ func TestRehireRestoresNothing(t *testing.T) {
 		e["managerId"] != w.mgr.ID.String() || e["termination"] != nil {
 		t.Fatalf("employee = %v", e)
 	}
-	c := testutil.NewClient(t, w.srv)
-	login := c.Login(w.dev.Email, r.Body["temporaryPassword"].(string))
-	testutil.RequireStatus(t, login, http.StatusOK, "")
-	if login.Body["mustChangePassword"] != true {
-		t.Fatalf("login = %v", login.Body)
+	if _, ok := r.Body["temporaryPassword"]; ok {
+		t.Fatal("the rehire response carries a credential; it goes only to the Mock Email Outbox (M18)")
 	}
+	// The old password ended; the rehired employee chooses a new one through the link.
+	c := testutil.NewClient(t, w.srv)
+	testutil.RequireStatus(t, c.Login(w.dev.Email, testutil.Password), http.StatusUnauthorized, "invalid_credentials")
+	if w.count("SELECT count(*) FROM activation_tokens WHERE employee_id = $1 AND reason = 'REHIRED' AND issued_by = $2", w.dev.ID, hr.ID) != 1 {
+		t.Fatal("no REHIRED activation link")
+	}
+	testutil.Activate(t, w.admin.c, w.db.App, w.dev.ID, "a brand new password")
+	testutil.RequireStatus(t, c.Login(w.dev.Email, "a brand new password"), http.StatusOK, "")
 	if w.count("SELECT count(*) FROM grants WHERE employee_id = $1 AND status NOT IN ('REVOKED', 'CANCELLED')", w.dev.ID) != 0 ||
 		w.count("SELECT count(*) FROM role_assignments WHERE employee_id = $1 AND valid_to IS NULL", w.dev.ID) != 0 ||
 		w.count("SELECT count(*) FROM admin_group_memberships WHERE employee_id = $1 AND valid_to IS NULL", w.dev.ID) != 0 {
@@ -58,8 +63,6 @@ func TestRehireRestoresNothing(t *testing.T) {
 	if w.itemStatus(pending) != "CANCELLED:employee terminated" || w.audits("EMPLOYEE_REHIRED") != 1 {
 		t.Fatalf("item %s, EMPLOYEE_REHIRED %d", w.itemStatus(pending), w.audits("EMPLOYEE_REHIRED"))
 	}
-	testutil.RequireStatus(t, c.Do(http.MethodPost, "/api/v1/auth/password",
-		map[string]string{"currentPassword": r.Body["temporaryPassword"].(string), "newPassword": "a brand new password"}), http.StatusOK, "")
 	it := items(w.mustSubmit(c, body(nil, item(w.jiraViewer))))[0]
 	if s := open(t, it); s["assigneeId"] != w.mgr.ID.String() {
 		t.Fatalf("new request's step = %v", s)

@@ -23,6 +23,7 @@ import { TeamPage } from "./pages/Team";
 import { ToolEditPage } from "./pages/ToolEdit";
 import { ToolsAdminPage } from "./pages/ToolsAdmin";
 import { AuthScreen, LoginPage } from "./pages/Login";
+import { SetPasswordPage } from "./pages/SetPassword";
 import { SessionProvider, useSession } from "./session";
 import { NoAccess, NotFound, Shell } from "./Shell";
 import { errorMessage } from "./i18n/errors";
@@ -57,6 +58,8 @@ function Root() {
   // A failed logout leaves the server session alive, so the user stays signed in and is told (a 401 already signs out).
   const signOut = () => api.post("/auth/logout").then(() => setPrincipal(null), (err) => toast({ type: "error", title: "Çıkış yapılamadı", desc: errorMessage(err) }));
 
+  // An activation link works whoever is signed in here and never signs anyone in (M18).
+  if (window.location.pathname === "/sifre-belirle") return <SetPasswordPage />;
   if (me.isPending) return null;
   if (me.isError) return <AuthScreen><div className="login-card" role="alert"><h1>Sunucuya ulaşılamıyor</h1><p className="muted">Sayfayı yenileyin.</p></div></AuthScreen>;
   if (!me.data) return <LoginPage onSignedIn={setPrincipal} />;

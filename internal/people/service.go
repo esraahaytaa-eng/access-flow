@@ -62,6 +62,7 @@ type Employee struct {
 	Roles              []string     `json:"roles"`
 	AdminGroups        []auth.Group `json:"adminGroups"`
 	MustChangePassword bool         `json:"mustChangePassword"`
+	HasPassword        bool         `json:"hasPassword"` // false until the employee activates (M18)
 	Termination        *Termination `json:"termination"`
 	Version            int          `json:"version"`
 	CreatedAt          time.Time    `json:"createdAt"`
@@ -86,7 +87,7 @@ type basicEmployee struct {
 
 const selectEmployees = `
 	SELECT e.id, e.email, e.full_name, e.department, e.job_title, e.manager_id, e.status, e.version, e.created_at,
-	       COALESCE(c.is_temporary, false),
+	       COALESCE(c.is_temporary, false), c.employee_id IS NOT NULL,
 	       ARRAY(SELECT r.role FROM role_assignments r WHERE r.employee_id = e.id AND r.valid_to IS NULL ORDER BY r.role),
 	       ` + auth.OpenGroupsJSON + `,
 	       CASE WHEN e.termination_at IS NOT NULL THEN json_build_object('at', e.termination_at, 'reason', e.termination_reason,
@@ -96,7 +97,7 @@ const selectEmployees = `
 func scanEmployee(row pgx.Row) (Employee, error) {
 	var e Employee
 	err := row.Scan(&e.ID, &e.Email, &e.FullName, &e.Department, &e.JobTitle, &e.ManagerID, &e.Status, &e.Version,
-		&e.CreatedAt, &e.MustChangePassword, &e.Roles, &e.AdminGroups, &e.Termination)
+		&e.CreatedAt, &e.MustChangePassword, &e.HasPassword, &e.Roles, &e.AdminGroups, &e.Termination)
 	return e, err
 }
 
@@ -113,82 +114,75 @@ type NewEmployee struct {
 	Email, FullName      string
 	Department, JobTitle *string
 	ManagerID            *uuid.UUID
-	// SeedPassword gives a seeded employee this permanent password instead of a temporary
-	// one. Set only by the demo seed; never read from HTTP input.
+	// Seed marks an employee the demo seed creates: it gets SeedPassword as a permanent
+	// password if set, otherwise no credential, and never an activation link (M18). Set only
+	// by the demo seed; never read from HTTP input.
+	Seed         bool
 	SeedPassword string
 }
 
-// CreateEmployee creates an active employee. Unless SeedPassword is set it returns a
-// temporary password (72 hours, must be changed), shown to the caller once (F4).
-func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in NewEmployee) (Employee, string, error) {
+// CreateEmployee creates an active employee and sends them an activation link through the
+// Mock Email Outbox (F4, M18); a seeded employee gets none.
+func (s *Service) CreateEmployee(ctx context.Context, actor auth.Principal, in NewEmployee) (Employee, error) {
 	if !canManageEmployees(actor) {
-		return Employee{}, "", platform.ErrForbidden
+		return Employee{}, platform.ErrForbidden
 	}
 	email, err := auth.NormalizeEmail(in.Email)
 	if err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
 	name, err := cleanName(in.FullName)
 	if err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
 	department, err := CleanText(in.Department, "department")
 	if err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
 	jobTitle, err := CleanText(in.JobTitle, "jobTitle")
 	if err != nil {
-		return Employee{}, "", err
+		return Employee{}, err
 	}
-	password, temporary := in.SeedPassword, false
-	if password != "" {
-		if err := auth.ValidatePassword(password); err != nil {
-			return Employee{}, "", err
+	var hash string
+	if in.SeedPassword != "" {
+		if err := auth.ValidatePassword(in.SeedPassword); err != nil {
+			return Employee{}, err
 		}
-	} else if password, err = auth.NewTemporaryPassword(); err != nil {
-		return Employee{}, "", err
-	} else {
-		temporary = true
-	}
-	hash, err := s.auth.Hash(ctx, password)
-	if err != nil {
-		return Employee{}, "", err
+		if hash, err = s.auth.Hash(ctx, in.SeedPassword); err != nil {
+			return Employee{}, err
+		}
 	}
 
 	var created Employee
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		seeded := in.SeedPassword != ""
 		var extra map[string]any
-		if seeded {
+		if in.Seed {
 			extra = map[string]any{"seed": true}
 		}
-		id, err := insertEmployee(ctx, tx, actor, email, name, department, jobTitle, in.ManagerID, seeded, extra)
+		id, err := insertEmployee(ctx, tx, actor, email, name, department, jobTitle, in.ManagerID, in.Seed, extra)
 		if err != nil {
 			return err
 		}
-		var expires *time.Time
-		if temporary {
-			expires = auth.TemporaryPasswordExpiry(now, false)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary, expires_at)
-			VALUES ($1, $2, $3, $4)`, id, hash, temporary, expires); err != nil {
-			return err
+		switch {
+		case hash != "":
+			if _, err := tx.Exec(ctx, "INSERT INTO password_credentials (employee_id, password_hash, is_temporary) VALUES ($1, $2, false)",
+				id, hash); err != nil {
+				return err
+			}
+		case !in.Seed:
+			if err := s.auth.IssueActivation(ctx, tx, now, actorRef(actor), id, "CREATED"); err != nil {
+				return err
+			}
 		}
 		created, err = GetEmployee(ctx, tx, id)
 		return err
 	})
-	if err != nil {
-		return Employee{}, "", err
-	}
-	if !temporary {
-		password = ""
-	}
-	return created, password, nil
+	return created, err
 }
 
 // ImportEmployee creates an active employee in the caller's transaction (the onboarding
-// import, M17), with CreateEmployee's checks but **no credential**: nobody can sign in as
-// them until HR issues a one-time password with the reset (F4). No role is assigned.
+// import, M17), with CreateEmployee's checks; the import then issues the activation link
+// (M18). No role is assigned.
 func ImportEmployee(ctx context.Context, tx pgx.Tx, actor auth.Principal, in NewEmployee, details map[string]any) (uuid.UUID, error) {
 	if !canManageEmployees(actor) {
 		return uuid.Nil, platform.ErrForbidden
@@ -381,21 +375,14 @@ func SameID(a, b *uuid.UUID) bool {
 
 func SameText(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
-// ResetPassword gives an active employee a new temporary password (72 hours), ends their
-// sessions and clears a lockout (F4, A4). The password is returned once, never stored in clear.
-func (s *Service) ResetPassword(ctx context.Context, actor auth.Principal, id uuid.UUID) (string, error) {
+// IssueActivationLink sends an active employee a new activation link (F4, M18): earlier links,
+// the current password and every session end at once, and a lockout is cleared. Nothing is
+// returned; the link goes only to the Mock Email Outbox.
+func (s *Service) IssueActivationLink(ctx context.Context, actor auth.Principal, id uuid.UUID) error {
 	if !canManageEmployees(actor) {
-		return "", platform.ErrForbidden
+		return platform.ErrForbidden
 	}
-	password, err := auth.NewTemporaryPassword()
-	if err != nil {
-		return "", err
-	}
-	hash, err := s.auth.Hash(ctx, password)
-	if err != nil {
-		return "", err
-	}
-	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+	return platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		target, err := LockEmployee(ctx, tx, id)
 		if err != nil {
 			return err
@@ -406,29 +393,8 @@ func (s *Service) ResetPassword(ctx context.Context, actor auth.Principal, id uu
 		if target.Status != "ACTIVE" {
 			return errNotActive
 		}
-		if err := issueTemporaryPassword(ctx, tx, now, id, hash); err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "PASSWORD_RESET", Entity: "employee",
-			EntityID: &id, SubjectID: &id})
+		return s.auth.IssueActivation(ctx, tx, now, actorRef(actor), id, "RESET")
 	})
-	if err != nil {
-		return "", err
-	}
-	return password, nil
-}
-
-// issueTemporaryPassword sets a 72-hour temporary password, ends every session and clears a
-// lockout (A4).
-func issueTemporaryPassword(ctx context.Context, tx pgx.Tx, now time.Time, id uuid.UUID, hash string) error {
-	if _, err := tx.Exec(ctx, `INSERT INTO password_credentials (employee_id, password_hash, is_temporary, expires_at, updated_at)
-		VALUES ($1, $2, true, $3, $4)
-		ON CONFLICT (employee_id) DO UPDATE SET password_hash = $2, is_temporary = true, expires_at = $3, updated_at = $4`,
-		id, hash, auth.TemporaryPasswordExpiry(now, false), now); err != nil {
-		return err
-	}
-	_, err := tx.Exec(ctx, "UPDATE employees SET token_version = token_version + 1, failed_login_count = 0, locked_until = NULL WHERE id = $1", id)
-	return err
 }
 
 // LockEmployee loads an employee under a row lock (A9: one change to a person at a time).

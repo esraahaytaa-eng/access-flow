@@ -127,6 +127,48 @@ func TestOneEmailPerSubmission(t *testing.T) {
 	testutil.RequireStatus(t, w.get(w.dev.c, "/api/v1/email-outbox"), http.StatusForbidden, "forbidden")
 }
 
+// Activation emails (M18) are listed only to Super Admins, never with their link.
+func TestActivationEmailsInTheOutbox(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	hr := w.hr()
+	r := hr.c.Do(http.MethodPost, "/api/v1/employees", map[string]any{"email": "new@example.com", "fullName": "New Person"})
+	testutil.RequireStatus(t, r, http.StatusCreated, "")
+	w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
+
+	for _, c := range []*testutil.Client{w.is1.c} {
+		emails := w.get(c, "/api/v1/email-outbox").Body["emails"].([]any)
+		if len(emails) != 1 || emails[0].(map[string]any)["kind"] != "ACCESS_REQUEST" {
+			t.Fatalf("InfoSec sees %v; want only the access request", emails)
+		}
+	}
+	all := w.get(w.admin.c, "/api/v1/email-outbox")
+	emails := all.Body["emails"].([]any)
+	if len(emails) != 2 {
+		t.Fatalf("Super Admin sees %d emails; want 2", len(emails))
+	}
+	var activation map[string]any
+	for _, e := range emails {
+		if m := e.(map[string]any); m["kind"] == "ACTIVATION" {
+			activation = m
+		}
+	}
+	if activation == nil || activation["linkAvailable"] != true || activation["requestId"] != nil ||
+		activation["recipient"].(map[string]any)["fullName"] != "New Person" {
+		t.Fatalf("activation email = %v", activation)
+	}
+	id := uuid.MustParse(activation["recipient"].(map[string]any)["id"].(string))
+	token := testutil.Activate(t, w.admin.c, w.db.App, id, "violet anchor quiet 29")
+	if strings.Contains(string(all.Raw), token) || strings.Contains(string(w.get(w.admin.c, "/api/v1/email-outbox").Raw), token) {
+		t.Fatal("the outbox list contains the token")
+	}
+	for _, e := range w.get(w.admin.c, "/api/v1/email-outbox").Body["emails"].([]any) {
+		if m := e.(map[string]any); m["kind"] == "ACTIVATION" && m["linkAvailable"] != false {
+			t.Fatalf("a used link is still available: %v", m)
+		}
+	}
+}
+
 func TestNoEmailWhenManagerStepGoesToInfoSec(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

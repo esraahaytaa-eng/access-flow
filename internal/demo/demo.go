@@ -224,16 +224,10 @@ func (s *seeder) people(ctx context.Context, adminEmail string, passwords map[st
 	}
 	for _, p := range company {
 		email := p.local + domain
-		password := known[email]
-		if password == "" { // not a demo account: a random permanent password nobody knows
-			var err error
-			if password, err = auth.NewTemporaryPassword(); err != nil {
-				return err
-			}
-		}
 		manager := s.ids[p.manager]
-		e, _, err := s.People.CreateEmployee(ctx, people.SystemActor, people.NewEmployee{Email: email, FullName: p.name,
-			Department: &p.department, JobTitle: &p.title, ManagerID: &manager, SeedPassword: password})
+		// Other employees get no credential and no link (M18); a Super Admin can send one.
+		e, err := s.People.CreateEmployee(ctx, people.SystemActor, people.NewEmployee{Email: email, FullName: p.name,
+			Department: &p.department, JobTitle: &p.title, ManagerID: &manager, Seed: true, SeedPassword: known[email]})
 		if err != nil {
 			return fmt.Errorf("create %s: %w", email, err)
 		}

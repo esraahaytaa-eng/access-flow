@@ -57,30 +57,25 @@ func TestCheckReset(t *testing.T) {
 func TestResetPassword(t *testing.T) {
 	env := newEnv(t)
 	hr, c := env.user("HR_MANAGER")
+	_, admin := env.user("SUPER_ADMIN")
 	target, targetClient := env.user()
 	env.exec("UPDATE employees SET locked_until = now() + interval '10 minutes' WHERE id = $1", target.ID)
 
 	r := c.Do(http.MethodPost, "/api/v1/employees/"+target.ID.String()+"/password-reset", nil)
-	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if cc := r.Header.Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("Cache-Control = %q; want no-store", cc)
-	}
-	password, _ := r.Body["temporaryPassword"].(string)
-	if len(password) != 16 {
-		t.Fatalf("temporaryPassword = %q", password)
+	testutil.RequireStatus(t, r, http.StatusNoContent, "")
+	if len(r.Raw) != 0 {
+		t.Fatalf("body = %q; want none (the link goes only to the Mock Email Outbox)", r.Raw)
 	}
 
+	// The current password and every session end at once (M18 ⚑1).
 	testutil.RequireStatus(t, targetClient.Do(http.MethodGet, "/api/v1/auth/me", nil), http.StatusUnauthorized, "authentication_required")
 	testutil.RequireStatus(t, testutil.NewClient(t, env.srv).Login(target.Email, testutil.Password), http.StatusUnauthorized, "invalid_credentials")
-	r = testutil.NewClient(t, env.srv).Login(target.Email, password) // the lock is cleared too
-	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if r.Body["mustChangePassword"] != true {
-		t.Fatal("reset password is not temporary")
+	if env.count(`SELECT count(*) FROM audit_events WHERE action = 'ACTIVATION_LINK_ISSUED' AND actor_id = $1 AND subject_employee_id = $2
+		AND details->>'reason' = 'RESET'`, hr.ID, target.ID) != 1 {
+		t.Fatal("reset not audited as a RESET link")
 	}
-	if n := env.count(`SELECT count(*) FROM audit_events WHERE action = 'PASSWORD_RESET' AND actor_id = $1 AND subject_employee_id = $2
-		AND details::text NOT LIKE '%' || $3 || '%'`, hr.ID, target.ID, password); n != 1 {
-		t.Fatalf("PASSWORD_RESET events without the password = %d; want 1", n)
-	}
+	testutil.Activate(t, admin, env.db.App, target.ID, "violet anchor quiet 29")
+	testutil.RequireStatus(t, testutil.NewClient(t, env.srv).Login(target.Email, "violet anchor quiet 29"), http.StatusOK, "") // the lock is cleared too
 }
 
 func TestResetPasswordRejects(t *testing.T) {
@@ -104,7 +99,7 @@ func TestResetPasswordRejects(t *testing.T) {
 			testutil.RequireStatus(t, c.Do(http.MethodPost, "/api/v1/employees/"+tc.id.String()+"/password-reset", nil), tc.status, tc.code)
 		})
 	}
-	if n := env.count("SELECT count(*) FROM audit_events WHERE action = 'PASSWORD_RESET'"); n != 0 {
+	if n := env.count("SELECT count(*) FROM audit_events WHERE action = 'ACTIVATION_LINK_ISSUED'"); n != 0 {
 		t.Fatalf("rejected resets were audited: %d", n)
 	}
 	testutil.RequireStatus(t, testutil.NewClient(t, env.srv).Login(infosec.Email, testutil.Password), http.StatusOK, "")
@@ -119,8 +114,7 @@ func TestResetSeesAPrivilegedRoleCommittedWhileWaiting(t *testing.T) {
 	target := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Password: true})
 	err := env.whileLocked(target.ID, "INSERT INTO role_assignments (employee_id, role, valid_from, granted_by) VALUES ($1, 'INFOSEC', now(), $2)",
 		[]any{target.ID, admin.ID}, func() error {
-			_, err := env.svc.ResetPassword(context.Background(), auth.Principal{EmployeeID: hr.ID, Roles: []string{"HR_MANAGER"}}, target.ID)
-			return err
+			return env.svc.IssueActivationLink(context.Background(), auth.Principal{EmployeeID: hr.ID, Roles: []string{"HR_MANAGER"}}, target.ID)
 		})
 	var pe *platform.Error
 	if !errors.As(err, &pe) || pe.Code != "privileged_reset_requires_super_admin" {

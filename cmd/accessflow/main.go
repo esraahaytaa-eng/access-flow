@@ -73,8 +73,25 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(args) > 0 && args[0] == "reset-mail-key" { // explicit recovery of a lost mock email key (M18)
+		n, err := auth.ResetMailKey(ctx, pool, cfg.MockEmailKeyFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%d open activation links revoked; restart the app (docker compose restart app), then issue new links\n", n)
+		return nil
+	}
+	mailKey, err := auth.LoadMailKey(ctx, pool, cfg.MockEmailKeyFile)
+	if errors.Is(err, auth.ErrMailKeyUnavailable) {
+		// The app runs on; activation links can be neither issued nor shown until the reset.
+		slog.Error("activation links unavailable", "err", err,
+			"fix", "docker compose exec app /accessflow reset-mail-key, then docker compose restart app")
+	} else if err != nil {
+		return err
+	}
 	svc, err := auth.NewService(pool, auth.Options{Secret: secret, SecureCookies: cfg.SecureCookies,
-		BootstrapFile: cfg.BootstrapFile, CompanyTimezone: cfg.CompanyTimezone, Logger: slog.Default()})
+		BootstrapFile: cfg.BootstrapFile, CompanyTimezone: cfg.CompanyTimezone, Logger: slog.Default(), MailKey: mailKey,
+		LoginRateLimit: cfg.LoginRateLimit})
 	if err != nil {
 		return err
 	}
@@ -172,6 +189,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 			}
 			r.Group(func(r chi.Router) {
 				r.Use(svc.RequireSession)
+				svc.RegisterActivations(r)
 				peopleSvc.Register(r)
 				catalogSvc.Register(r)
 				requestsSvc.Register(r)
@@ -179,7 +197,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 				notify.Register(r, pool)
 				reviews.NewService(pool).Register(r)
 				explorer.NewService(pool, loc).Register(r)
-				onboarding.NewService(pool).Register(r)
+				onboarding.NewService(pool, svc).Register(r)
 			})
 		})
 	})

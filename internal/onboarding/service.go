@@ -33,9 +33,14 @@ var (
 )
 
 // Service serves the onboarding workbook: template, preview and import (Super Admin only).
-type Service struct{ pool *pgxpool.Pool }
+type Service struct {
+	pool *pgxpool.Pool
+	auth *auth.Service // issues the imported employees' activation links (M18)
+}
 
-func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
+func NewService(pool *pgxpool.Pool, authSvc *auth.Service) *Service {
+	return &Service{pool: pool, auth: authSvc}
+}
 
 func canOnboard(actor auth.Principal) error {
 	if !actor.HasRole("SUPER_ADMIN") {
@@ -110,7 +115,7 @@ func (s *Service) Import(ctx context.Context, actor auth.Principal, fileName str
 		if len(res.Plan.Problems) > 0 {
 			return errWorkbookInvalid
 		}
-		report, err := apply(ctx, tx, now, actor, fileName, res.Plan, snap)
+		report, err := apply(ctx, tx, now, s.auth, actor, fileName, res.Plan, snap)
 		res.Report = report
 		return err
 	})
@@ -123,7 +128,7 @@ func (s *Service) Import(ctx context.Context, actor auth.Principal, fileName str
 	return res, nil
 }
 
-func apply(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, fileName string, plan Plan, snap Snapshot) (*access.ImportReport, error) {
+func apply(ctx context.Context, tx pgx.Tx, now time.Time, authSvc *auth.Service, actor auth.Principal, fileName string, plan Plan, snap Snapshot) (*access.ImportReport, error) {
 	report := &access.ImportReport{ID: uuid.Must(uuid.NewV7()), Source: "WORKBOOK", FileName: &fileName,
 		ImportedBy: access.Person{ID: actor.EmployeeID, FullName: actor.FullName}, ImportedAt: now, Rejected: []access.Rejected{}}
 
@@ -146,6 +151,9 @@ func apply(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, 
 		id, err := people.ImportEmployee(ctx, tx, actor, people.NewEmployee{Email: e.Email, FullName: e.FullName,
 			Department: optional(e.Department), JobTitle: optional(e.JobPosition), ManagerID: manager},
 			map[string]any{"importId": report.ID, "sheet": SheetEmployees, "row": e.Row})
+		if err == nil {
+			err = authSvc.IssueActivation(ctx, tx, now, &actor.EmployeeID, id, "IMPORTED")
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s row %d: %w", SheetEmployees, e.Row, err)
 		}
