@@ -280,7 +280,7 @@ func (s *Service) decide(ctx context.Context, actor auth.Principal, stepID uuid.
 		if err != nil {
 			return err
 		}
-		if err := access.StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if actor, err = access.CurrentActor(ctx, tx, actor); err != nil { // a pool step needs InfoSec now
 			return err
 		}
 		if step.Status == to && step.DecidedBy != nil && *step.DecidedBy == actor.EmployeeID {
@@ -388,8 +388,11 @@ func (s *Service) Reassign(ctx context.Context, actor auth.Principal, stepID uui
 		if err != nil {
 			return err
 		}
-		if err := access.StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if actor, err = access.CurrentActor(ctx, tx, actor); err != nil {
 			return err
+		}
+		if !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") { // removed while the request waited
+			return platform.ErrForbidden
 		}
 		if it.excluded()[actor.EmployeeID] != "" { // nobody picks who decides an item they are part of
 			return errSeparation
@@ -471,8 +474,11 @@ func (s *Service) Override(ctx context.Context, actor auth.Principal, stepID uui
 		if err != nil {
 			return err
 		}
-		if err := access.StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if actor, err = access.CurrentActor(ctx, tx, actor); err != nil {
 			return err
+		}
+		if !actor.HasRole("SUPER_ADMIN") { // removed while the request waited
+			return platform.ErrForbidden
 		}
 		if it.excluded()[actor.EmployeeID] != "" {
 			return errSeparation

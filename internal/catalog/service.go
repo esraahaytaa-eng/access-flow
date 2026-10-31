@@ -16,6 +16,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
+	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 )
 
 var (
@@ -247,6 +248,11 @@ func (s *Service) UpdateTool(ctx context.Context, actor auth.Principal, id uuid.
 		}
 		if err != nil {
 			return err
+		}
+		if in.OwnerID != cur.OwnerID {
+			if err := reviews.OwnerChanged(ctx, tx, actorRef(actor), id, in.OwnerID); err != nil {
+				return err
+			}
 		}
 		return audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "TOOL_UPDATED", Entity: "tool", EntityID: &id, Details: changes})
 	})

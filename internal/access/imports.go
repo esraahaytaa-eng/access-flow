@@ -213,7 +213,9 @@ func (s *Service) importHoldings(ctx context.Context, actor auth.Principal, sour
 	report := ImportReport{ID: uuid.Must(uuid.NewV7()), Source: source, FileName: fileName,
 		ImportedBy: Person{actor.EmployeeID, actor.FullName}, Rejected: rejected}
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		// fn may run again (platform.InTx): every count starts from zero on each run.
 		report.ImportedAt, report.Imported, report.Orphans, report.Terminated, report.Skipped = now, 0, 0, 0, 0
+		report.Verified, report.Unverified = nil, nil
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", ImportLockKey); err != nil {
 			return err
 		}
@@ -438,8 +440,10 @@ func (s *Service) orphanAction(ctx context.Context, actor auth.Principal, id uui
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", id); err != nil {
 			return err
 		}
-		if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if p, err := CurrentActor(ctx, tx, actor); err != nil {
 			return err
+		} else if !p.HasRole("INFOSEC") { // removed while the request waited
+			return platform.ErrForbidden
 		}
 		var current int
 		var isOpen bool

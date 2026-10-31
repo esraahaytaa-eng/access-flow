@@ -1176,6 +1176,9 @@ p {
   padding:16px;
   overflow-y:auto;
 }
+.modal:focus, .drawer:focus {
+  outline:none; /* focused only to start keyboard navigation inside; its controls keep their focus ring */
+}
 .modal {
   background:var(--surface);
   border-radius:20px;

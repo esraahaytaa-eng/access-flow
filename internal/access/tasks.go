@@ -219,6 +219,18 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 	return ts[0], nil
 }
 
+// CurrentActor is StillActive for an action that needs a role: after the actor's lock it
+// re-reads their open roles, so a role removed while the request waited (RemoveRole locks
+// the employee) no longer counts. The session check read the roles before any lock.
+func CurrentActor(ctx context.Context, tx pgx.Tx, actor auth.Principal) (auth.Principal, error) {
+	if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		return actor, err
+	}
+	err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT role FROM role_assignments WHERE employee_id = $1 AND valid_to IS NULL ORDER BY role)`,
+		actor.EmployeeID).Scan(&actor.Roles)
+	return actor, err
+}
+
 // StillActive re-checks the actor under the caller's locks: the session was checked before
 // them, and a suspension or termination committing meanwhile ends their authority (D7).
 func StillActive(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {

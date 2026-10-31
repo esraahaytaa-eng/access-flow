@@ -34,7 +34,7 @@ Errors are JSON: `{"error": "<code>"}`, plus `"field"` for a validation error an
 | `POST /api/v1/admin-groups/{id}/members` · `DELETE …/members/{employeeId}` | Super Admin: add `{employeeId}` or remove a member; never yourself |
 | `GET /api/v1/tools` | the catalog: requestable tools and levels with their approval steps, owner, admin group and `recommended` (the viewer's starter package); Super Admin and InfoSec also see retired ones, with `status` and `version` |
 | `POST /api/v1/tools` | Super Admin: `{name, fulfillmentMethod, ownerId, adminGroupId}`; the method (`API`, `MANUAL`, `VENDOR`) cannot change later; the owner must be active |
-| `PUT /api/v1/tools/{id}` | Super Admin: `{name, ownerId, adminGroupId, version}`, all required |
+| `PUT /api/v1/tools/{id}` | Super Admin: `{name, ownerId, adminGroupId, version}`, all required. A new owner takes over the tool's undecided review items in the same transaction (their own access goes to InfoSec; decided items stay), each audited as `REVIEW_ITEM_REROUTED` (D8 note 2026-10-31) |
 | `POST /api/v1/tools/{id}/levels` | Super Admin: `{name, requiresToolOwner, requiresInfosec}`; Manager is always a step; notifies InfoSec |
 | `PUT /api/v1/tools/{id}/levels/{levelId}` | Super Admin: `{name, requiresToolOwner, requiresInfosec, version}`, all required; a step change notifies InfoSec |
 | `POST /api/v1/tools/{id}/retire` · `POST …/levels/{levelId}/retire` | Super Admin: `{version}`; one-way; retired tools and levels are no longer requestable |

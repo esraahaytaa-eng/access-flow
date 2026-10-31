@@ -226,7 +226,7 @@ func decide(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal,
 		JOIN employees e ON e.id = g.employee_id
 		WHERE i.id = $1 FOR UPDATE OF i`, id).Scan(&grant, &employee, &reviewer, &current, &isOpen, &finding, &escalated, &infosec, &flags, &terminated)
 	if err == nil {
-		err = access.StillActive(ctx, tx, actor.EmployeeID)
+		actor, err = access.CurrentActor(ctx, tx, actor) // InfoSec or Super Admin as now committed
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return platform.ErrNotFound

@@ -3016,7 +3016,7 @@
         ],
         "operationId": "updateTool",
         "summary": "Update a tool",
-        "description": "Super Admin only. Every field is required; an unchanged edit returns the tool without a new version. A new owner must be ACTIVE. Audited as `TOOL_UPDATED`.",
+        "description": "Super Admin only. Every field is required; an unchanged edit returns the tool without a new version. A new owner must be ACTIVE. Audited as `TOOL_UPDATED`. A new owner takes over the tool's undecided review items in the same transaction (the new owner's own access goes to InfoSec; decided items keep their reviewer), each audited as `REVIEW_ITEM_REROUTED`.",
         "parameters": [
           {
             "name": "id",

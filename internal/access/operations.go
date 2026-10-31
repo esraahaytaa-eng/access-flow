@@ -144,8 +144,10 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			Scan(&typ, &status, &current); err != nil {
 			return err
 		}
-		if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if p, err := CurrentActor(ctx, tx, actor); err != nil {
 			return err
+		} else if !isMember && !p.HasRole("SUPER_ADMIN") { // removed while the request waited
+			return platform.ErrForbidden
 		}
 		var employeeStatus string // an orphan account's grant has no employee
 		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", employee).Scan(&employeeStatus); err != nil && !errors.Is(err, pgx.ErrNoRows) {

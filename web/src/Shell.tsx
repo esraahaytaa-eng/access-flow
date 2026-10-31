@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import { api } from "./api/client";
 import { useAdminHealth, useDemo, useNotifications } from "./api/queries";
@@ -85,7 +85,9 @@ function notificationText(n: Notification, timeZone: string): string {
     case "SUPER_ADMIN_OVERRIDE": return "Bir onay adımı Süper Yönetici tarafından geçersiz kılındı.";
     case "APPROVAL_ASSIGNED": return `Size bir onay adımı atandı${d.reason ? `: ${d.reason}` : "."}`;
     case "GRANTS_RETAINED_ON_TRANSFER": return `${d.employee} ekibinize transfer edildi; ${(d.grants as unknown[] | undefined)?.length ?? 0} erişimi korundu.`;
-    case "REVIEW_STARTED": return `Erişim denetimi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
+    case "REVIEW_STARTED": return d.toolOwnerChanged
+      ? `${d.tool} aracının sahipliği size geçti; incelemeniz gereken ${d.items} denetim kalemi size yönlendirildi.`
+      : `Erişim denetimi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
     case "REVIEW_REMINDER": return "Yanıt bekleyen bir inceleme kaleminiz var (gün 7 hatırlatması).";
     case "REVIEW_ESCALATED": return "Yanıtlanmamış inceleme kalemleri Bilgi Güvenliğine eskale edildi.";
     case "SUPER_ADMIN_NOMINATED": return `${d.nominee} Süper Yönetici olarak önerildi; yetkilendirmeniz bekleniyor.`;
@@ -152,12 +154,16 @@ export function useRoleLabels() {
 function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
   const [mfa, setMfa] = useState(false);
+  const toggle = useRef<HTMLButtonElement>(null);
+  // The menu item that opens the modal disappears with the menu, so the modal returns focus to the toggle.
+  const openMfa = () => { setOpen(false); toggle.current?.focus(); setMfa(true); };
+  const closeMfa = () => setMfa(false);
   const { me } = useSession();
   const navigate = useNavigate();
   const labels = useRoleLabels();
   return (
     <div style={{ position: "relative" }}>
-      <button type="button" className="btn btn-ghost" style={{ height: 40, paddingLeft: 6 }} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
+      <button type="button" ref={toggle} className="btn btn-ghost" style={{ height: 40, paddingLeft: 6 }} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
         <Avatar person={me} />
         <span style={{ textAlign: "left", lineHeight: 1.2 }} className="hide-sm">
           <span style={{ display: "block", fontWeight: 600 }}>{me.fullName}</span>
@@ -173,13 +179,13 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
         <div style={{ padding: 6 }}>
           <button type="button" className="menu-item" onClick={() => { setOpen(false); navigate("/password"); }}><Icon name="lock" />Parola değiştir</button>
           {/* Planned, not implemented: nothing is enabled or stored (M18; see README). */}
-          <button type="button" className="menu-item muted" onClick={() => { setOpen(false); setMfa(true); }}>
+          <button type="button" className="menu-item muted" onClick={openMfa}>
             <Icon name="key" /><span style={{ flex: 1 }}>Google Authenticator ile iki adımlı doğrulama</span><Badge tone="outline">Planlanıyor</Badge>
           </button>
           <button type="button" className="menu-item" onClick={() => { setOpen(false); onSignOut(); }}><Icon name="logout" />Çıkış yap</button>
         </div>
       </Popover>
-      <Modal open={mfa} onClose={() => setMfa(false)} title="İki adımlı doğrulama" footer={<Button onClick={() => setMfa(false)}>Kapat</Button>}>
+      <Modal open={mfa} onClose={closeMfa} title="İki adımlı doğrulama" footer={<Button onClick={closeMfa}>Kapat</Button>}>
         <p>Bu özellik geliştirme aşamasındadır.</p>
       </Modal>
     </div>

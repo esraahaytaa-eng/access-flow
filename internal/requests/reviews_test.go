@@ -1,10 +1,13 @@
 package requests
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
@@ -353,5 +356,97 @@ func TestTerminatedEmployeeAccessCannotBeKept(t *testing.T) {
 	kept = w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
 	if kept["decision"] != "KEEP" || kept["grantStatus"] != "REVOKED" || w.audits("REVIEW_KEPT") != 1 {
 		t.Fatalf("history after removal: %v, grant %v, REVIEW_KEPT %d", kept["decision"], kept["grantStatus"], w.audits("REVIEW_KEPT"))
+	}
+}
+
+// Regression (review P2-2): a new tool owner takes over the tool's undecided review items, in
+// the owner change's transaction; the former owner no longer decides them. Their own access
+// goes to InfoSec, and a decided item keeps its reviewer and decision (D8 note 2026-10-31).
+func TestOwnerChangeMovesUndecidedReviewItems(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	w.approved(w.jiraViewer)
+	tl.drain(t)
+	heir, kept := w.person(testutil.EmployeeSpec{}), w.person(testutil.EmployeeSpec{})
+	w.reported(heir.ID, w.jiraViewer, heir.Email)
+	w.reported(kept.ID, w.jiraViewer, kept.Email)
+	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
+	testutil.RequireStatus(t, decideReview(w.owner, w.reviewItem(w.owner, kept.ID, w.jiraViewer), "KEEP", ""), http.StatusOK, "")
+	devItem := w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
+
+	var group string
+	if err := w.db.App.QueryRow(context.Background(), "SELECT admin_group_id::text FROM tools WHERE id = $1", w.jira).Scan(&group); err != nil {
+		t.Fatal(err)
+	}
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPut, "/api/v1/tools/"+w.jira.String(),
+		map[string]any{"name": "Jira", "ownerId": heir.ID, "adminGroupId": group, "version": 1}), http.StatusOK, "")
+
+	reviewer := func(employee uuid.UUID) (id *uuid.UUID, note *string) {
+		t.Helper()
+		if err := w.db.App.QueryRow(context.Background(), `SELECT i.reviewer_id, i.routing_note FROM review_items i
+			JOIN grants g ON g.id = i.grant_id WHERE g.employee_id = $1 AND g.access_level_id = $2`, employee, w.jiraViewer).Scan(&id, &note); err != nil {
+			t.Fatal(err)
+		}
+		return id, note
+	}
+	if id, _ := reviewer(w.dev.ID); id == nil || *id != heir.ID {
+		t.Fatalf("dev's item reviewer = %v; want the new owner", id)
+	}
+	if id, note := reviewer(heir.ID); id != nil || note == nil || *note != "own access" {
+		t.Fatalf("new owner's own item: reviewer %v, note %v; want the InfoSec pool, own access", id, note)
+	}
+	if id, _ := reviewer(kept.ID); id == nil || *id != w.owner.ID {
+		t.Fatalf("decided item reviewer = %v; want the former owner, unchanged", id)
+	}
+	if n := w.count("SELECT count(*) FROM audit_events WHERE action = 'REVIEW_ITEM_REROUTED'"); n != 2 {
+		t.Fatalf("REVIEW_ITEM_REROUTED events = %d; want 2", n)
+	}
+
+	testutil.RequireStatus(t, decideReview(w.owner, devItem, "KEEP", ""), http.StatusNotFound, "not_found")
+	testutil.RequireStatus(t, decideReview(heir, w.reviewItem(w.is1, heir.ID, w.jiraViewer), "KEEP", ""), http.StatusForbidden, "separation_of_duties")
+	testutil.RequireStatus(t, decideReview(heir, w.reviewItem(heir, w.dev.ID, w.jiraViewer), "KEEP", ""), http.StatusOK, "")
+	if w.count(`SELECT count(*) FROM notifications WHERE recipient_id = $1 AND kind = 'REVIEW_STARTED'
+		AND details->>'items' = '1' AND details->>'tool' = 'Jira' AND details->>'toolOwnerChanged' = 'true'`, heir.ID) != 1 {
+		t.Fatal("the new owner was not told about the one review item moved to them")
+	}
+}
+
+// An owner change that waits for a review item a decision holds sees the decision once it
+// commits: the decided item keeps its reviewer and is not re-routed.
+func TestOwnerChangeSeesADecisionCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	w.approved(w.jiraViewer)
+	tl.drain(t)
+	heir := w.person(testutil.EmployeeSpec{})
+	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
+	it := w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
+	var group string
+	if err := w.db.App.QueryRow(context.Background(), "SELECT admin_group_id::text FROM tools WHERE id = $1", w.jira).Scan(&group); err != nil {
+		t.Fatal(err)
+	}
+
+	err := testutil.WhileLocked(t, w.db.App, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE review_items SET decision = 'KEEP', decided_by = $2, decided_at = now(), version = version + 1
+			WHERE id = $1`, it["id"], w.owner.ID)
+		return err
+	}, func() error {
+		r := w.admin.c.Do(http.MethodPut, "/api/v1/tools/"+w.jira.String(),
+			map[string]any{"name": "Jira", "ownerId": heir.ID, "adminGroupId": group, "version": 1})
+		if r.Status != http.StatusOK {
+			return fmt.Errorf("owner change = %d %v", r.Status, r.Body)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count("SELECT count(*) FROM review_items WHERE id = $1 AND reviewer_id = $2 AND decision = 'KEEP'", it["id"], w.owner.ID); n != 1 {
+		t.Fatal("the decided item was re-routed")
+	}
+	if n := w.count("SELECT count(*) FROM audit_events WHERE action = 'REVIEW_ITEM_REROUTED'"); n != 0 {
+		t.Fatalf("REVIEW_ITEM_REROUTED events = %d; want 0", n)
 	}
 }
