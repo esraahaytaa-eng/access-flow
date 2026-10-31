@@ -7715,7 +7715,7 @@
         ],
         "operationId": "listEmailOutbox",
         "summary": "Mock Email Outbox",
-        "description": "Any signed-in user: the newest 100 simulated emails they may see. `ACCESS_REQUEST` emails (O2) to InfoSec and Super Admin; `ACTIVATION` emails (M18) only to Super Admins; `ROLE_ACCEPTANCE` emails (D2 succession) only to their recipient. No email ever contains a link or token; it is revealed separately (`…/activation-link`, `…/role-link`).",
+        "description": "Super Admin (O2 note 2026-10-31): the newest 100 simulated emails: `ACCESS_REQUEST` (O2) and `ACTIVATION` (M18) emails, and their own `ROLE_ACCEPTANCE` emails. Anyone else sees only their own `ROLE_ACCEPTANCE` email (D2 succession) while its nomination is open and unexpired, and is refused without one; an Auditor is always refused. No email ever contains a link or token; it is revealed separately (`…/activation-link`, `…/role-link`).",
         "responses": {
           "200": {
             "description": "The emails.",
@@ -7738,7 +7738,7 @@
             }
           },
           "403": {
-            "description": "`password_change_required`.",
+            "description": "`password_change_required`; `forbidden`: not a Super Admin and no pending role-acceptance email of one's own, or an Auditor.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8343,13 +8343,18 @@
           "companyTimezone": {
             "type": "string",
             "description": "IANA time zone the UI displays times in (e.g. `Europe/Istanbul`)."
+          },
+          "roleOffer": {
+            "type": "boolean",
+            "description": "True while a Super Admin nominee's role-acceptance link waits in their Mock Email Outbox, so the UI shows the outbox to them (O2 note 2026-10-31). Never true for an Auditor."
           }
         },
         "required": [
           "employee",
           "adminGroups",
           "mustChangePassword",
-          "companyTimezone"
+          "companyTimezone",
+          "roleOffer"
         ],
         "description": "The signed-in employee (auth principalBody), returned by login, `/auth/me` and password change."
       },

@@ -126,6 +126,48 @@ describe("navigation", () => {
     window.history.pushState({}, "", "/");
   });
 
+  it("shows E-posta kutusu to a Super Admin and to a nominee with a role offer only (O2 note 2026-10-31)", async () => {
+    const person = (roles: string[], over: Record<string, unknown> = {}) => principal({ employee: { id: "e1", email: "a@b.co", fullName: "Ayşe Kaya", roles }, ...over });
+    const exceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [], reviewFindings: [], reviewFindingsTotal: 0, orphanAccounts: [],
+      totals: { failedOperations: 0, unroutableSteps: 0, overlaps: 0, suspensionGaps: 0, securityRevocations: 0, staleGrants: 0, orphanAccounts: 0 } };
+    const admin = { "GET /exceptions": exceptions, "GET /fulfillment-tasks": { tasks: [], counts: { canAct: 0 } } };
+    const denied = [person([]), person(["HR_MANAGER"]), person(["INFOSEC"]), person([], { adminGroups: [{ id: "g1", name: "IT" }] })];
+    for (const me of denied) {
+      window.history.pushState({}, "", "/mailbox");
+      const calls = fakeServer({ ...basics, ...admin, "GET /auth/me": me });
+      const { unmount } = render(<App />);
+      expect(await screen.findByText("Bu sayfaya erişiminiz yok")).toBeTruthy();
+      expect(screen.getByRole("navigation").textContent).not.toContain("E-posta kutusu");
+      expect(calls.some((c) => c.path === "/email-outbox")).toBe(false);
+      unmount();
+    }
+    for (const me of [person(["SUPER_ADMIN"]), person([], { roleOffer: true })]) {
+      window.history.pushState({}, "", "/mailbox");
+      fakeServer({ ...basics, ...admin, "GET /auth/me": me, "GET /email-outbox": { emails: [] } });
+      const { unmount } = render(<App />);
+      expect(await screen.findByText("E-posta yok")).toBeTruthy();
+      expect(screen.getByRole("navigation").textContent).toContain("E-posta kutusu");
+      unmount();
+    }
+    window.history.pushState({}, "", "/");
+  });
+
+  it("re-reads the session when a nominee opens the role-offer notification, so the outbox opens", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    const offered = { id: "n1", kind: "SUPER_ADMIN_ROLE_OFFERED", entity: "employee", entityId: "e1", details: {}, createdAt: new Date().toISOString(), readAt: null };
+    window.history.pushState({}, "", "/");
+    fakeServer({ ...basics, "GET /auth/me": () => ({ body: principal({ roleOffer: reads++ > 0 }) }), "GET /notifications": { notifications: [offered] },
+      "POST /notifications/n1/read": {}, "GET /email-outbox": { emails: [] } });
+    render(<App />);
+    expect((await screen.findByRole("navigation")).textContent).not.toContain("E-posta kutusu");
+    await user.click(screen.getByRole("button", { name: /Bildirimler/ }));
+    await user.click(await screen.findByText(/Kabul bağlantısı e-posta kutunuzda/));
+    expect(await screen.findByText("E-posta yok")).toBeTruthy();
+    expect(screen.getByRole("navigation").textContent).toContain("E-posta kutusu");
+    window.history.pushState({}, "", "/");
+  });
+
   it("opens the admin pages for a Super Admin only", async () => {
     window.history.pushState({}, "", "/settings");
     fakeServer({ ...basics, "GET /auth/me": principal(), "GET /admin-groups": { groups: [] } });

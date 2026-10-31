@@ -6,7 +6,7 @@ import { useSession } from "../session";
 import { Badge, Button, Callout, EmptyState, Modal, PageHeader, TableSkeleton, useAction } from "../ui/components";
 import { formatDateTime, relativeTime } from "../ui/format";
 
-/** The local Mock Email Outbox as a page for everyone: each user sees the emails the server lets them see. */
+/** The local Mock Email Outbox: a Super Admin page, and a nominee's own role-acceptance email (O2 note 2026-10-31). */
 export function MailboxPage() {
   return <><PageHeader title="E-posta kutusu" sub="Yerel demo için simüle edilen e-postalar. Gerçek e-posta gönderilmez." /><Mailbox /></>;
 }
@@ -18,7 +18,7 @@ export function Mailbox() {
   const emails = query.data ?? [];
   return (
     <div className="stack">
-      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez; bu kutu yalnızca yerel demo içindir. Yönetici onayı gerektiren talep bildirimlerini Bilgi Güvenliği, Süper Yönetici ve Denetçi görür. Etkinleştirme bağlantılarını yalnızca Süper Yönetici, her görüntüleme denetim kaydına yazılarak görebilir. Kimse kendi bağlantısını görüntüleyemez; Süper Yönetici veya Bilgi Güvenliği hesabının bağlantısını, sıfırlamayı yapmayan başka bir Süper Yönetici görür ve diğer Süper Yöneticiler bilgilendirilir. Süper Yönetici rolü kabul bağlantısını yalnızca alıcısı görür.</Callout>
+      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez; bu kutu yalnızca yerel demo içindir. Bu kutuyu yalnızca Süper Yönetici görür; Süper Yönetici adayı yalnızca kendi rol kabul e-postasını görür. Etkinleştirme bağlantılarının her görüntülenmesi denetim kaydına yazılır. Kimse kendi bağlantısını görüntüleyemez; Süper Yönetici veya Bilgi Güvenliği hesabının bağlantısını, sıfırlamayı yapmayan başka bir Süper Yönetici görür ve diğer Süper Yöneticiler bilgilendirilir. Süper Yönetici rolü kabul bağlantısını yalnızca alıcısı görür.</Callout>
       {query.isPending ? <TableSkeleton /> : emails.length === 0 ? <div className="card"><EmptyState icon="mail" title="E-posta yok" /></div> : (
         <div className="card">
           {emails.map((m) => (

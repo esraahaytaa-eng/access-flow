@@ -19,6 +19,8 @@ export type Principal = {
   mustChangePassword: boolean;
   /** IANA name, e.g. "Europe/Istanbul"; show times in it. */
   companyTimezone: string;
+  /** A Super Admin nominee's role-acceptance link waits in their Mock Email Outbox (O2 note 2026-10-31). */
+  roleOffer: boolean;
 };
 
 // ---- People -----------------------------------------------------------------------

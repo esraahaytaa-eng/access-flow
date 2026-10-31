@@ -14,6 +14,8 @@ export function useSession() {
     me: p.employee,
     adminGroups: p.adminGroups,
     timezone: p.companyTimezone,
+    /** The Mock Email Outbox holds this nominee's role-acceptance link; it is otherwise a Super Admin screen. */
+    roleOffer: !!p.roleOffer,
     hasRole: (...roles: Role[]) => roles.some((r) => p.employee.roles.includes(r)),
     /** An external auditor reads only the audit evidence (events, point-in-time access, approval evidence), whatever other roles they hold (O7 notes 2026-10-31). */
     auditor: p.employee.roles.includes("AUDITOR"),

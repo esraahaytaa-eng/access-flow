@@ -140,7 +140,8 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleMe(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFrom(r.Context())
-	platform.WriteJSON(w, http.StatusOK, s.principalBody(p))
+	body, err := s.principalBody(r.Context(), p)
+	platform.Respond(w, r, http.StatusOK, body, err)
 }
 
 func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +172,10 @@ func (s *Service) handlePassword(w http.ResponseWriter, r *http.Request) {
 // respondWithSession sets the cookies for a new session and answers like /me.
 func (s *Service) respondWithSession(w http.ResponseWriter, r *http.Request, session Session) {
 	p, err := s.loadPrincipal(r.Context(), session)
+	var body map[string]any
+	if err == nil {
+		body, err = s.principalBody(r.Context(), p)
+	}
 	if err == nil {
 		err = s.setCookies(w, session)
 	}
@@ -178,10 +183,15 @@ func (s *Service) respondWithSession(w http.ResponseWriter, r *http.Request, ses
 		platform.WriteError(w, r, err)
 		return
 	}
-	platform.WriteJSON(w, http.StatusOK, s.principalBody(p))
+	platform.WriteJSON(w, http.StatusOK, body)
 }
 
-func (s *Service) principalBody(p Principal) map[string]any {
+// principalBody is the signed-in principal; roleOffer tells the UI to show the Mock Email Outbox
+// to a Super Admin nominee whose role-acceptance link is waiting there (O2 note 2026-10-31).
+func (s *Service) principalBody(ctx context.Context, p Principal) (map[string]any, error) {
+	var roleOffer bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM email_outbox o JOIN super_admin_nominations n ON n.id = o.nomination_id
+		WHERE o.kind = 'ROLE_ACCEPTANCE' AND o.recipient_id = $1 AND n.status = 'PENDING' AND n.expires_at > now())`, p.EmployeeID).Scan(&roleOffer)
 	return map[string]any{
 		"employee": map[string]any{
 			"id":       p.EmployeeID,
@@ -192,7 +202,8 @@ func (s *Service) principalBody(p Principal) map[string]any {
 		"adminGroups":        p.AdminGroups,
 		"mustChangePassword": p.MustChangePassword,
 		"companyTimezone":    s.companyTimezone,
-	}
+		"roleOffer":          roleOffer && !p.HasRole("AUDITOR"),
+	}, err
 }
 
 func (s *Service) setCookies(w http.ResponseWriter, session Session) error {

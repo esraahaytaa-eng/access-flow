@@ -24,5 +24,6 @@ export const principal = (over: Record<string, unknown> = {}) => ({
   adminGroups: [],
   mustChangePassword: false,
   companyTimezone: "Europe/Istanbul",
+  roleOffer: false,
   ...over,
 });

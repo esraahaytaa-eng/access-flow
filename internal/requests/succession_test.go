@@ -211,14 +211,17 @@ func TestHRSuccessionOfTheLastSuperAdmin(t *testing.T) {
 	testutil.RequireStatus(t, decideNomination(w.is2, n, "authorize"), http.StatusConflict, "nomination_needs_acceptance")
 
 	// The link is in the nominee's own outbox only; HR and InfoSec see the status, never the link.
+	// The nominee, not a Super Admin, sees that one email and nothing else, and /auth/me tells the
+	// menu to show the outbox (O2 note 2026-10-31).
+	if r := w.get(w.dev.c, "/api/v1/auth/me"); r.Body["roleOffer"] != true {
+		t.Fatalf("nominee's roleOffer = %v", r.Body["roleOffer"])
+	}
+	if r := w.get(w.dev.c, "/api/v1/email-outbox"); r.Status != http.StatusOK || len(r.Body["emails"].([]any)) != 1 {
+		t.Fatalf("nominee's outbox = %d %v", r.Status, r.Body)
+	}
 	token := w.roleLink(w.dev)
 	for _, p := range []person{hr, w.is1} {
-		r := w.get(p.c, "/api/v1/email-outbox")
-		for _, m := range r.Body["emails"].([]any) {
-			if m.(map[string]any)["kind"] == "ROLE_ACCEPTANCE" {
-				t.Fatalf("%v sees the role-acceptance email", p.ID)
-			}
-		}
+		testutil.RequireStatus(t, w.get(p.c, "/api/v1/email-outbox"), http.StatusForbidden, "forbidden")
 	}
 	mail := w.count("SELECT count(*) FROM email_outbox WHERE kind = 'ROLE_ACCEPTANCE' AND recipient_id = $1", w.dev.ID)
 	if mail != 1 || w.count("SELECT count(*) FROM audit_events WHERE details::text LIKE '%' || $1 || '%'", token) != 0 {
