@@ -168,3 +168,7 @@ Isolated stack `afqa` (no other workload): 12,005 review items in one campaign (
 | Searches (review, task, team) over the whole list | exact single match | 12–51 ms |
 
 `/access/team/{id}` answers `404` for anyone but the report's manager. Campaign start over 12,005 grants took 8.8 s (PERF-008, accepted). Still capped without paging: orphans (500), failed operations, unroutable steps and overlaps (200 each), and 200 grants per employee (documented in `docs/known-limitations.md`). JIT stays off (PERF-010, `TestNewPoolTurnsJITOff`).
+
+## 10. Follow-up (2026-10-31)
+
+PERF-011: the paged audit log (§9) had stopped using the PERF-007 index; it counted every matching event inside the page query. Fixed, with before/after numbers, in [scale-security-review.md](scale-security-review.md).

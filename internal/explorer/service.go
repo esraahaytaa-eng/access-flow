@@ -121,9 +121,24 @@ func (s *Service) Events(ctx context.Context, actor auth.Principal, f EventFilte
 	if err != nil {
 		return nil, 0, err
 	}
-	rows, _ := s.pool.Query(ctx, eventSelect+`, count(*) OVER ()`+eventFrom+w.SQL()+newestFirst+
-		` LIMIT `+strconv.Itoa(platform.PageSize)+` OFFSET `+strconv.Itoa(offset), w.Args...)
-	events, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) { return scanEvent(row, &total) })
+	page := newestFirst + ` LIMIT ` + strconv.Itoa(platform.PageSize) + ` OFFSET ` + strconv.Itoa(offset)
+	if f.Text != "" {
+		// A text search reads every event anyway, so it counts the matches in the same pass.
+		rows, _ := s.pool.Query(ctx, eventSelect+`, count(*) OVER ()`+eventFrom+w.SQL()+page, w.Args...)
+		events, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) { return scanEvent(row, &total) })
+		return events, total, err
+	}
+	// Otherwise the count is separate (PERF-011): in the page query it made PostgreSQL join and
+	// sort every matching event before cutting the page, instead of walking the time index.
+	// One read-only snapshot keeps the total and the page consistent.
+	err = pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*)`+eventFrom+w.SQL(), w.Args...).Scan(&total); err != nil {
+			return err
+		}
+		rows, _ := tx.Query(ctx, eventSelect+eventFrom+w.SQL()+page, w.Args...)
+		events, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) { return scanEvent(row) })
+		return err
+	})
 	return events, total, err
 }
 
