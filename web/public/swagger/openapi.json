@@ -3,7 +3,7 @@
   "info": {
     "title": "AccessFlow API",
     "version": "1.0.0",
-    "description": "The JSON API of AccessFlow, used by its web UI. **Read-only documentation**: requests cannot be sent from this page.\n\n- **Sessions:** `POST /auth/login` sets the `accessflow_session` cookie (HttpOnly) and the `accessflow_csrf` cookie. Every signed-in `POST`, `PUT` and `DELETE` must send the `X-CSRF-Token` header with the value of the `accessflow_csrf` cookie. Cross-site unsafe requests, sign-in included, are rejected with `403 cross_origin_request`.\n- **Errors** are JSON `{\"error\": \"<code>\"}`, plus `field` for a validation error and `expected` when a value differs from a defined one only in case. Every signed-in operation can return `401 authentication_required`; an unknown `/api` path is `404 not_found`, a wrong method `405 method_not_allowed`, an unexpected failure `500 internal_error`.\n- **Request bodies** are one JSON value of at most 64 KiB (the workbook upload excepted); a malformed body or an unknown key is `400 invalid_json`.\n- **Concurrency:** records that can change carry a `version`; a stale one is `409 version_conflict`.\n- **Auditor:** an account holding `AUDITOR` is an external auditor and reaches only `GET /audit/events`, `GET /audit/events/export` and `GET /audit/filters` (plus `/auth`), whatever other roles it holds; every other operation answers `403 forbidden` (DECISIONS.md O7 note 2026-10-31).\n- **Rules:** the business rules behind each endpoint are in `docs/api.md` and `DECISIONS.md`. Every permission is enforced by the server.\n\nMock email delivery and the demo accounts are for local demonstration only."
+    "description": "The JSON API of AccessFlow, used by its web UI. **Read-only documentation**: requests cannot be sent from this page.\n\n- **Sessions:** `POST /auth/login` sets the `accessflow_session` cookie (HttpOnly) and the `accessflow_csrf` cookie. Every signed-in `POST`, `PUT` and `DELETE` must send the `X-CSRF-Token` header with the value of the `accessflow_csrf` cookie. Cross-site unsafe requests, sign-in included, are rejected with `403 cross_origin_request`.\n- **Errors** are JSON `{\"error\": \"<code>\"}`, plus `field` for a validation error and `expected` when a value differs from a defined one only in case. Every signed-in operation can return `401 authentication_required`; an unknown `/api` path is `404 not_found`, a wrong method `405 method_not_allowed`, an unexpected failure `500 internal_error`.\n- **Request bodies** are one JSON value of at most 64 KiB (the workbook upload excepted); a malformed body or an unknown key is `400 invalid_json`.\n- **Concurrency:** records that can change carry a `version`; a stale one is `409 version_conflict`.\n- **Auditor:** an account holding `AUDITOR` is an external auditor and reaches only `GET /audit/events`, `GET /audit/events/export`, `GET /audit/filters`, `GET /audit/access` and `GET /audit/requests` (plus `/auth`), whatever other roles it holds; every other operation, the evidence reports included, answers `403 forbidden` (DECISIONS.md O7 notes 2026-10-31).\n- **Rules:** the business rules behind each endpoint are in `docs/api.md` and `DECISIONS.md`. Every permission is enforced by the server.\n\nMock email delivery and the demo accounts are for local demonstration only."
   },
   "servers": [
     {
@@ -6903,7 +6903,7 @@
         ],
         "operationId": "getPointInTimeAccess",
         "summary": "Effective access at a point in time",
-        "description": "Point in time (O1): the grants held at the instant, each with its state then, evidence, approvers and who confirmed or removed it, plus grants removed in the 30 days before. Scope as for audit events: company-wide for Super Admin and InfoSec; a manager's current reports otherwise.",
+        "description": "Point in time (O1): the grants held at the instant, each with its state then, evidence, approvers and who confirmed or removed it, plus grants removed in the 30 days before. Scope as for audit events: company-wide for Super Admin, InfoSec and Auditor; a manager's current reports otherwise.",
         "parameters": [
           {
             "name": "at",
@@ -7547,7 +7547,7 @@
         ],
         "operationId": "listAuditedRequests",
         "summary": "Audit Explorer: requests with approval chains",
-        "description": "Super Admin and InfoSec see every request; a manager sees the requests of their direct and indirect reports; anyone else gets `403`. Newest 100 requests whose beneficiary is in scope, each with its items, approval steps and fulfillment (CASE §5 approval evidence).",
+        "description": "Super Admin, InfoSec and Auditor see every request; a manager sees the requests of their direct and indirect reports; anyone else gets `403`. Newest 100 requests whose beneficiary is in scope, each with its items, approval steps and fulfillment (CASE §5 approval evidence).",
         "parameters": [
           {
             "name": "q",
@@ -8952,6 +8952,7 @@
           "routingNote",
           "openedAt",
           "decidedBy",
+          "decidedByName",
           "decidedAt",
           "reason",
           "version"
@@ -9026,6 +9027,13 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "decidedByName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full name of the employee who decided the step."
           },
           "decidedAt": {
             "type": [

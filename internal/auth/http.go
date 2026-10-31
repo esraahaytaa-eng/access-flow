@@ -47,14 +47,16 @@ func (s *Service) Routes() http.Handler {
 
 // RequireSession guards every other API route: a valid, current session whose password
 // is not temporary, and the CSRF header on unsafe methods. An Auditor reaches only the
-// audit events, whatever other roles they hold (O7 note 2026-10-31).
+// audit evidence, whatever other roles they hold (O7 notes 2026-10-31).
 func (s *Service) RequireSession(next http.Handler) http.Handler {
 	return s.authenticate(false, auditorOnly(next))
 }
 
-// auditorRoutes are the only business routes an Auditor may call: reading, filtering and
-// exporting the audit events. Exact paths, so nothing else matches by prefix.
-var auditorRoutes = map[string]bool{"/api/v1/audit/events": true, "/api/v1/audit/events/export": true, "/api/v1/audit/filters": true}
+// auditorRoutes are the only business routes an Auditor may call: the audit events (read,
+// filter, export), point-in-time access and approval evidence. Exact paths, so nothing else
+// matches by prefix; GET only.
+var auditorRoutes = map[string]bool{"/api/v1/audit/events": true, "/api/v1/audit/events/export": true, "/api/v1/audit/filters": true,
+	"/api/v1/audit/access": true, "/api/v1/audit/requests": true}
 
 func auditorOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

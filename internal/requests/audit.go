@@ -13,7 +13,7 @@ import (
 // Audited is the Audit Explorer's approval evidence (CASE §5): requests in the actor's
 // audit scope with each item's approval chain, newest first, optionally matching text.
 func (s *Service) Audited(ctx context.Context, actor auth.Principal, text string) ([]Request, error) {
-	scope, err := explorer.ReportScope(ctx, s.pool, actor)
+	scope, err := explorer.ScopeOf(ctx, s.pool, actor)
 	if err != nil {
 		return nil, err
 	}

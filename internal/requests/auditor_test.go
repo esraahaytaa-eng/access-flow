@@ -216,3 +216,40 @@ func TestAuditorGetsNoOperationalDuty(t *testing.T) {
 	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/employees/"+au.ID.String()+"/roles", map[string]any{"role": "AUDITOR"}),
 		http.StatusNoContent, "") // holding it already is a no-op
 }
+
+// CASE.md §5: an Auditor answers "who had access to a tool on a past date, and who approved
+// it" directly, after the access is gone (O7 note 2026-10-31).
+func TestAuditorAnswersWhoHadAccessAndWhoApproved(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	w.approved(w.jiraViewer)
+	tl.drain(t)
+	g := w.myGrant(w.dev.c, w.jiraViewer)
+	from := w.timeOf("SELECT effective_from FROM grants WHERE id = $1", g["id"])
+	testutil.RequireStatus(t, revoke(w.dev.c, g, "no longer needed"), http.StatusOK, "")
+	tl.drain(t)
+	auditor := w.auditorOf()
+
+	held, _ := w.accessAt(auditor, from, "&tool="+w.jira.String())
+	row := requireState(t, held, g["id"], "ACTIVE", "VERIFIED")
+	approvers := row["approvers"].([]any)
+	if row["employee"].(map[string]any)["id"] != w.dev.ID.String() || len(approvers) != 1 ||
+		approvers[0].(map[string]any)["name"] != w.nameOf(w.mgr.ID) {
+		t.Fatalf("auditor point-in-time row = %v", row)
+	}
+	if held, _ := w.accessAt(auditor, time.Now(), "&tool="+w.jira.String()); byGrant(held, g["id"]) != nil {
+		t.Fatal("revoked access still held now")
+	}
+
+	r := w.get(auditor.c, "/api/v1/audit/requests?q=Jira")
+	testutil.RequireStatus(t, r, http.StatusOK, "")
+	reqs := r.Body["requests"].([]any)
+	if len(reqs) != 1 {
+		t.Fatalf("auditor approval evidence = %v", r.Body)
+	}
+	step := steps(items(reqs[0].(map[string]any))[0])[0]
+	if step["status"] != "APPROVED" || step["decidedBy"] != w.mgr.ID.String() || step["decidedByName"] != w.nameOf(w.mgr.ID) {
+		t.Fatalf("approval step = %v", step)
+	}
+}

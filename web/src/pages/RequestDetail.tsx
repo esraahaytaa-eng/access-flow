@@ -2,7 +2,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
-import { useEmployees } from "../api/queries";
 import type { ApprovalStep, Request, RequestItem, RequestKind } from "../api/types";
 import { stepLabel } from "../i18n/labels";
 import { reasonText, routingNoteText } from "../i18n/reasons";
@@ -14,15 +13,11 @@ import type { IconName } from "../ui/icons";
 
 type Event = { dot: string; icon: IconName; title: string; meta?: string; note?: string | null; route?: string | null };
 
-function useNameOf() {
-  const employees = useEmployees().data ?? [];
-  return (id: string | null, step?: ApprovalStep) =>
-    !id ? "—" : step && id === step.assigneeId && step.assigneeName ? step.assigneeName : employees.find((e) => e.id === id)?.fullName ?? "—";
-}
+// Who decided the step, or while it is open, who it waits for.
+const stepPerson = (s: ApprovalStep) => (s.decidedBy ? s.decidedByName : s.assigneeName) ?? "—";
 
 export function ItemTimeline({ item, kind = "NEW_ACCESS" }: { item: RequestItem; kind?: RequestKind }) {
   const { timezone } = useSession();
-  const nameOf = useNameOf();
   const dt = (v: string | null) => formatDateTime(v, timezone);
   const ev: Event[] = [{
     dot: "info", icon: "send", title: kind === "DIRECT_GRANT" ? "Doğrudan erişim başlatıldı" : "Talep gönderildi",
@@ -31,12 +26,12 @@ export function ItemTimeline({ item, kind = "NEW_ACCESS" }: { item: RequestItem;
   }];
   if (kind === "DIRECT_GRANT") ev.push({ dot: "info", icon: "zap", title: "Onay adımları atlandı", meta: "Süper Yönetici doğrudan erişimi · en fazla 90 gün" });
   for (const s of item.steps) {
-    const L = stepLabel[s.type], who = nameOf(s.decidedBy ?? s.assigneeId, s), route = s.routingNote ? routingNoteText(s.routingNote) : null;
+    const L = stepLabel[s.type], who = stepPerson(s), route = s.routingNote ? routingNoteText(s.routingNote) : null;
     const e: Event =
       s.status === "APPROVED_BY_SUBMISSION" ? { dot: "done", icon: "check", title: `${L} onayı · gönderimle karşılandı`, meta: `${who} doğrudan yönetici olarak talebi gönderdi · ${dt(s.decidedAt)}` }
       : s.status === "APPROVED" ? { dot: "done", icon: "check", title: `${L} onayladı`, meta: `${who} · ${dt(s.decidedAt)}`, note: s.reason }
       : s.status === "REJECTED" ? { dot: "rejected", icon: "x", title: `${L} reddetti`, meta: `${who} · ${dt(s.decidedAt)}`, note: s.reason }
-      : s.status === "SUPER_ADMIN_OVERRIDE" ? { dot: "done", icon: "zap", title: `${L} adımı Süper Yönetici tarafından geçersiz kılındı`, meta: `${nameOf(s.decidedBy)} · asıl atanan: ${s.assigneeName ?? "Bilgi güvenliği havuzu"} · ${dt(s.decidedAt)}`, note: s.reason }
+      : s.status === "SUPER_ADMIN_OVERRIDE" ? { dot: "done", icon: "zap", title: `${L} adımı Süper Yönetici tarafından geçersiz kılındı`, meta: `${s.decidedByName ?? "—"} · asıl atanan: ${s.assigneeName ?? "Bilgi güvenliği havuzu"} · ${dt(s.decidedAt)}`, note: s.reason }
       : s.status === "PENDING" ? { dot: "current", icon: "clock", title: `${L} onayı bekleniyor`, meta: `${s.assigneeName ?? "Bilgi güvenliği havuzu"} · ${dt(s.openedAt)} tarihinden beri` }
       : s.status === "CANCELLED" ? { dot: "", icon: "ban", title: `${L} adımı iptal edildi` }
       : { dot: "", icon: "dot", title: `${L} onayı`, meta: "Önceki adım tamamlanınca başlar" };

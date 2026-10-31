@@ -238,7 +238,7 @@ type AccessFilter struct {
 // Access is effective access at the instant at (O1, A9): held grants with their state at
 // that instant, and the grants removed in the 30 days before it.
 func (s *Service) Access(ctx context.Context, actor auth.Principal, at time.Time, f AccessFilter) (held, removed []Held, err error) {
-	scope, err := ReportScope(ctx, s.pool, actor)
+	scope, err := ScopeOf(ctx, s.pool, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -329,9 +329,13 @@ func (s *Service) held(ctx context.Context, w Where, at time.Time) ([]Held, erro
 	})
 }
 
-// requireFull: the evidence reports are company-wide only (O7, D11).
+// requireFull: the evidence reports are company-wide only (O7, D11), and not for an Auditor,
+// whatever other roles they hold (O7 note 2026-10-31).
 func (s *Service) requireFull(ctx context.Context, actor auth.Principal) error {
-	scope, err := ReportScope(ctx, s.pool, actor)
+	if actor.HasRole("AUDITOR") {
+		return platform.ErrForbidden
+	}
+	scope, err := ScopeOf(ctx, s.pool, actor)
 	if err == nil && !scope.Full {
 		err = platform.ErrForbidden
 	}

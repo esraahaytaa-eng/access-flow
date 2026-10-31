@@ -11,7 +11,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
-// An Auditor reads only the audit events and can act on nothing (O7 note 2026-10-31), so
+// An Auditor reads only the audit evidence and can act on nothing (O7 notes 2026-10-31), so
 // an Auditor account holds no operational duty: the role is refused while one is open, and
 // no duty is given to an Auditor. Each refusal names one duty in Field, to resolve first.
 

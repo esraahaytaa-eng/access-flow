@@ -53,7 +53,7 @@ func TestExceptionsListFailedOperationsAndUnroutableSteps(t *testing.T) {
 	w.exec("UPDATE role_assignments SET valid_to = now() WHERE employee_id = $1", w.is1.ID)
 	auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
 
-	testutil.RequireStatus(t, w.exceptions(auditor), http.StatusForbidden, "forbidden") // audit events only (O7 note 2026-10-31)
+	testutil.RequireStatus(t, w.exceptions(auditor), http.StatusForbidden, "forbidden") // audit evidence only (O7 notes 2026-10-31)
 	for _, p := range []person{w.is2, w.admin} {
 		op := w.failedOp(p)
 		if op["type"] != "GRANT" || op["tool"] != "Jira" || op["level"] != "Viewer" || op["attempts"] != float64(1) ||

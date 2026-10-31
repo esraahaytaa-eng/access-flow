@@ -223,9 +223,19 @@ func TestAuditExplorerScope(t *testing.T) {
 			t.Fatalf("%v sees %v", p.Email, all)
 		}
 	}
-	// An Auditor reads the events only: no point-in-time, reports or actions (O7 note 2026-10-31).
-	for _, path := range []string{"/api/v1/audit/access", "/api/v1/audit/requests", "/api/v1/audit/reports/privileged"} {
-		testutil.RequireStatus(t, w.get(auditor.c, path), http.StatusForbidden, "forbidden")
+	// An Auditor reads the events, point-in-time access and approval evidence, company-wide;
+	// no evidence report or action (O7 notes 2026-10-31).
+	holders := map[any]bool{}
+	held, _ = w.accessAt(auditor, time.Now(), "")
+	for _, g := range held {
+		holders[g["employee"].(map[string]any)["id"]] = true
+	}
+	if !holders[w.dev.ID.String()] || !holders[w.owner.ID.String()] {
+		t.Fatalf("auditor point-in-time = %v", held)
+	}
+	testutil.RequireStatus(t, w.get(auditor.c, "/api/v1/audit/requests"), http.StatusOK, "")
+	for _, report := range []string{"privileged", "overrides", "policy", "leavers", "quarter"} {
+		testutil.RequireStatus(t, w.get(auditor.c, "/api/v1/audit/reports/"+report), http.StatusForbidden, "forbidden")
 	}
 	testutil.RequireStatus(t, w.startCampaign(auditor), http.StatusForbidden, "forbidden")
 

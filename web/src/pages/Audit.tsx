@@ -43,17 +43,17 @@ export function AuditPage() {
   const full = !auditor && hasRole("SUPER_ADMIN", "INFOSEC");
   const [params, setParams] = useSearchParams();
   const requested = (params.get("tab") ?? "events") as Tab;
-  // An external auditor reads only the event log (O7 note 2026-10-31); the server refuses the rest.
-  const tab: Tab = auditor || (requested === "reports" && !full) ? "events" : requested;
+  // An external auditor reads the events, point-in-time access and approval evidence, not the reports (O7 notes 2026-10-31).
+  const tab: Tab = requested === "reports" && !full ? "events" : requested;
   return (
     <>
       <PageHeader title="Denetim kayıtları" sub="Kim talep etti, kim onayladı, kim verdi veya kaldırdı; hepsi gerçek zaman damgalarıyla. Kayıtlar yalnızca eklenebilir, değiştirilemez." />
       {auditor
-        ? <div style={{ marginBottom: 14 }}><Callout icon="eye">Dış denetçi erişimi: yalnızca denetim kayıtlarını görüntüleyebilir, filtreleyebilir ve CSV olarak indirebilirsiniz. Başka bir ekran veya işlem açık değildir.</Callout></div>
+        ? <div style={{ marginBottom: 14 }}><Callout icon="eye">Dış denetçi erişimi: denetim kayıtlarını, geçmiş bir tarihteki erişimleri ve onay kanıtını görüntüleyebilir, filtreleyebilir ve CSV olarak indirebilirsiniz. Başka bir ekran veya işlem açık değildir.</Callout></div>
         : !full && <div style={{ marginBottom: 14 }}><Callout icon="users">Yönetici olarak yalnızca şu an size bağlı (doğrudan ve dolaylı) çalışanların kayıtlarını görüyorsunuz.</Callout></div>}
-      {!auditor && <Tabs<Tab> value={tab} onChange={(t) => setParams({ tab: t })}
+      <Tabs<Tab> value={tab} onChange={(t) => setParams({ tab: t })}
         tabs={[{ value: "events", label: "Olay geçmişi" }, { value: "pit", label: "Geçmiş erişim sorgusu" }, { value: "evidence", label: "Onay kanıtı" },
-          ...(full ? [{ value: "reports" as Tab, label: "Kanıt raporları" }] : [])]} />}
+          ...(full ? [{ value: "reports" as Tab, label: "Kanıt raporları" }] : [])]} />
       {tab === "events" && <EventsTab />}
       {tab === "pit" && <AccessTab />}
       {tab === "evidence" && <EvidenceTab />}
@@ -129,10 +129,10 @@ function EventsTab() {
 }
 
 function AccessTab() {
-  const { timezone } = useSession();
+  const { timezone, auditor } = useSession();
   const today = todayIn(timezone);
-  const employees = useEmployees().data ?? [];
-  const tools = useTools().data ?? [];
+  const directory = useEmployees(!auditor).data ?? [];
+  const catalog = useTools(!auditor).data ?? [];
   const [date, setDate] = useState(today);
   const [employee, setEmployee] = useState("");
   const [tool, setTool] = useState("");
@@ -142,6 +142,13 @@ function AccessTab() {
   const access = useQuery({ queryKey: ["audit", "access", search], queryFn: () => api.get<AccessAtResponse>(`/audit/access?${search}`) });
   const held = access.data?.grants ?? [];
   const removed = access.data?.removed ?? [];
+  // An Auditor has no directory or catalog: the filters list the tools from the audit filters and the people
+  // who held or lost access on that date.
+  const auditTools = useQuery({ queryKey: ["audit", "filters"], enabled: auditor, queryFn: () => api.get<AuditFilters>("/audit/filters") }).data?.tools ?? [];
+  const onDate = useQuery({ queryKey: ["audit", "access", query({ date })], enabled: auditor, queryFn: () => api.get<AccessAtResponse>(`/audit/access?${query({ date })}`) }).data;
+  const employees = !auditor ? directory
+    : [...new Map([...(onDate?.grants ?? []), ...(onDate?.removed ?? [])].flatMap((g) => g.employee ? [[g.employee.id, g.employee] as const] : [])).values()];
+  const tools = auditor ? auditTools : catalog;
   const exportCsv = () => downloadCsv(`accessflow_erisim_${date}.csv`, [
     ["Tarih", "Çalışan", "Araç", "Seviye", "Durum", "Kanıt", "Etkin başlangıç", "Onaylayanlar"],
     ...held.map((g) => [date, holderName(g), g.tool, g.level, g.state ? stateBadge[g.state].label : "", evidenceBadge(g.evidence).label,
@@ -151,9 +158,9 @@ function AccessTab() {
     <>
       <div className="toolbar">
         <Field label="Tarih"><Input type="date" value={date} max={today} style={{ width: 170 }} onChange={(e) => setDate(e.target.value || today)} /></Field>
-        <Field label="Çalışan"><div style={{ width: 220 }}><Select placeholder="Tüm çalışanlar" value={employee} onChange={(e) => setEmployee(e.target.value)}
+        <Field label="Çalışan"><div style={{ width: 220 }}><Select aria-label="Çalışan" placeholder="Tüm çalışanlar" value={employee} onChange={(e) => setEmployee(e.target.value)}
           options={[...employees].sort((a, b) => a.fullName.localeCompare(b.fullName, "tr")).map((e) => ({ value: e.id, label: e.fullName }))} /></div></Field>
-        <Field label="Araç"><div style={{ width: 200 }}><Select placeholder="Tüm araçlar" value={tool} onChange={(e) => setTool(e.target.value)}
+        <Field label="Araç"><div style={{ width: 200 }}><Select aria-label="Araç" placeholder="Tüm araçlar" value={tool} onChange={(e) => setTool(e.target.value)}
           options={tools.map((t) => ({ value: t.id, label: t.name }))} /></div></Field>
         <Button icon="download" style={{ marginLeft: "auto", alignSelf: "flex-end" }} disabled={held.length === 0} onClick={exportCsv}>CSV indir</Button>
       </div>
@@ -194,8 +201,6 @@ function AccessTab() {
 
 function EvidenceTab() {
   const { timezone } = useSession();
-  const employees = useEmployees().data ?? [];
-  const nameOf = (id: string) => employees.find((e) => e.id === id)?.fullName ?? "";
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<{ req: Request; item: RequestItem } | null>(null);
   const search = query({ q: q.trim() });
@@ -213,7 +218,7 @@ function EvidenceTab() {
               <td className="small">{item.beneficiary.fullName}</td>
               <td><ToolCell tool={item.tool} level={item.level} /></td>
               <td className="small">{req.kind === "DIRECT_GRANT" ? <Tag warn>Onaylar atlandı</Tag>
-                : item.steps.map((s) => `${stepLabel[s.type]}${s.decidedBy ? `: ${nameOf(s.decidedBy)}` : ""}`).join(" → ")}</td>
+                : item.steps.map((s) => `${stepLabel[s.type]}${s.decidedByName ? `: ${s.decidedByName}` : ""}`).join(" → ")}</td>
               <td><ItemStateCell item={item} withSub={false} /></td>
             </tr>
           ))}</tbody>

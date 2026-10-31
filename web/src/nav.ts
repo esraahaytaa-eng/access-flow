@@ -4,7 +4,7 @@ import { useSession } from "./session";
 
 export function useRoleFlags() {
   const { me, adminGroups, hasRole, auditor } = useSession();
-  // An Auditor reads only the audit events: none of these lists is loaded for them.
+  // An Auditor reads only the audit evidence: none of these lists is loaded for them.
   const employees = useEmployees(!auditor).data ?? [];
   const tools = useTools(!auditor).data ?? [];
   const manager = employees.some((e) => e.managerId === me.id && (!("status" in e) || e.status !== "TERMINATED"));

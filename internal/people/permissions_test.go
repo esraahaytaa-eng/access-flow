@@ -11,7 +11,7 @@ import (
 )
 
 // Every M3 endpoint for every role (approved 2026-10-28). The Auditor reaches none of them
-// (audit events only, O7 note 2026-10-31);
+// (audit evidence only, O7 notes 2026-10-31);
 // HR Managers and Super Admins administer employees; resets of InfoSec or Super Admin
 // accounts need a Super Admin; roles and groups are Super Admin only.
 func TestPermissionMatrix(t *testing.T) {

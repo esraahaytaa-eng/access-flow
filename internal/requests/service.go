@@ -51,19 +51,20 @@ type Person struct {
 
 // Step is one approval step of an item.
 type Step struct {
-	ID           uuid.UUID  `json:"id"`
-	Position     int        `json:"position"`
-	Type         string     `json:"type"`
-	Status       string     `json:"status"`
-	AssigneeID   *uuid.UUID `json:"assigneeId"`
-	AssigneeName *string    `json:"assigneeName"`
-	Pool         string     `json:"pool,omitempty"`
-	RoutingNote  *string    `json:"routingNote"`
-	OpenedAt     *time.Time `json:"openedAt"` // the inbox's waiting time starts here (D9)
-	DecidedBy    *uuid.UUID `json:"decidedBy"`
-	DecidedAt    *time.Time `json:"decidedAt"`
-	Reason       *string    `json:"reason"`
-	Version      int        `json:"version"`
+	ID            uuid.UUID  `json:"id"`
+	Position      int        `json:"position"`
+	Type          string     `json:"type"`
+	Status        string     `json:"status"`
+	AssigneeID    *uuid.UUID `json:"assigneeId"`
+	AssigneeName  *string    `json:"assigneeName"`
+	Pool          string     `json:"pool,omitempty"`
+	RoutingNote   *string    `json:"routingNote"`
+	OpenedAt      *time.Time `json:"openedAt"` // the inbox's waiting time starts here (D9)
+	DecidedBy     *uuid.UUID `json:"decidedBy"`
+	DecidedByName *string    `json:"decidedByName"`
+	DecidedAt     *time.Time `json:"decidedAt"`
+	Reason        *string    `json:"reason"`
+	Version       int        `json:"version"`
 }
 
 // Item is one requested level with its steps.
@@ -114,8 +115,8 @@ type querier interface {
 func loadSteps(ctx context.Context, q querier, itemIDs []uuid.UUID) (map[uuid.UUID][]Step, error) {
 	rows, err := q.Query(ctx, `
 		SELECT st.item_id, st.id, st.position, st.type, st.status, st.assignee_id, a.full_name, coalesce(st.pool, ''),
-		       st.routing_note, st.opened_at, st.decided_by, st.decided_at, st.reason, st.version
-		FROM approval_steps st LEFT JOIN employees a ON a.id = st.assignee_id
+		       st.routing_note, st.opened_at, st.decided_by, d.full_name, st.decided_at, st.reason, st.version
+		FROM approval_steps st LEFT JOIN employees a ON a.id = st.assignee_id LEFT JOIN employees d ON d.id = st.decided_by
 		WHERE st.item_id = ANY($1) ORDER BY st.item_id, st.position`, itemIDs)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,7 @@ func loadSteps(ctx context.Context, q querier, itemIDs []uuid.UUID) (map[uuid.UU
 	var itemID uuid.UUID
 	var s Step
 	_, err = pgx.ForEachRow(rows, []any{&itemID, &s.ID, &s.Position, &s.Type, &s.Status, &s.AssigneeID, &s.AssigneeName, &s.Pool,
-		&s.RoutingNote, &s.OpenedAt, &s.DecidedBy, &s.DecidedAt, &s.Reason, &s.Version}, func() error {
+		&s.RoutingNote, &s.OpenedAt, &s.DecidedBy, &s.DecidedByName, &s.DecidedAt, &s.Reason, &s.Version}, func() error {
 		out[itemID] = append(out[itemID], s)
 		return nil
 	})
