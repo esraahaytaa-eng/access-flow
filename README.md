@@ -75,7 +75,33 @@ flowchart LR
 | **Vendor** | The same task, plus the vendor's ticket reference, recorded by the admin; the admin then records the vendor's confirmation | *Self-reported*, with the ticket | AccessFlow creates no ticket at the vendor; the admin raises it outside |
 | **Mock Email Outbox** | Activation links and access-request notices are written to an outbox table and shown in the app | — | No e-mail is sent |
 
-**AWS, GitHub, Jira, Salesforce and the other names are demo catalog entries: no third-party system is integrated.** A real connector would implement the runner's small `access.ToolClient` boundary (`Apply`, `Account`) without changing approval, audit or lifecycle logic ([A1](DECISIONS.md#a1-approved-architecture-direction--approved-2026-10-28)).
+**AWS, GitHub, Jira, Salesforce and the other names are demo catalog entries: by default no third-party system is integrated.** A real connector implements the runner's small `access.ToolClient` boundary (`Apply`, `Account`) without changing approval, audit or lifecycle logic ([A1](DECISIONS.md#a1-approved-architecture-direction--approved-2026-10-28)). One exists, off by default: the GitHub sandbox adapter below.
+
+### Optional: GitHub sandbox adapter
+
+One API tool can manage **Read access to one private sandbox repository** through the GitHub REST API (`internal/access/github.go`, A1 note 2026-11-01). Without its settings nothing changes: every tool uses the Mock Tool Service, and `docker compose up` needs no GitHub account.
+
+- **What it does.** An approved request (or direct grant) makes GitHub invite the person with Read; GitHub e-mails the invitation. The grant stays *preparing* until GitHub shows the invitation accepted and the permission reads `read`, and only then is it active and verified. Expiry, review removals, transfers and offboarding remove the collaborator, or cancel an invitation not yet accepted, and verify that no access remains. Suspension removes the access, and reactivation invites again.
+- **Never touches access it did not grant.** AccessFlow records what it created (`github_access`). It refuses to grant to an account that already has access or an invitation, and leaves to a person (Exceptions) any removal it has no record of, a permission changed by hand and access remaining through a team or the organisation.
+- **You need:** a sandbox GitHub organisation with base permissions *No permission*, a private repository in it, a test GitHub account outside the organisation, and a fine-grained token whose resource owner is that organisation, limited to that one repository, with **Administration: Read and write** (Metadata: Read is added automatically) and an expiry of 30 days or less.
+- **Isolation.** The settings live in `.env.github` (git-ignored) and reach only a separate Compose project, `accessflow-github`, with its own port and volumes; the default project never reads them. Do not `export` them in your shell.
+
+```sh
+# .env.github (never commit it; placeholders shown)
+ACCESSFLOW_PORT=8090
+GITHUB_TOKEN=<fine-grained token>
+GITHUB_REPOSITORY=<sandbox-org>/demo-repository
+GITHUB_TOOL_ID=<the API tool's ID, after step 1>
+GITHUB_USERS=<employee email>=<github login>
+
+# 1. Start the separate project, create a new API tool (not a demo one) with one level "Read", and note its ID:
+docker compose -p accessflow-github --env-file .env.github up --build -d
+# 2. Set GITHUB_TOOL_ID in .env.github and restart that project with the adapter:
+docker compose -p accessflow-github --env-file .env.github -f compose.yaml -f compose.github.yaml up -d
+# Remove it all: docker compose -p accessflow-github down -v, then revoke the token on GitHub.
+```
+
+The adapter refuses to start on the AccessFlow repository itself, on a public repository, when the token cannot read the repository, and when the tool is missing or not an API tool. The automated tests use a fake GitHub server; no test calls GitHub.
 
 ## Architecture
 
@@ -179,7 +205,7 @@ Tail latencies on a shared host are noisy; the medians and lock waits are the re
 
 ## Known Limitations
 
-- **No real integrations.** API tools are reached through the Mock Tool Service; Manual and Vendor results are self-reported; e-mail goes to a local outbox. While e-mail is simulated, a Super Admin who reveals an employee's activation link could use it (every reveal is audited).
+- **No real integrations by default.** API tools are reached through the Mock Tool Service (the optional GitHub sandbox adapter manages Read on one sandbox repository only); Manual and Vendor results are self-reported; e-mail goes to a local outbox. While e-mail is simulated, a Super Admin who reveals an employee's activation link could use it (every reveal is audited).
 - **The external Auditor does not see the evidence reports** (quarter, privileged roles, overrides, policy, leavers); InfoSec or a Super Admin runs them. The Auditor reads the events, point-in-time access and approval evidence.
 - **A local setup:** fixed database credentials in `compose.yaml`, plain HTTP, one `app` instance, no SSO, no MFA yet (planned).
 - **Separation of duties stops one person, not collusion,** for example two Super Admins acting together.

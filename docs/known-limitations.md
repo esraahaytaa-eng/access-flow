@@ -42,6 +42,14 @@ The limits a reviewer should know first; each is explained in its section below.
 - The mock import reads the tool's accounts before its transaction; an account removed from the tool in that moment can still be imported as held, until a review or orphan action removes it.
 - An import records what the tool really holds, so an employee may end up with two levels of one tool (D4 is enforced for requests, not for imported reality); a review or a level change resolves it.
 
+### GitHub sandbox adapter (optional)
+
+- Off by default and limited to Read on one private sandbox repository (DECISIONS.md A1 note 2026-11-01). It has run only against a fake GitHub server in the automated tests; a live check against GitHub is a separate step.
+- **Ownership is AccessFlow's own record** (`github_access`). Two narrow races remain: a permission set by hand between the "no access yet" check and the invitation could be changed to Read by that invitation; and after AccessFlow cancels its invitation, Read found on the account is treated as that invitation accepted in the same moment and removed. A `read` invitation sent by hand to the same login while AccessFlow's own grant is still being invited is taken for AccessFlow's. Do not manage the sandbox's collaborators by hand while AccessFlow does.
+- An invitation is checked every minute until it is accepted (one API call a page of pending invitations), well within GitHub's 5,000 requests an hour for a sandbox. One accepted while its employee is suspended gives Read until the next check, which removes it.
+- The login comes from `GITHUB_USERS`, not from the employee record; changing an employee's mapping while access is held is not supported. A level change on the GitHub tool is refused (one live record per account), and the D10 baseline import does not read GitHub.
+- The start fails closed if GitHub is unreachable; while the adapter is on, GitHub outages show as retried, then failed, operations in Exceptions.
+
 ### Audit, point-in-time and the Auditor
 
 - The audit events are paged on the server (100 a page, exact totals) and their CSV export streams every matching event; new events arriving while someone pages push older ones to later pages (a row may show twice, none is skipped). The text search reads every event (no text index): at 314,000 events about 0.45 s in the database and a median of 0.7–1.0 s through the API, with p95 up to 3.0 s under heavy host load; the other filters stay under about 0.2 s. The override and policy reports show at most 1000 rows and approval evidence the newest 100 requests; those CSV exports download the rows loaded in the browser. A manager's scope follows the current reporting lines (including terminated reports still linked), not past ones.
