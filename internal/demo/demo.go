@@ -29,7 +29,7 @@ type Account struct {
 	Role  string `json:"role"` // the role it demonstrates (English, like the demo sign-in labels)
 }
 
-// Accounts are the documented demo sign-ins, one per main role. The Super Admin is the
+// Accounts are the documented demo sign-ins, one per persona. The Super Admin is the
 // initial Super Admin (auth.Bootstrap).
 var Accounts = []Account{
 	{"admin", "admin@accessflow.local", "Super Admin"},
@@ -38,6 +38,7 @@ var Accounts = []Account{
 	{"auditor", "gizem.arslan@accessflow.local", "Auditor"},
 	{"manager", "burak.sahin@accessflow.local", "Manager"},
 	{"owner", "can.ozturk@accessflow.local", "Tool Owner & IT Operations"},
+	{"cloud", "emre.kaya@accessflow.local", "Cloud Tool Owner & InfoSec"},
 	{"employee", "deniz.kara@accessflow.local", "Employee"},
 }
 

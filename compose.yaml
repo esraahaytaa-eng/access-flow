@@ -54,7 +54,7 @@ services:
       # deployment removes these three lines.
       ACCESSFLOW_DEMO: "true"
       ACCESSFLOW_ENV: local
-      DEMO_PASSWORDS: admin=Demo-Admin-2026,infosec=Demo-InfoSec-2026,hr=Demo-HR-2026,auditor=Demo-Auditor-2026,manager=Demo-Manager-2026,owner=Demo-Owner-2026,employee=Demo-Employee-2026
+      DEMO_PASSWORDS: admin=Demo-Admin-2026,infosec=Demo-InfoSec-2026,hr=Demo-HR-2026,auditor=Demo-Auditor-2026,manager=Demo-Manager-2026,owner=Demo-Owner-2026,cloud=Demo-Cloud-2026,employee=Demo-Employee-2026
       MOCK_TOOLS_URL: http://mocktools:8081
     volumes:
       - appdata:/var/lib/accessflow
