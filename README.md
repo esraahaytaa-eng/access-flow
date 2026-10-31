@@ -137,9 +137,12 @@ A user's action is answered synchronously and only writes to PostgreSQL. Provisi
 ```bash
 docker compose --profile test run --rm tests   # gofmt, go vet, go test -race against PostgreSQL
 docker compose build                           # also runs tsc --noEmit, the Vitest suite and the frontend build
+./e2e.sh                                       # browser smoke test (Playwright) on a fresh, separate stack
 ```
 
-Go tests run against a disposable in-memory PostgreSQL (`postgres-test`): each test gets its own database cloned from a migrated template and connects as the runtime role, so privileges, the audit trigger, locking and concurrency are tested for real. GitHub Actions runs both commands on every pull request and push to `main` ([`ci.yml`](.github/workflows/ci.yml)); a pull request is merged only when both jobs are green.
+`./e2e.sh` drives the real UI in Chromium through one connected journey: HR creates an engineer, a Super Admin reveals the activation link in the Mock Email Outbox, the engineer sets a password and requests AWS Console / ReadOnly for 7 days, the manager and the Tool Owner approve, the runner grants it through the Mock Tool Service, My Access shows it active and verified after a reload, and the Auditor finds both approvers in the approval evidence ([`e2e/access-request.spec.ts`](e2e/access-request.spec.ts)). It runs in its own Compose project (`accessflow-e2e`, fresh volumes, a host port Docker picks) and removes it afterwards, also on failure, so the default stack on port 8080 is never touched. Its only dependency, `@playwright/test`, lives in `e2e/`, apart from the app's; traces and screenshots are off so no activation link or session is recorded. About a minute once the images are built.
+
+Go tests run against a disposable in-memory PostgreSQL (`postgres-test`): each test gets its own database cloned from a migrated template and connects as the runtime role, so privileges, the audit trigger, locking and concurrency are tested for real. GitHub Actions runs all three on every pull request and push to `main` ([`ci.yml`](.github/workflows/ci.yml)); a pull request is merged only when every job is green.
 
 Current measurements, on a disposable stack on one shared laptop (8 CPUs), 2026-10-31, through the real HTTP API ([scale review](docs/qa/final/scale-security-review.md), [performance audit](docs/qa/final/performance-audit.md)):
 
