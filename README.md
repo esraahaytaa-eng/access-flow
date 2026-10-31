@@ -162,6 +162,7 @@ Tail latencies on a shared host are noisy; the medians and lock waits are the re
 | [`DECISIONS.md`](DECISIONS.md) | Every business rule and architecture decision, with rationale and dated changes; [current rules at a glance](DECISIONS.md#current-rules-at-a-glance) |
 | [`docs/operating-summary.md`](docs/operating-summary.md) | **Deliverable 2:** how it runs each week, the rules it follows, what we assumed (one page) |
 | [`docs/rollout-30-days.md`](docs/rollout-30-days.md) | **Deliverable 3:** the proposed first 30 days from today's process to AccessFlow (a plan, not a completed deployment) |
+| [Product Analysis & Functional Guide](docs/product-guide.md) | Bilingual Turkish/English study guide: product terminology, roles and permissions, API/Manual/Vendor fulfillment, demo scenarios (AWS Console, GitHub, Payroll Portal), the employee lifecycle, security and architecture |
 | [`docs/api.md`](docs/api.md) · [`openapi.json`](web/public/swagger/openapi.json) | API contracts and the rules behind each endpoint; served as Swagger UI at `/swagger/` in demo mode |
 | [`docs/deployment.md`](docs/deployment.md) | Configuration, running outside demo mode, activation, Super Admin recovery |
 | [`docs/qa/final/security-audit.md`](docs/qa/final/security-audit.md) | Security and authorization review, accepted residual risks |
