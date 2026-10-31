@@ -178,6 +178,22 @@ describe("direct grant", () => {
     expect(screen.getAllByRole("button", { name: "Kaldır" })).toHaveLength(1);
   });
 
+  it("renders and grants without crypto.randomUUID, as over plain HTTP on a hostname or IP", async () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) });
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "POST /direct-grants": () => ({ status: 201, body: { id: "r5", items: [] } }) });
+    renderPage(<DirectGrantPage />, { session: sa });
+    await screen.findByRole("option", { name: /Can Owner/ });
+    await userEvent.selectOptions(screen.getByLabelText(/Çalışan/), "o1");
+    await userEvent.selectOptions(screen.getByLabelText(/^Araç/), "t1");
+    await userEvent.selectOptions(screen.getByLabelText(/^Seviye/), "l1");
+    await userEvent.type(screen.getByLabelText(/Gerekçe/), "Üretim olayı INC-2301 için acil erişim");
+    await userEvent.click(screen.getByRole("button", { name: "Doğrudan erişim ver" }));
+    await waitFor(() => expect(currentPath).toBe("/requests/r5"));
+    const { submissionId } = calls.find((c) => c.method === "POST")!.body as { submissionId: string };
+    expect(submissionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
   it("grants for at most 90 days counting today and opens the request", async () => {
     const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "POST /direct-grants": () => ({ status: 201, body: { id: "r5", items: [] } }) });
     renderPage(<DirectGrantPage />, { session: sa });

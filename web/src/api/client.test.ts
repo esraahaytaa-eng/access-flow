@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, setUnauthorizedHandler } from "./client";
+import { ApiError, api, newSubmissionId, setUnauthorizedHandler } from "./client";
 
 function respond(status: number, body?: unknown) {
   return vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -74,5 +74,21 @@ describe("api", () => {
   it("maps a network failure to network_error", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
     await expect(api.get("/x")).rejects.toMatchObject({ status: 0, code: "network_error" });
+  });
+});
+
+describe("newSubmissionId", () => {
+  // The idempotency key of a submission must be unpredictable and work over plain HTTP, where
+  // browsers offer crypto.getRandomValues but not crypto.randomUUID (not a secure context).
+  it("returns distinct random UUID v4 values without crypto.randomUUID", () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) });
+    try {
+      const ids = Array.from({ length: 1000 }, newSubmissionId);
+      for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(new Set(ids).size).toBe(1000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

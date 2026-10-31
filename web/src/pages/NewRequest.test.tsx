@@ -31,7 +31,25 @@ async function fillLine(level: string) {
   await userEvent.click(screen.getByRole("radio", { name: new RegExp(`^${level}`) }));
 }
 
+/** Plain HTTP on a host other than localhost is not a secure context: browsers then offer
+ *  crypto.getRandomValues but not crypto.randomUUID (regression: the page went blank). */
+const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe("new access request", () => {
+  it("renders and submits without crypto.randomUUID, as over plain HTTP on a hostname or IP", async () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) });
+    const calls = fakeServer(routes());
+    renderPage(<NewRequestPage />);
+    await fillLine("Kullanıcı");
+    await userEvent.click(screen.getByRole("button", { name: /^Kaldırılana kadar/ }));
+    await userEvent.type(screen.getByLabelText(/Bu erişime neden ihtiyaç var/), why);
+    await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    const { submissionId } = calls.find((c) => c.method === "POST")!.body as { submissionId: string };
+    expect(submissionId).toMatch(UUID4);
+  });
+
   it("finds a tool by typing and picks it with the keyboard", async () => {
     const tool = (id: string, name: string) => ({ ...jira, id, name, levels: [{ ...jira.levels[0], id: `${id}-l` }] });
     const retired = { ...tool("t9", "Jenkins"), levels: [{ ...jira.levels[0], id: "t9-l", requestable: false }] };
