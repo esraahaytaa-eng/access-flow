@@ -119,15 +119,46 @@ func TestOneEmailPerSubmission(t *testing.T) {
 	if n := w.count("SELECT count(*) FROM email_outbox"); n != 1 {
 		t.Fatalf("emails = %d; want 1", n)
 	}
-	// The outbox shows access requests to InfoSec, not to the employee, who sees only their own
-	// role-acceptance emails (none here).
-	r := w.get(w.is1.c, "/api/v1/email-outbox")
+	// The outbox shows the access request to a Super Admin only (O2 note 2026-10-31).
+	r := w.get(w.admin.c, "/api/v1/email-outbox")
 	testutil.RequireStatus(t, r, http.StatusOK, "")
 	if len(r.Body["emails"].([]any)) != 1 {
 		t.Fatalf("outbox = %v", r.Body)
 	}
-	if r := w.get(w.dev.c, "/api/v1/email-outbox"); r.Status != http.StatusOK || len(r.Body["emails"].([]any)) != 0 {
-		t.Fatalf("the employee's outbox = %d %v", r.Status, r.Body)
+}
+
+// The Mock Email Outbox is a Super Admin screen (O2 note 2026-10-31): every other role is refused,
+// and an Auditor is refused even when the account also holds Super Admin (O7 precedence).
+func TestOutboxOnlyForSuperAdmins(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
+	member := w.person(testutil.EmployeeSpec{})
+	if _, err := w.db.App.Exec(context.Background(), "INSERT INTO admin_group_memberships (group_id, employee_id) SELECT admin_group_id, $1 FROM tools WHERE id = $2",
+		member.ID, w.jira); err != nil {
+		t.Fatal(err)
+	}
+	mail := w.count("SELECT count(*) FROM email_outbox")
+	var mailID string
+	if err := w.db.App.QueryRow(context.Background(), "SELECT id::text FROM email_outbox LIMIT 1").Scan(&mailID); err != nil {
+		t.Fatal(err)
+	}
+	if r := w.get(w.admin.c, "/api/v1/email-outbox"); r.Status != http.StatusOK || len(r.Body["emails"].([]any)) != mail {
+		t.Fatalf("Super Admin outbox = %d %v", r.Status, r.Body)
+	}
+	refused := map[string]person{
+		"employee": w.dev, "manager": w.mgr, "tool owner": w.owner, "admin group member": member, "InfoSec": w.is1, "HR Manager": w.hr(),
+		"Auditor":               w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}}),
+		"Auditor + Super Admin": w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR", "SUPER_ADMIN"}}),
+	}
+	for name, p := range refused {
+		testutil.RequireStatus(t, w.get(p.c, "/api/v1/email-outbox"), http.StatusForbidden, "forbidden")
+		if r := w.get(p.c, "/api/v1/email-outbox/"+mailID+"/activation-link"); r.Status != http.StatusForbidden {
+			t.Errorf("%s reveals an activation link: %d", name, r.Status)
+		}
+		if r := w.get(p.c, "/api/v1/auth/me"); r.Body["roleOffer"] != false {
+			t.Errorf("%s: roleOffer = %v", name, r.Body["roleOffer"])
+		}
 	}
 }
 
@@ -140,12 +171,6 @@ func TestActivationEmailsInTheOutbox(t *testing.T) {
 	testutil.RequireStatus(t, r, http.StatusCreated, "")
 	w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
 
-	for _, c := range []*testutil.Client{w.is1.c} {
-		emails := w.get(c, "/api/v1/email-outbox").Body["emails"].([]any)
-		if len(emails) != 1 || emails[0].(map[string]any)["kind"] != "ACCESS_REQUEST" {
-			t.Fatalf("InfoSec sees %v; want only the access request", emails)
-		}
-	}
 	all := w.get(w.admin.c, "/api/v1/email-outbox")
 	emails := all.Body["emails"].([]any)
 	if len(emails) != 2 {

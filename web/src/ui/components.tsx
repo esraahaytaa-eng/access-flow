@@ -450,21 +450,24 @@ type ToastInput = Omit<Toast, "id" | "type"> & { type?: Toast["type"] };
 const ToastContext = createContext<(t: ToastInput) => void>(() => {});
 let toastSeq = 0;
 
+/** Small toasts at the top centre, clear of drawer and dialog buttons: a success goes after 2.5 s, an error stays 10 s; each can be closed. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const dismiss = useCallback((id: number) => setToasts((all) => all.filter((x) => x.id !== id)), []);
   const push = useCallback((t: ToastInput) => {
     const toast = { ...t, type: t.type ?? "success", id: ++toastSeq };
     setToasts((all) => [...all, toast]);
-    setTimeout(() => setToasts((all) => all.filter((x) => x.id !== toast.id)), toast.type === "error" ? 6000 : 4200);
-  }, []);
+    setTimeout(() => dismiss(toast.id), toast.type === "error" ? 10000 : 2500);
+  }, [dismiss]);
   return (
     <ToastContext.Provider value={push}>
       {children}
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={`toast ${t.type}`}>
-            <span className="ti"><Icon name={t.type === "error" ? "alert" : t.type === "info" ? "info" : "check"} size={17} /></span>
-            <div><div className="tt">{t.title}</div>{t.desc && <div className="td">{t.desc}</div>}</div>
+            <span className="ti"><Icon name={t.type === "error" ? "alert" : t.type === "info" ? "info" : "check"} size={16} /></span>
+            <div style={{ flex: 1, minWidth: 0 }}><div className="tt">{t.title}</div>{t.desc && <div className="td">{t.desc}</div>}</div>
+            <button type="button" className="toast-close" aria-label="Bildirimi kapat" onClick={() => dismiss(t.id)}><Icon name="x" size={14} /></button>
           </div>
         ))}
       </div>

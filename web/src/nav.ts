@@ -3,7 +3,7 @@ import { exceptionCount, useApprovals, useEmployees, useExceptions, useNominatio
 import { useSession } from "./session";
 
 export function useRoleFlags() {
-  const { me, adminGroups, hasRole, auditor } = useSession();
+  const { me, adminGroups, hasRole, auditor, roleOffer } = useSession();
   // An Auditor reads only the audit evidence: none of these lists is loaded for them.
   const employees = useEmployees(!auditor).data ?? [];
   const tools = useTools(!auditor).data ?? [];
@@ -13,7 +13,7 @@ export function useRoleFlags() {
   const approvals = useApprovals(!auditor).data ?? [];
   if (auditor) {
     return { manager: false, owner: false, superAdmin, infosec, hr, auditor, approvals: false, tasks: false, reviews: false,
-      exceptions: false, employees: false, admin: false, audit: true };
+      exceptions: false, employees: false, admin: false, audit: true, mailbox: false };
   }
   return {
     manager, owner, superAdmin, infosec, hr, auditor,
@@ -24,6 +24,7 @@ export function useRoleFlags() {
     employees: hr || superAdmin,
     admin: superAdmin,
     audit: superAdmin || infosec || manager,
+    mailbox: superAdmin || roleOffer,
   };
 }
 

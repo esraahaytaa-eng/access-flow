@@ -21,7 +21,7 @@ function navGroups(flags: RoleFlags, counts: ReturnType<typeof useNavCounts>) {
       { to: "/catalog", label: "Araç kataloğu", icon: "grid", match: ["/catalog", "/request-new"] },
       { to: "/requests", label: "Taleplerim", icon: "list" },
       { to: "/access", label: "Erişimlerim", icon: "key" },
-      { to: "/mailbox", label: "E-posta kutusu", icon: "mail" },
+      flags.mailbox && { to: "/mailbox", label: "E-posta kutusu", icon: "mail" },
     ] },
     { label: "İş akışları", items: [
       flags.approvals && { to: "/approvals", label: "Onay kutusu", icon: "inbox", count: counts.approvals },
@@ -127,9 +127,11 @@ function NotificationsMenu() {
         <div style={{ maxHeight: 380, overflowY: "auto", padding: 6 }}>
           {list.length === 0 && <div className="muted small" style={{ padding: 20, textAlign: "center" }}>Henüz bildiriminiz yok.</div>}
           {list.slice(0, 20).map((n) => (
-            <button type="button" key={n.id} className="menu-item" style={{ alignItems: "flex-start" }} onClick={() => {
+            <button type="button" key={n.id} className="menu-item" style={{ alignItems: "flex-start" }} onClick={async () => {
               setOpen(false);
               if (!n.readAt) markRead([n]);
+              // The session is read once; re-read it so a new role offer opens the outbox.
+              if (n.kind === "SUPER_ADMIN_ROLE_OFFERED") await qc.refetchQueries({ queryKey: ["me"] });
               const to = notificationLink[n.kind];
               if (to) navigate(to);
             }}>

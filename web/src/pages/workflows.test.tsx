@@ -105,6 +105,37 @@ describe("fulfillment tasks", () => {
     ]));
   });
 
+  it("claims once on a double click, shows one short toast and updates the drawer at once", async () => {
+    const calls = fakeServer({
+      "GET /fulfillment-tasks": taskPage([task()]),
+      "POST /fulfillment-tasks/op1/claim": () => ({ body: task({ status: "IN_PROGRESS", claimedBy: person("e1", "Elif Yılmaz"), version: 2 }) }),
+    });
+    renderPage(<TasksPage />, { session: member as never });
+    await userEvent.click(await screen.findByText("Deniz Kara"));
+    await userEvent.dblClick(screen.getByRole("button", { name: "Görevi üstlen" }));
+    const drawer = screen.getByRole("dialog", { name: /Erişim ver · Figma/ });
+    expect(await within(drawer).findByRole("button", { name: "Talep numarasını kaydet" })).toBeTruthy();
+    expect(within(drawer).getByText("Elif Yılmaz")).toBeTruthy(); // the claimer, from the claim's answer
+    expect(within(drawer).queryByRole("button", { name: "Görevi üstlen" })).toBeNull();
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(screen.getAllByText("Görev üstlenildi")).toHaveLength(1);
+    expect(drawer.contains(screen.getByText("Görev üstlenildi"))).toBe(false); // a toast, not part of the drawer
+  });
+
+  it("shows a refused claim as a closable error and keeps the drawer open", async () => {
+    fakeServer({
+      "GET /fulfillment-tasks": taskPage([task()]),
+      "POST /fulfillment-tasks/op1/claim": () => ({ status: 409, body: { error: "task_claimed" } }),
+    });
+    renderPage(<TasksPage />, { session: member as never });
+    await userEvent.click(await screen.findByText("Deniz Kara"));
+    await userEvent.click(screen.getByRole("button", { name: "Görevi üstlen" }));
+    expect(await screen.findByText("Bu görevi başka bir üye üstlendi.")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: /Erişim ver · Figma/ })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Bildirimi kapat" }));
+    expect(screen.queryByText("Bu görevi başka bir üye üstlendi.")).toBeNull();
+  });
+
   it("explains why one's own task cannot be claimed", async () => {
     fakeServer({ "GET /fulfillment-tasks": taskPage([task({ canAct: false })]) });
     renderPage(<TasksPage />, { session: member as never });

@@ -107,7 +107,7 @@ function Root() {
           <Route path="/settings" element={<Guard allow={superAdmin}><SettingsPage /></Guard>} />
           <Route path="/audit" element={<AuditGuard><AuditPage /></AuditGuard>} />
           <Route path="/password" element={<ChangePasswordPage onChanged={setPrincipal} />} />
-          <Route path="/mailbox" element={<MailboxPage />} />
+          <Route path="/mailbox" element={<Guard allow={(s) => s.hasRole("SUPER_ADMIN") || s.roleOffer}><MailboxPage /></Guard>} />
           <Route path="/rol-kabul" element={<RoleAcceptPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

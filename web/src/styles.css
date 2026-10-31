@@ -1303,30 +1303,49 @@ p {
 .menu-item.on {
   background:var(--accent-soft);
 }
+/* Top centre, over the topbar's empty middle: never on a drawer's or dialog's footer buttons. */
 .toasts {
   position:fixed;
-  bottom:20px;
-  right:20px;
+  top:12px;
+  left:50%;
+  transform:translateX(-50%);
   z-index:200;
   display:flex;
   flex-direction:column;
-  gap:8px;
-  max-width:calc(100vw - 40px);
+  align-items:center;
+  gap:6px;
+  width:max-content;
+  max-width:calc(100vw - 24px);
+  pointer-events:none;
 }
 .toast {
   display:flex;
-  gap:10px;
+  gap:8px;
   align-items:flex-start;
   background:var(--ink);
   color:#fff;
-  padding:14px 16px;
-  border-radius:14px;
+  padding:8px 8px 8px 12px;
+  border-radius:10px;
   box-shadow:var(--shadow-lg);
-  width:380px;
-  max-width:100%;
-  font-size:13.5px;
+  max-width:340px;
+  font-size:13px;
   animation:pop .18s ease;
+  pointer-events:auto;
 }
+.toast-close {
+  flex:none;
+  display:grid;
+  place-items:center;
+  width:22px;
+  height:22px;
+  border:0;
+  border-radius:6px;
+  background:none;
+  color:#c9cacd;
+  cursor:pointer;
+}
+.toast-close:hover { background:rgba(255, 255, 255, .12); color:#fff; }
+.toast-close:focus-visible { outline:2px solid #9ab7f2; outline-offset:1px; }
 .toast .ti {
   flex:none;
   margin-top:1px;

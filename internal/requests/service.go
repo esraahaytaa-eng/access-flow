@@ -553,27 +553,36 @@ type Email struct {
 	LinkAvailable bool       `json:"linkAvailable"`
 }
 
-// Outbox lists the newest 100 simulated emails the actor may see: access requests for InfoSec
-// and Super Admin, activation emails for Super Admins, and role-acceptance emails to
-// their recipient only.
+// Outbox lists the newest 100 simulated emails. It is a Super Admin screen (O2 note 2026-10-31):
+// a Super Admin sees the access-request and activation emails and their own role-acceptance
+// emails; anyone else sees only their own pending role-acceptance email (D2 succession) and is
+// refused without one. An Auditor is always refused (O7).
 func (s *Service) Outbox(ctx context.Context, actor auth.Principal) ([]Email, error) {
-	reviewer := actor.HasRole("INFOSEC") || actor.HasRole("SUPER_ADMIN")
+	if actor.HasRole("AUDITOR") {
+		return nil, platform.ErrForbidden
+	}
+	superAdmin := actor.HasRole("SUPER_ADMIN")
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, e.id, e.full_name, o.request_id, o.subject, o.body, o.created_at,
 		       o.sealed_token IS NOT NULL AND e.status = 'ACTIVE' AND CASE o.kind
 		         WHEN 'ACTIVATION' THEN t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now()
 		         WHEN 'ROLE_ACCEPTANCE' THEN n.status = 'PENDING' AND n.expires_at > now() END
 		FROM email_outbox o JOIN employees e ON e.id = o.recipient_id LEFT JOIN activation_tokens t ON t.id = o.activation_id
 		LEFT JOIN super_admin_nominations n ON n.id = o.nomination_id
-		WHERE (o.kind = 'ACCESS_REQUEST' AND $1) OR (o.kind = 'ACTIVATION' AND $2) OR (o.kind = 'ROLE_ACCEPTANCE' AND o.recipient_id = $3)
-		ORDER BY o.id DESC LIMIT 100`, reviewer, actor.HasRole("SUPER_ADMIN"), actor.EmployeeID)
+		WHERE (o.kind IN ('ACCESS_REQUEST', 'ACTIVATION') AND $1)
+		   OR (o.kind = 'ROLE_ACCEPTANCE' AND o.recipient_id = $2 AND ($1 OR (n.status = 'PENDING' AND n.expires_at > now())))
+		ORDER BY o.id DESC LIMIT 100`, superAdmin, actor.EmployeeID)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Email, error) {
+	emails, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Email, error) {
 		var m Email
 		var available *bool
 		err := row.Scan(&m.ID, &m.Kind, &m.Recipient.ID, &m.Recipient.FullName, &m.RequestID, &m.Subject, &m.Body, &m.CreatedAt, &available)
 		m.LinkAvailable = available != nil && *available
 		return m, err
 	})
+	if err == nil && !superAdmin && len(emails) == 0 {
+		return nil, platform.ErrForbidden
+	}
+	return emails, err
 }
