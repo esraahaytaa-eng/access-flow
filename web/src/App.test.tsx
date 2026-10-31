@@ -87,6 +87,44 @@ describe("navigation", () => {
     expect(nav.textContent).not.toContain("Araç yönetimi");
   });
 
+  it("opens the audit page only to the roles that may use it, managers included (BUG-B-03)", async () => {
+    window.history.pushState({}, "", "/audit");
+    fakeServer({ ...basics, "GET /auth/me": principal() });
+    const { unmount } = render(<App />);
+    expect(await screen.findByText("Bu sayfaya erişiminiz yok")).toBeTruthy();
+    unmount();
+    fakeServer({ ...basics, "GET /auth/me": principal(), "GET /audit/events?": { events: [], total: 0, page: 1, pageSize: 100 }, "GET /audit/filters": { actors: [], tools: [] },
+      "GET /employees": { employees: [{ id: "e2", fullName: "Deniz Kara", managerId: "e1", status: "ACTIVE" }] } });
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Denetim kayıtları" })).toBeTruthy();
+    expect(screen.queryByText("Bu sayfaya erişiminiz yok")).toBeNull();
+    window.history.pushState({}, "", "/");
+  });
+
+  it("gives an Auditor only the audit events, even with other roles (O7 note 2026-10-31)", async () => {
+    const auditor = principal({ employee: { id: "a1", email: "a@x.co", fullName: "Ada Denetçi", roles: ["AUDITOR", "SUPER_ADMIN"] } });
+    const events = { "GET /audit/events?": { events: [], total: 0, page: 1, pageSize: 100 }, "GET /audit/filters": { actors: [], tools: [] } };
+    window.history.pushState({}, "", "/");
+    let calls = fakeServer({ ...events, "GET /auth/me": auditor });
+    const { unmount } = render(<App />);
+    expect(await screen.findByRole("heading", { name: "Denetim kayıtları" })).toBeTruthy(); // opens on the audit events
+    const nav = screen.getByRole("navigation");
+    expect([...nav.querySelectorAll("a")].map((a) => a.textContent)).toEqual(["Denetim kayıtları"]);
+    expect(screen.queryByRole("button", { name: "Erişim talep et" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Bildirimler/ })).toBeNull();
+    unmount();
+    for (const path of ["/access", "/requests", "/request-new", "/employees", "/team", "/approvals", "/settings", "/exceptions", "/reviews", "/tasks", "/mailbox", "/audit?tab=pit"]) {
+      window.history.pushState({}, "", path);
+      calls = fakeServer({ ...events, "GET /auth/me": auditor });
+      const { unmount } = render(<App />);
+      if (path.startsWith("/audit")) expect(await screen.findByText(/Dış denetçi erişimi/)).toBeTruthy();
+      else expect(await screen.findByText("Bu sayfaya erişiminiz yok")).toBeTruthy();
+      expect(calls.filter((c) => c.path !== "/auth/me" && c.path !== "/demo" && !c.path.startsWith("/audit/events") && c.path !== "/audit/filters")).toEqual([]);
+      unmount();
+    }
+    window.history.pushState({}, "", "/");
+  });
+
   it("opens the admin pages for a Super Admin only", async () => {
     window.history.pushState({}, "", "/settings");
     fakeServer({ ...basics, "GET /auth/me": principal(), "GET /admin-groups": { groups: [] } });

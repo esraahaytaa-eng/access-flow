@@ -44,8 +44,12 @@ func Handler(dist fs.FS) http.Handler {
 			}
 		}
 		if err != nil || info.IsDir() {
+			w.Header().Set("Cache-Control", "no-cache") // the page names the current bundle
 			http.ServeFileFS(w, r, dist, "index.html")
 			return
+		}
+		if strings.HasPrefix(name, "assets/") { // content-hashed by Vite
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		files.ServeHTTP(w, r)
 	})

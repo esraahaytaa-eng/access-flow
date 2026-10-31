@@ -321,3 +321,24 @@ func TestToolReadVerifiesReportedAccess(t *testing.T) {
 		t.Fatalf("second report = %v", r.Body)
 	}
 }
+
+// Regression (ENG-001): a failed removal of an orphan account has no employee; retrying it
+// used to fail with 500.
+func TestFailedOrphanRemovalCanBeRetried(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	gh := w.toolOf(w.github)
+	tl.legacy(t, gh, w.github, "ghost@example.com", "ACTIVE")
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{}), http.StatusCreated, "")
+	o := w.orphans()[0]
+	tl.faults.RespondNext(http.StatusConflict, `{"error":"level_suspended"}`)
+	testutil.RequireStatus(t, w.is1.c.Do(http.MethodPost, "/api/v1/orphans/"+o["id"].(string)+"/revoke",
+		map[string]any{"reason": "nobody owns it", "version": o["version"]}), http.StatusOK, "")
+	tl.drain(t)
+	testutil.RequireStatus(t, retry(w.admin, w.failedOp(w.admin)), http.StatusOK, "")
+	tl.drain(t)
+	if tl.permission(t, gh, w.github, "ghost@example.com") != "" {
+		t.Fatal("orphan account not revoked after the retry")
+	}
+}

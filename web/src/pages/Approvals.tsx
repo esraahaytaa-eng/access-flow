@@ -28,7 +28,7 @@ function NominationRow({ n }: { n: SuperAdminNomination }) {
   };
   return (
     <div className="list-row">
-      <div style={{ flex: 1 }}><Person person={n.nominee} sub={`Öneren: ${n.proposedBy.fullName}${n.recovery ? " (kurtarma)" : ""} · ${formatDate(n.createdAt, timezone)} · ${formatDate(n.expiresAt, timezone)} tarihinde sona erer`} /></div>
+      <div style={{ flex: 1 }}><Person person={n.nominee} sub={`Öneren: ${n.proposedBy.fullName}${n.succession ? " (İK ataması)" : n.recovery ? " (kurtarma)" : ""} · ${formatDate(n.createdAt, timezone)} · ${formatDate(n.expiresAt, timezone)} tarihinde sona erer`} /></div>
       <Button size="sm" variant="danger-ghost" loading={busy} onClick={() => decide(false)}>Reddet</Button>
       <Button size="sm" variant="primary" loading={busy} onClick={() => decide(true)}>Yetkilendir</Button>
     </div>

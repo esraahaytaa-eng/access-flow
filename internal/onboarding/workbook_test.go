@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"io"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -184,6 +185,9 @@ func TestParseRefusesUnsafeOrMalformedFiles(t *testing.T) {
 		{"a stray cell at the bottom of the sheet", newWorkbook(t, func(f *excelize.File) {
 			_ = f.SetCellValue(SheetEmployees, "A1048576", "x")
 		}), Problem{Sheet: SheetEmployees, Reason: "too_many_rows", Expected: strconv.Itoa(maxRows[SheetEmployees])}},
+		{"a cell far to the right", newWorkbook(t, func(f *excelize.File) {
+			_ = f.SetCellValue(SheetEmployees, "AA2", "x")
+		}), Problem{Sheet: SheetEmployees, Row: 2, Reason: "too_many_columns", Expected: "Z"}},
 		{"too many rows", newWorkbook(t, func(f *excelize.File) {
 			for i := 2; i <= maxRows[SheetEmployees]+2; i++ {
 				_ = f.SetCellValue(SheetEmployees, "A"+strconv.Itoa(i), "x@co.test")
@@ -234,4 +238,24 @@ func withEntry(t *testing.T, data []byte, name string, content []byte) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// Regression (security F-2): an 11 KB workbook with one cell at column XFD in each row made
+// the preview allocate over a gigabyte; it is now refused before the sheet is loaded.
+func TestSparseWideWorkbookIsRefusedCheaply(t *testing.T) {
+	raw := newWorkbook(t, func(f *excelize.File) {
+		for i := 2; i <= 400; i++ {
+			_ = f.SetCellValue(SheetEmployees, "XFD"+strconv.Itoa(i), "x")
+		}
+	})
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, problems := Parse(raw)
+	runtime.ReadMemStats(&after)
+	if len(problems) != 1 || problems[0].Reason != "too_many_columns" {
+		t.Fatalf("problems = %+v", problems)
+	}
+	if used := after.TotalAlloc - before.TotalAlloc; used > 64<<20 {
+		t.Fatalf("allocated %d MiB", used>>20)
+	}
 }

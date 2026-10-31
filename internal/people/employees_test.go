@@ -120,7 +120,7 @@ func TestDirectoryVisibility(t *testing.T) {
 	suspended := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Status: "SUSPENDED", Roles: []string{"AUDITOR"}})
 	terminated := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{Status: "TERMINATED"})
 
-	for _, role := range []string{"SUPER_ADMIN", "HR_MANAGER", "INFOSEC", "AUDITOR"} {
+	for _, role := range []string{"SUPER_ADMIN", "HR_MANAGER", "INFOSEC"} { // an Auditor reads audit events only (O7 note 2026-10-31)
 		t.Run(role, func(t *testing.T) {
 			_, c := env.user(role)
 			r := c.Do(http.MethodGet, "/api/v1/employees", nil)

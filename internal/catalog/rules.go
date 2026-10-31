@@ -34,7 +34,7 @@ func canEdit(p auth.Principal) error {
 
 // seesFullCatalog: these roles also see retired entries and versions, for configuration and evidence.
 func seesFullCatalog(p auth.Principal) bool {
-	return p.HasRole("SUPER_ADMIN") || p.HasRole("INFOSEC") || p.HasRole("AUDITOR")
+	return p.HasRole("SUPER_ADMIN") || p.HasRole("INFOSEC")
 }
 
 // cleanName trims and checks a tool or level name.

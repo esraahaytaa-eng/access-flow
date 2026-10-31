@@ -73,6 +73,7 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 	var c *claimed
 	found := false
 	err := platform.InTx(ctx, r.pool, func(tx pgx.Tx, now time.Time) error {
+		c, found = nil, false // fn may run again (platform.InTx)
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `SELECT o.id FROM operations o JOIN grants g ON g.id = o.grant_id
 			WHERE g.method = 'API'
@@ -98,7 +99,8 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 		if next.typ == "GRANT" && neverSent {
 			cancelled, err := cancelIfRetired(ctx, tx, now, nil, next.grant, next.employee)
 			if errors.Is(err, errEmployeeBusy) {
-				return nil // left PENDING for the next claim
+				found = false // left PENDING; pause instead of reclaiming it at once
+				return nil
 			}
 			if err != nil || cancelled {
 				return err

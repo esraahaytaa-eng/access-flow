@@ -23,13 +23,18 @@ const reviewItem = (over: Record<string, unknown> = {}) => ({
   requiresInfosec: false, flags: [], decision: null, decidedBy: null, decidedAt: null, decisionReason: null, late: false, findingAt: null,
   closedReason: null, closedAt: null, version: 3, ...over,
 });
+/** GET /reviews: one page of the server's view, with counts over everything (PERF-004). */
+const reviewPage = (c: Record<string, unknown> | null, items: ReturnType<typeof reviewItem>[], over: Record<string, unknown> = {}) => ({
+  campaign: c, items, view: "mine", total: items.length, page: 1, pageSize: 100,
+  counts: { mine: items.length, esc: 0, all: items.length, findings: 0, done: items.filter((i) => i.decision || i.closedReason).length, waiting: items.filter((i) => !i.decision).length }, ...over,
+});
 const base = { "GET /employees": { employees: [] }, "GET /approvals": { approvals: [] }, "GET /tools": { tools: [] } };
-const noExceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [], reviewFindings: [], orphanAccounts: [] };
+const noExceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [], reviewFindings: [], reviewFindingsTotal: 0, orphanAccounts: [], totals: { failedOperations: 0, unroutableSteps: 0, overlaps: 0, suspensionGaps: 0, securityRevocations: 0, staleGrants: 0, orphanAccounts: 0 } };
 
 describe("access reviews", () => {
   it("keeps an item with its version and bulk-keeps only eligible items", async () => {
     const items = [reviewItem(), reviewItem({ id: "ri2", grantId: "g2", level: "Yönetici", requiresInfosec: true }), reviewItem({ id: "ri3", grantId: "g3", tool: "GitHub", flags: ["IMPORTED_BASELINE"] }), reviewItem({ id: "ri4", grantId: "g4", tool: "Figma" })];
-    const calls = fakeServer({ ...base, "GET /reviews": { campaign, items }, "POST /review-items/ri1/decide": reviewItem({ decision: "KEEP" }), "POST /review-items/bulk-keep": { kept: 1, skipped: 0 } });
+    const calls = fakeServer({ ...base, "GET /reviews": reviewPage(campaign, items), "POST /review-items/ri1/decide": reviewItem({ decision: "KEEP" }), "POST /review-items/bulk-keep": { kept: 1, skipped: 0 } });
     renderPage(<ReviewsPage />, { session: owner });
     expect(await screen.findByText("İçe aktarılan")).toBeTruthy();
     const rows = screen.getAllByRole("row");
@@ -38,13 +43,13 @@ describe("access reviews", () => {
 
     // Only ri1 and ri4 may be kept in bulk: ri2's level needs InfoSec, ri3 is flagged.
     expect(screen.getAllByRole("checkbox", { name: /^Deniz Kara · / })).toHaveLength(2);
-    await userEvent.click(screen.getByRole("checkbox", { name: "Uygun olanların tümünü seç" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Bu sayfada uygun olanların tümünü seç" }));
     await userEvent.click(screen.getByRole("button", { name: "Seçilenlerin erişimi devam etsin" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/review-items/bulk-keep")?.body).toEqual({ items: [{ id: "ri1", version: 3 }, { id: "ri4", version: 3 }] }));
   });
 
   it("revokes with a reason; a Super Admin is offered Revoke only", async () => {
-    const calls = fakeServer({ ...base, "GET /reviews": { campaign, items: [reviewItem()] }, "POST /review-items/ri1/decide": reviewItem({ decision: "REVOKE" }) });
+    const calls = fakeServer({ ...base, "GET /reviews": reviewPage(campaign, [reviewItem()]), "POST /review-items/ri1/decide": reviewItem({ decision: "REVOKE" }) });
     renderPage(<ReviewsPage />, { session: sa });
     expect(await screen.findByText(/yalnızca “Erişimi kaldır”/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Erişim devam etsin" })).toBeNull();
@@ -55,7 +60,7 @@ describe("access reviews", () => {
   });
 
   it("titles the campaign by year and quarter and keeps the day timeline", async () => {
-    fakeServer({ ...base, "GET /reviews": { campaign, items: [reviewItem()] } });
+    fakeServer({ ...base, "GET /reviews": reviewPage(campaign, [reviewItem()]) });
     renderPage(<ReviewsPage />, { session: owner });
     expect(await screen.findByText("Erişim Denetimi — 2026 4. Çeyrek")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Erişim Kontrolü" })).toBeTruthy();
@@ -64,7 +69,7 @@ describe("access reviews", () => {
   });
 
   it("names a scheduled campaign's quarter from its key", async () => {
-    fakeServer({ ...base, "GET /reviews": { campaign: { ...campaign, kind: "QUARTERLY", quarter: "2027-Q1" }, items: [reviewItem()] } });
+    fakeServer({ ...base, "GET /reviews": reviewPage({ ...campaign, kind: "QUARTERLY", quarter: "2027-Q1" }, [reviewItem()]) });
     renderPage(<ReviewsPage />, { session: owner });
     expect(await screen.findByText("Erişim Denetimi — 2027 1. Çeyrek")).toBeTruthy();
   });
@@ -76,7 +81,7 @@ describe("access reviews", () => {
       reviewItem({ id: "ri2", grantId: "g2", tool: "GitHub", employee: leaver, grantStatus: "REVOCATION_REQUESTED" }),
       reviewItem({ id: "ri3", grantId: "g3", tool: "Figma", employee: leaver, grantStatus: "REVOCATION_FAILED" }),
     ];
-    fakeServer({ ...base, "GET /reviews": { campaign, items } });
+    fakeServer({ ...base, "GET /reviews": reviewPage(campaign, items) });
     renderPage(<ReviewsPage />, { session: owner });
     await userEvent.click(await screen.findByRole("tab", { name: /Tüm kalemlerim/ }));
     await screen.findByText("Kaldırma bekleniyor");
@@ -91,8 +96,26 @@ describe("access reviews", () => {
     expect(screen.queryByRole("checkbox", { name: /Deniz Kara · / })).toBeNull();
   });
 
+  it("pages through a large campaign on the server and searches all of it (PERF-004)", async () => {
+    const calls = fakeServer({ ...base, "GET /reviews": reviewPage(campaign, [reviewItem()], { total: 230, counts: { mine: 230, esc: 0, all: 230, findings: 0, done: 0, waiting: 230 } }) });
+    renderPage(<ReviewsPage />, { session: owner });
+    expect(await screen.findByText("1–100 / 230")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /İncelemem gerekenler/ }).textContent).toContain("230");
+    await userEvent.click(screen.getByRole("button", { name: "Sonraki" }));
+    await waitFor(() => expect(calls.some((c) => c.path === "/reviews?page=2")).toBe(true));
+    await userEvent.type(screen.getByRole("searchbox"), "Kara");
+    await waitFor(() => expect(calls.some((c) => c.path === "/reviews?q=Kara&page=1")).toBe(true)); // a new search starts at page 1
+  });
+
+  it("opens the findings view from the Exceptions link", async () => {
+    const calls = fakeServer({ ...base, "GET /reviews": reviewPage(null, [reviewItem({ findingAt: "2026-11-10T09:00:00Z" })], { view: "findings" }) });
+    renderPage(<ReviewsPage />, { session: infosec, path: "/reviews?view=findings" });
+    await waitFor(() => expect(calls.some((c) => c.path.startsWith("/reviews?view=findings"))).toBe(true));
+    expect(await screen.findByRole("tab", { name: /Açık bulgular/ })).toBeTruthy();
+  });
+
   it("shows when no campaign is active", async () => {
-    fakeServer({ ...base, "GET /reviews": { campaign: null, items: [] } });
+    fakeServer({ ...base, "GET /reviews": reviewPage(null, []) });
     renderPage(<ReviewsPage />, { session: owner });
     expect(await screen.findByText("Aktif erişim denetimi yok")).toBeTruthy();
   });
@@ -100,7 +123,7 @@ describe("access reviews", () => {
 
 describe("settings: reviews and imports", () => {
   it("starts a campaign manually", async () => {
-    const calls = fakeServer({ ...base, "GET /reviews": { campaign: null, items: [] }, "POST /reviews/campaigns": () => ({ status: 201, body: campaign }) });
+    const calls = fakeServer({ ...base, "GET /reviews": reviewPage(null, []), "POST /reviews/campaigns": () => ({ status: 201, body: campaign }) });
     renderPage(<SettingsPage />, { session: sa });
     await userEvent.click(screen.getByRole("tab", { name: "Denetim takvimi" }));
     expect(await screen.findByText("Üç aylık erişim denetimi takvimi")).toBeTruthy();
@@ -235,12 +258,20 @@ describe("exceptions: findings and orphans", () => {
     expect(screen.queryByText(/Hesap tutarsızlıkları/)).toBeNull();
   });
 
+  it("counts every open finding and links to all of them when only the first page is listed (PERF-004)", async () => {
+    fakeServer({ ...base, "GET /exceptions": { ...noExceptions, reviewFindings: [reviewItem({ findingAt: "2026-11-10T09:00:00Z" })], reviewFindingsTotal: 230 } });
+    renderPage(<ExceptionsPage />, { session: infosec });
+    expect(await screen.findByRole("button", { name: "Tümü (230)" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Açık bulgular/ }).getAttribute("href")).toBe("/reviews?view=findings");
+  });
+
   it("lets InfoSec dismiss an orphan with a reason", async () => {
-    const calls = fakeServer({ ...base, "GET /exceptions": { ...noExceptions, orphanAccounts: [orphan], reviewFindings: [reviewItem({ findingAt: "2026-11-10T09:00:00Z" })] },
+    const calls = fakeServer({ ...base, "GET /exceptions": { ...noExceptions, orphanAccounts: [orphan], reviewFindings: [reviewItem({ findingAt: "2026-11-10T09:00:00Z" })], reviewFindingsTotal: 1 },
       "POST /orphans/g9/dismiss": orphan });
     renderPage(<ExceptionsPage />, { session: infosec });
     expect(await screen.findByText("ghost@example.com")).toBeTruthy();
     expect(screen.getByText("Açık inceleme bulgusu")).toBeTruthy();
+    expect(screen.getByText("Onay ve denetim (1)")).toBeTruthy(); // findings are not filed under approvals alone (BUG-B-02)
     await userEvent.click(screen.getByRole("button", { name: "Bulguyu kapat" }));
     await userEvent.type(dialog("Bulgu kapatılsın mı?").getByRole("textbox"), "Kiosk hesabı, bilerek tutuluyor");
     await userEvent.click(dialog("Bulgu kapatılsın mı?").getByRole("button", { name: "Bulguyu kapat" }));

@@ -82,10 +82,12 @@ func TestFailedLoginsLookIdentical(t *testing.T) {
 		{"suspended", suspended.Email, goodPassword, "inactive", suspended.ID},
 		{"terminated", terminated.Email, goodPassword, "inactive", terminated.ID},
 		{"locked, even with the right password", locked.Email, goodPassword, "locked", locked.ID},
-		{"empty input", "", "", "unknown_email", uuid.Nil},
-		{"malformed email", "a\tb@example.com", goodPassword, "unknown_email", uuid.Nil},
+		{"empty input", "", "", "invalid_email", uuid.Nil},
+		{"malformed email", "a\tb@example.com", goodPassword, "invalid_email", uuid.Nil},
+		// Regression (security F-3): what was typed is kept only when it is an email address.
+		{"a password typed as the email", "MySecretPassw0rd!", goodPassword, "invalid_email", uuid.Nil},
 		// Go lowercases the Kelvin sign to "k"; the shared rule rejects non-ASCII before that.
-		{"non-ASCII look-alike of a real email", "\u212Aate@example.com", goodPassword, "unknown_email", uuid.Nil},
+		{"non-ASCII look-alike of a real email", "\u212Aate@example.com", goodPassword, "invalid_email", uuid.Nil},
 		{"employee without a password", noPassword.Email, goodPassword, "wrong_password", noPassword.ID},
 		{"corrupted stored hash", corrupted.Email, goodPassword, "wrong_password", corrupted.ID},
 	}
@@ -102,6 +104,11 @@ func TestFailedLoginsLookIdentical(t *testing.T) {
 				tc.reason, nullable(tc.subject)).Scan(&n)
 			if err != nil || n == 0 {
 				t.Errorf("LOGIN_FAILED with reason %s: count %d, err %v; want recorded", tc.reason, n, err)
+			}
+			var stored int
+			if err := env.db.App.QueryRow(context.Background(), `SELECT count(*) FROM audit_events WHERE action = 'LOGIN_FAILED'
+				AND details->>'reason' = 'invalid_email' AND details ? 'email'`).Scan(&stored); err != nil || stored != 0 {
+				t.Errorf("an invalid email input was stored in the audit log (%d, %v)", stored, err)
 			}
 		})
 	}
@@ -425,16 +432,16 @@ func TestSessionIsRenewedOnlyWhenLessThanHalfIsLeft(t *testing.T) {
 
 // The submitted email of an unknown-email failure is kept in the append-only audit log,
 // so its size is capped there.
-func TestFailedLoginAuditCapsTheSubmittedEmail(t *testing.T) {
+func TestFailedLoginAuditKeepsNoOverlongInput(t *testing.T) {
 	env := newEnv(t)
 	testutil.RequireStatus(t, env.client().Login(strings.Repeat("a", 5000)+"@example.com", goodPassword), http.StatusUnauthorized, "invalid_credentials")
-	var n int
+	var stored bool
 	if err := env.db.App.QueryRow(context.Background(),
-		"SELECT length(details->>'email') FROM audit_events WHERE action = 'LOGIN_FAILED'").Scan(&n); err != nil {
+		"SELECT details ? 'email' FROM audit_events WHERE action = 'LOGIN_FAILED' AND details->>'reason' = 'invalid_email'").Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
-	if n != 254 {
-		t.Fatalf("recorded email length = %d; want 254", n)
+	if stored {
+		t.Fatal("an over-long input was recorded")
 	}
 }
 
@@ -506,5 +513,32 @@ func TestMeShowsAdminGroups(t *testing.T) {
 	r = c.Do(http.MethodGet, "/api/v1/auth/me", nil)
 	if groups, _ := r.Body["adminGroups"].([]any); len(groups) != 0 {
 		t.Fatalf("adminGroups after removal = %v; want empty", r.Body["adminGroups"])
+	}
+}
+
+// Regression (PERF-001): a long transaction that records events or notifications about an
+// employee (a review sweep, an import) must not hold up their sign-in.
+func TestSignInIsNotBlockedByRowsReferencingTheEmployee(t *testing.T) {
+	ctx := context.Background()
+	env := newEnv(t)
+	emp := env.employee()
+	tx, err := env.db.App.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `INSERT INTO notifications (recipient_id, kind, entity, entity_id, details)
+		VALUES ($1, 'REVIEW_REMINDER', 'review_item', $1, '{}')`, emp.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() { done <- env.client().Login(emp.Email, emp.Password).Status }()
+	select {
+	case status := <-done:
+		if status != http.StatusOK {
+			t.Fatalf("sign-in status = %d", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("sign-in waited for an unrelated transaction")
 	}
 }

@@ -283,6 +283,22 @@ export function SearchBox({ value, onChange, placeholder = "Ara…", label = "Ar
   );
 }
 
+/** Pages through a server-paged list (PERF-004): "101–200 / 2.345" with previous and next. Hidden while everything fits on one page. */
+export function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: number; total: number; onChange: (page: number) => void }) {
+  if (total <= pageSize && page === 1) return null;
+  const last = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const n = (x: number) => x.toLocaleString("tr-TR");
+  return (
+    <nav className="row" aria-label="Sayfalar" style={{ justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+      <span className="muted small">{n(from)}–{n(Math.min(page * pageSize, total))} / {n(total)}</span>
+      <Button size="sm" disabled={page <= 1} onClick={() => onChange(page - 1)}>Önceki</Button>
+      <span className="small">Sayfa {page} / {last}</span>
+      <Button size="sm" disabled={page >= last} onClick={() => onChange(page + 1)}>Sonraki</Button>
+    </nav>
+  );
+}
+
 export function Tabs<T extends string>({ value, onChange, tabs }: {
   value: T; onChange: (v: T) => void; tabs: { value: T; label: string; count?: number }[];
 }) {

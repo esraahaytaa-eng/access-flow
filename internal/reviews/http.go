@@ -23,7 +23,11 @@ func actor(r *http.Request) auth.Principal {
 }
 
 func (s *Service) handlePage(w http.ResponseWriter, r *http.Request) {
-	page, err := s.Page(r.Context(), actor(r))
+	n, offset, err := platform.PageParam(r)
+	var page Page
+	if err == nil {
+		page, err = s.Page(r.Context(), actor(r), PageQuery{View: r.URL.Query().Get("view"), Search: r.URL.Query().Get("q"), Page: n, Offset: offset})
+	}
 	platform.Respond(w, r, http.StatusOK, page, err)
 }
 

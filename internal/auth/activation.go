@@ -29,6 +29,7 @@ var (
 	errInvalidActivationLink     = platform.NewError(http.StatusBadRequest, "invalid_activation_link")
 	errActivationLinkUnavailable = platform.NewError(http.StatusGone, "activation_link_unavailable")
 	errMockEmailUnavailable      = platform.NewError(http.StatusServiceUnavailable, "mock_email_unavailable")
+	errIndependentSuperAdmin     = platform.NewError(http.StatusForbidden, "independent_super_admin_required")
 )
 
 // IssueActivation gives an active employee a new activation link inside the caller's
@@ -164,19 +165,25 @@ func (s *Service) revealLink(ctx context.Context, actor Principal, mail uuid.UUI
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		var (
 			employee, activation uuid.UUID
+			issuedBy             *uuid.UUID
 			sealed               []byte
-			usable               bool
+			usable, privileged   bool
 		)
 		err := tx.QueryRow(ctx, `
-			SELECT o.recipient_id, o.activation_id, o.sealed_token,
-			       t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > $2 AND e.status = 'ACTIVE'
+			SELECT o.recipient_id, o.activation_id, o.sealed_token, t.issued_by,
+			       t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > $2 AND e.status = 'ACTIVE',
+			       EXISTS (SELECT 1 FROM role_assignments r WHERE r.employee_id = e.id AND r.role IN ('SUPER_ADMIN', 'INFOSEC') AND r.valid_to IS NULL)
 			FROM email_outbox o JOIN activation_tokens t ON t.id = o.activation_id JOIN employees e ON e.id = o.recipient_id
-			WHERE o.id = $1`, mail, now).Scan(&employee, &activation, &sealed, &usable)
+			WHERE o.id = $1 FOR SHARE OF e`, mail, now).Scan(&employee, &activation, &sealed, &issuedBy, &usable, &privileged)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return platform.ErrNotFound
 		}
 		if err != nil {
 			return err
+		}
+		// R-1: whoever reset a privileged account, or owns it, could sign in as it with the link.
+		if employee == actor.EmployeeID || privileged && issuedBy != nil && *issuedBy == actor.EmployeeID {
+			return errIndependentSuperAdmin
 		}
 		if !usable || sealed == nil || s.mailKey == nil {
 			return errActivationLinkUnavailable
@@ -185,8 +192,17 @@ func (s *Service) revealLink(ctx context.Context, actor Principal, mail uuid.UUI
 			s.log.Warn("mock email link does not decrypt with the current key", "email_id", mail)
 			return errActivationLinkUnavailable
 		}
+		if privileged { // the other active Super Admins learn at once (notify imports auth, so inline)
+			if _, err := tx.Exec(ctx, `INSERT INTO notifications (recipient_id, kind, entity, entity_id, details)
+				SELECT e.id, 'PRIVILEGED_ACTIVATION_LINK_VIEWED', 'employee', t.id, jsonb_build_object('employee', t.id, 'name', t.full_name, 'viewedBy', v.id, 'viewer', v.full_name)
+				FROM employees e, employees t, employees v WHERE t.id = $1 AND v.id = $2 AND e.status = 'ACTIVE' AND e.id <> v.id
+				  AND EXISTS (SELECT 1 FROM role_assignments r WHERE r.employee_id = e.id AND r.role = 'SUPER_ADMIN' AND r.valid_to IS NULL)`,
+				employee, actor.EmployeeID); err != nil {
+				return err
+			}
+		}
 		return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "ACTIVATION_LINK_VIEWED", Entity: "employee",
-			EntityID: &employee, SubjectID: &employee, Details: map[string]any{"activationId": activation}})
+			EntityID: &employee, SubjectID: &employee, Details: map[string]any{"activationId": activation, "privileged": privileged}})
 	})
 	return token, err
 }
@@ -224,6 +240,7 @@ func (s *Service) activate(ctx context.Context, token, password string) error {
 		}
 	}
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		dead = false // fn may run again (platform.InTx)
 		// Lock the employee first, as every other change to a person does, then read the link.
 		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", employee); err != nil {
 			return err

@@ -56,7 +56,7 @@ type CatalogLevel struct {
 }
 
 // Catalog lists the tools and levels the viewer may see: requestable ones for everyone;
-// retired ones too, with versions, for Super Admin, InfoSec and Auditor.
+// retired ones too, with versions, for Super Admin and InfoSec.
 func (s *Service) Catalog(ctx context.Context, viewer auth.Principal) ([]CatalogTool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.name, t.fulfillment_method, t.status, t.version, o.id, o.full_name, g.id, g.name

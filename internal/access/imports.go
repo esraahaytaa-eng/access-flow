@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -253,7 +254,8 @@ func RecordHoldings(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Pr
 	for _, h := range holdings {
 		var employee *uuid.UUID
 		var status string
-		err := tx.QueryRow(ctx, "SELECT id, status FROM employees WHERE lower(email) = lower($1) FOR UPDATE", h.Email).Scan(&employee, &status)
+		// Emails are stored lowercase (CHECK), so the unique email index applies.
+		err := tx.QueryRow(ctx, "SELECT id, status FROM employees WHERE email = lower($1) FOR UPDATE", h.Email).Scan(&employee, &status)
 		if errors.Is(err, pgx.ErrNoRows) {
 			employee, err = nil, nil // an orphan account
 		}
@@ -339,7 +341,7 @@ func SaveReport(ctx context.Context, tx pgx.Tx, actor auth.Principal, report *Im
 
 // Imports lists the import reports, newest first, for Super Admins and InfoSec.
 func (s *Service) Imports(ctx context.Context, actor auth.Principal) ([]ImportReport, error) {
-	if !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("INFOSEC") && !actor.HasRole("AUDITOR") {
+	if !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("INFOSEC") {
 		return nil, platform.ErrForbidden
 	}
 	rows, err := s.pool.Query(ctx, "SELECT report FROM imports ORDER BY imported_at DESC, id DESC LIMIT 100")
@@ -373,16 +375,27 @@ type Orphan struct {
 // openOrphan is an orphan still waiting for InfoSec.
 const openOrphan = "g.orphan_dismissed_at IS NULL AND g.status IN ('ACTIVE', 'SUSPENDED')"
 
-// OrphanAccounts lists the open orphans (Exceptions). The caller checks who may read them.
-func OrphanAccounts(ctx context.Context, pool *pgxpool.Pool) ([]Orphan, error) {
-	return orphans(ctx, pool, openOrphan)
+// OrphanAccounts lists the first open orphans and how many there are (Exceptions). The caller
+// checks who may read them.
+func OrphanAccounts(ctx context.Context, pool *pgxpool.Pool) ([]Orphan, int, error) {
+	list, err := orphans(ctx, pool, openOrphan)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(list)
+	if total == orphanLimit {
+		err = pool.QueryRow(ctx, "SELECT count(*) FROM grants g WHERE g.employee_id IS NULL AND g.import_id IS NOT NULL AND "+openOrphan).Scan(&total)
+	}
+	return list, total, err
 }
+
+const orphanLimit = 500 // shortcut: first 500 by tool and account, with the total; each resolved one makes room
 
 func orphans(ctx context.Context, pool *pgxpool.Pool, where string, args ...any) ([]Orphan, error) {
 	rows, err := pool.Query(ctx, `SELECT g.id, t.id, t.name, l.id, l.name, g.method, g.account, g.status, i.source, i.file_name,
 		       i.imported_at, g.version
 		FROM grants g JOIN imports i ON i.id = g.import_id JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
-		WHERE g.employee_id IS NULL AND `+where+` ORDER BY t.name, g.account, l.name LIMIT 500`, args...) // shortcut: first 500; page after a bigger import
+		WHERE g.employee_id IS NULL AND `+where+` ORDER BY t.name, g.account, l.name, g.id LIMIT `+strconv.Itoa(orphanLimit), args...)
 	if err != nil {
 		return nil, err
 	}

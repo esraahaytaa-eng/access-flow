@@ -43,7 +43,7 @@ func (w *world) hr() person {
 // teamGrant is dev's grant for level as their manager sees it: a suspended dev cannot sign in.
 func (w *world) teamGrant(level uuid.UUID) map[string]any {
 	w.t.Helper()
-	r := w.get(w.mgr.c, "/api/v1/access/team")
+	r := w.get(w.mgr.c, "/api/v1/access/team/"+w.dev.ID.String())
 	testutil.RequireStatus(w.t, r, http.StatusOK, "")
 	for _, g := range r.Body["grants"].([]any) {
 		if g := g.(map[string]any); g["accessLevelId"] == level.String() {
@@ -242,7 +242,7 @@ func TestExpiryAndRevokeDuringSuspension(t *testing.T) {
 		tl.drain(t)
 		w.mustLifecycle(w.hr(), w.dev.ID, "suspend")
 		done := w.inFlight(tl)
-		g := w.mustRevoke(w.mgr.c, w.teamGrant(w.jiraViewer))
+		w.mustRevoke(w.mgr.c, w.teamGrant(w.jiraViewer))
 		if found, err := tl.runner.RunOnce(context.Background()); err != nil || found {
 			t.Fatalf("the REVOKE ran before the SUSPEND in flight finished (found %v, %v)", found, err)
 		}
@@ -250,7 +250,7 @@ func TestExpiryAndRevokeDuringSuspension(t *testing.T) {
 			t.Fatal(err)
 		}
 		tl.drain(t)
-		g = w.teamGrant(w.jiraViewer)
+		g := w.teamGrant(w.jiraViewer)
 		requireGrant(t, g, "REVOKED", "REVOKED / VERIFIED")
 		if w.openIntervals(g) != 0 || w.ops(g, "SUSPEND", "SUCCEEDED") != 1 {
 			t.Fatal("the suspension in the tool was not recorded and closed")
@@ -560,9 +560,7 @@ func TestSuspensionGapIsVisibleAndActionable(t *testing.T) {
 			t.Fatalf("grant = %v", g)
 		}
 		auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
-		if len(w.gaps(auditor)) != 1 {
-			t.Fatal("Auditors read Exceptions")
-		}
+		testutil.RequireStatus(t, w.exceptions(auditor), http.StatusForbidden, "forbidden") // audit events only (O7 note 2026-10-31)
 		testutil.RequireStatus(t, w.exceptions(w.owner), http.StatusForbidden, "")
 		w.due()
 		tl.drain(t)
@@ -683,7 +681,7 @@ func TestReactivateAPI(t *testing.T) {
 	w := newWorld(t)
 	tl := w.startTools()
 	hr := w.hr()
-	g := w.suspended(tl, hr)
+	w.suspended(tl, hr)
 	before := w.version(w.dev.ID)
 	e := w.mustLifecycle(hr, w.dev.ID, "reactivate")
 	if e["status"] != "ACTIVE" || int(e["version"].(float64)) != before+1 {
@@ -695,7 +693,7 @@ func TestReactivateAPI(t *testing.T) {
 		t.Fatalf("grant before the runner = %v", g)
 	}
 	tl.drain(t)
-	g = w.teamGrant(w.jiraViewer)
+	g := w.teamGrant(w.jiraViewer)
 	requireGrant(t, g, "ACTIVE", "ACTIVE / VERIFIED")
 	if w.openIntervals(g) != 0 || tl.state(t, g, w.dev.Email) != "ACTIVE" || w.audits("EMPLOYEE_REACTIVATED") != 1 || w.audits("GRANT_RESUMED") != 1 {
 		t.Fatal("resume not recorded")
@@ -710,10 +708,10 @@ func TestReactivateReevaluates(t *testing.T) {
 		w := newWorld(t)
 		tl := w.startTools()
 		hr := w.hr()
-		g := w.suspended(tl, hr)
+		w.suspended(tl, hr)
 		w.exec("UPDATE access_levels SET status = 'RETIRED' WHERE id = $1", w.jiraViewer)
 		w.mustLifecycle(hr, w.dev.ID, "reactivate")
-		g = w.teamGrant(w.jiraViewer)
+		g := w.teamGrant(w.jiraViewer)
 		if g["status"] != "REVOCATION_REQUESTED" || g["closedReason"] != "access level retired" || w.ops(g, "RESUME", "PENDING") != 0 {
 			t.Fatalf("grant = %v", g)
 		}

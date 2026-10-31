@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -251,7 +253,7 @@ type Retention struct {
 
 // reviewable are the grants a transfer decides on: open, not being or already removed. A
 // SUSPENDED grant of an active employee is one whose RESUME is still on its way.
-const reviewable = "g.status IN ('PROVISIONING', 'PENDING_FULFILLMENT', 'ACTIVE', 'FAILED', 'SUSPENDED')"
+const reviewable = "g.status IN " + openStatuses
 
 func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Grant, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -266,7 +268,7 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
-		WHERE `+where+` ORDER BY g.created_at DESC, g.id LIMIT 200`, args...) // shortcut: newest 200 only; page when someone holds more
+		WHERE `+where+` ORDER BY g.status IN ('REVOKED', 'CANCELLED'), g.created_at DESC, g.id LIMIT 200`, args...) // shortcut: 200 rows, every grant not yet ended first; past ones beyond are in the audit explorer
 	if err != nil {
 		return nil, err
 	}
@@ -291,12 +293,53 @@ func (s *Service) Mine(ctx context.Context, actor auth.Principal) ([]Grant, erro
 	return s.grants(ctx, "g.employee_id = $1", actor.EmployeeID)
 }
 
-// Team lists the grants of the actor's direct reports (D5).
-func (s *Service) Team(ctx context.Context, actor auth.Principal) ([]Grant, error) {
-	return s.grants(ctx, "e.manager_id = $1", actor.EmployeeID)
+// Member is a direct report with their access counted on the server (Team, D5, PERF-004).
+type Member struct {
+	ID           uuid.UUID `json:"id"`
+	FullName     string    `json:"fullName"`
+	JobTitle     *string   `json:"jobTitle"`
+	Department   *string   `json:"department"`
+	Active       int       `json:"active"`       // ACTIVE grants
+	ExpiringSoon int       `json:"expiringSoon"` // open grants whose expiry date is within 14 days (or past)
 }
 
-// EmployeeGrants lists the grants HR decides on when transferring an employee (D5).
+// Team is one page of the actor's direct reports who have not left, by name, matching
+// search (name or job title), and how many there are.
+func (s *Service) Team(ctx context.Context, actor auth.Principal, search string, offset int) ([]Member, int, error) {
+	var like *string
+	if t := strings.TrimSpace(search); t != "" {
+		like = new(explorer.Like(t))
+	}
+	where := "e.manager_id = $1 AND e.status <> 'TERMINATED' AND ($2::text IS NULL OR (e.full_name || ' ' || coalesce(e.job_title, '')) ILIKE $2)"
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM employees e WHERE "+where, actor.EmployeeID, like).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	soon := Today(time.Now(), s.loc).AddDate(0, 0, 14)
+	rows, _ := s.pool.Query(ctx, `SELECT e.id, e.full_name, e.job_title, e.department,
+			(SELECT count(*) FROM grants g WHERE g.employee_id = e.id AND g.status = 'ACTIVE'),
+			(SELECT count(*) FROM grants g WHERE g.employee_id = e.id AND g.status IN `+openStatuses+` AND g.expires_on <= $3)
+		FROM employees e WHERE `+where+` ORDER BY e.full_name, e.id LIMIT `+strconv.Itoa(platform.PageSize)+` OFFSET `+strconv.Itoa(offset),
+		actor.EmployeeID, like, soon)
+	members, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Member])
+	return members, total, err
+}
+
+// TeamMember lists the grants of one of the actor's direct reports; anyone else is not found.
+func (s *Service) TeamMember(ctx context.Context, actor auth.Principal, id uuid.UUID) ([]Grant, error) {
+	var report bool
+	if err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM employees WHERE id = $1 AND manager_id = $2)", id, actor.EmployeeID).Scan(&report); err != nil {
+		return nil, err
+	}
+	if !report {
+		return nil, platform.ErrNotFound
+	}
+	return s.grants(ctx, "g.employee_id = $1", id)
+}
+
+// EmployeeGrants lists an employee's grants not yet removed, including those still being
+// removed so a leaver's unfinished removals stay visible (D7). A transfer decides only on
+// the open ones (D5).
 func (s *Service) EmployeeGrants(ctx context.Context, actor auth.Principal, id uuid.UUID) ([]Grant, error) {
 	if !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("HR_MANAGER") {
 		return nil, platform.ErrForbidden
@@ -308,7 +351,7 @@ func (s *Service) EmployeeGrants(ctx context.Context, actor auth.Principal, id u
 	if !exists {
 		return nil, platform.ErrNotFound
 	}
-	return s.grants(ctx, "g.employee_id = $1 AND "+reviewable, id)
+	return s.grants(ctx, "g.employee_id = $1 AND g.status NOT IN ('REVOKED', 'CANCELLED')", id)
 }
 
 // Revoke gives up a grant: by its employee (O6), their current direct manager (D5) or,

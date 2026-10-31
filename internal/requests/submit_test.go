@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -430,5 +431,80 @@ func TestConcurrentSubmissionsForOneTool(t *testing.T) {
 	}
 	if created != 1 || w.count("SELECT count(*) FROM request_items") != 1 {
 		t.Fatalf("created = %d; want one", created)
+	}
+}
+
+// R-3: an HR Manager who moved someone under themself is their direct manager, but their
+// own submission does not stand in for the Manager step: who sets reporting lines (HR, a
+// Super Admin) never self-approves through D3. The Manager step is routed past the
+// submitter and decided by someone independent.
+func TestHRCannotApproveBySubmissionAfterMovingSomeoneUnderThemself(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	hr := w.hr()
+	testutil.RequireStatus(t, w.transfer(hr, w.dev.ID, hr.ID, "Engineering"), http.StatusOK, "")
+	it := items(w.mustSubmit(hr.c, body(&w.dev.ID, item(w.jiraViewer))))[0]
+	s := open(t, it)
+	if s["type"] != "MANAGER" || s["status"] != "PENDING" || s["assigneeId"] == hr.ID.String() || it["status"] == "APPROVED" {
+		t.Fatalf("HR's own submission approved the Manager step: %v / %v", it["status"], s)
+	}
+	testutil.RequireStatus(t, decide(hr.c, s, "approve", nil), http.StatusForbidden, "forbidden") // not theirs to decide
+	if w.count("SELECT count(*) FROM audit_events WHERE action = 'REQUEST_SUBMITTED' AND (details->>'approvedBySubmission')::boolean") != 0 {
+		t.Fatal("recorded as approved by submission")
+	}
+
+	// A plain line manager keeps D3.
+	w.exec("UPDATE request_items SET status = 'WITHDRAWN'")
+	testutil.RequireStatus(t, w.transfer(hr, w.dev.ID, w.mgr.ID, "Engineering"), http.StatusOK, "")
+	if s := steps(items(w.mustSubmit(w.mgr.c, body(&w.dev.ID, item(w.jiraViewer))))[0])[0]; s["status"] != "APPROVED_BY_SUBMISSION" {
+		t.Fatalf("the direct manager's submission: %v", s)
+	}
+}
+
+// A submission and a tool change that makes the submitter its owner take the employee and
+// tool locks in opposite orders; PostgreSQL aborts one as a deadlock. The aborted transaction
+// is retried, so the submission still succeeds exactly once instead of answering 500.
+func TestSubmissionSurvivesADeadlockWithAToolOwnerChange(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	ctx := context.Background()
+	tx, err := w.db.App.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM tools WHERE id = $1 FOR UPDATE", w.jira); err != nil { // as UpdateTool: the tool first
+		t.Fatal(err)
+	}
+	done := make(chan testutil.Response, 1)
+	go func() { done <- submit(w.dev.c, body(nil, item(w.jiraViewer))) }()
+	for deadline := time.Now().Add(testutil.WaitLimit); ; time.Sleep(10 * time.Millisecond) {
+		var waiting int
+		if err := w.db.App.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the submission never waited for the tool")
+		}
+	}
+	// Then the new owner: a cycle. PostgreSQL aborts the side whose deadlock check runs first,
+	// usually the submission (it waited first); under a slow host it may be this one instead.
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", w.dev.ID); err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	} else if !strings.Contains(err.Error(), "40P01") {
+		t.Fatal(err)
+	}
+	r := <-done
+	testutil.RequireStatus(t, r, http.StatusCreated, "")
+	if n := w.count("SELECT count(*) FROM request_items WHERE beneficiary_id = $1", w.dev.ID); n != 1 {
+		t.Fatalf("items = %d; want exactly 1", n)
+	}
+	if n := w.count("SELECT count(*) FROM audit_events WHERE action = 'REQUEST_SUBMITTED' AND subject_employee_id = $1", w.dev.ID); n != 1 {
+		t.Fatalf("REQUEST_SUBMITTED events = %d; want exactly 1", n)
 	}
 }

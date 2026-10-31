@@ -1,9 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import { useEmployees, useExceptions, useTools } from "../api/queries";
-import type { Approval, Operation, Orphan, Overlap } from "../api/types";
+import type { Approval, CappedList, Operation, Orphan, Overlap } from "../api/types";
 import { operationLabel, stepLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, PageHeader, Person, Segmented, StatusBadge, TableSkeleton, ToolCell, useAction } from "../ui/components";
@@ -12,6 +12,8 @@ import { statusBadge } from "../ui/status";
 import { DecisionDrawer } from "./Approvals";
 
 type Group = "OPS" | "ACCOUNTS" | "FLOW";
+const partyText = { beneficiary: "Talep sizin erişiminiz için olduğundan", submitter: "Bu talebi siz gönderdiğiniz için", approver: "Bu talebin önceki bir adımını siz onayladığınız için" };
+
 type Exception = { key: string; title: string; high: boolean; group: Group; at: string | null; body: ReactNode; op?: Operation; approval?: Approval; orphan?: Orphan; finding?: boolean };
 
 const opBody = (op: Operation, note?: string) => (
@@ -21,7 +23,13 @@ const opBody = (op: Operation, note?: string) => (
       <ToolCell tool={op.tool} level={op.level} sub={operationLabel[op.type]} />
       <StatusBadge badge={statusBadge("operation", op.status)} />
     </div>
-    {op.lastError && <div className="small" style={{ color: "var(--red)" }}>{op.lastError}{op.attempts ? ` · ${op.attempts} deneme` : ""}</div>}
+    {/* attempts > 0: the tool call's raw error, kept for the tool admin; otherwise a person's reason */}
+    {op.lastError && (op.attempts > 0 ? (
+      <div className="small">
+        <div style={{ color: "var(--red)" }}>Araç çağrısı başarısız oldu · {op.attempts} deneme</div>
+        <details className="muted"><summary>Teknik ayrıntı</summary><span className="mono">{op.lastError}</span></details>
+      </div>
+    ) : <div className="small" style={{ color: "var(--red)" }}>{op.lastError}</div>)}
     {note && <div className="small muted">{note}</div>}
   </div>
 );
@@ -34,6 +42,11 @@ const overlapBody = (o: Overlap) => (
   </div>
 );
 
+const cappedNames: Record<CappedList, string> = {
+  failedOperations: "Başarısız işlem", unroutableSteps: "Uygun onaylayıcı yok", overlaps: "Seviye çakışması", suspensionGaps: "Askıya alma tamamlanmadı",
+  securityRevocations: "Ayrılan çalışanın kalan erişimi", staleGrants: "Transferden sonra etkinleşen erişim", orphanAccounts: "Sahipsiz ve şüpheli hesap",
+};
+const cappedGroup: Record<CappedList, Group> = { failedOperations: "OPS", unroutableSteps: "FLOW", overlaps: "OPS", suspensionGaps: "OPS", securityRevocations: "ACCOUNTS", staleGrants: "OPS", orphanAccounts: "ACCOUNTS" };
 const sourceText = (o: Orphan) => o.source === "MOCK" ? "Araç servisi okuması (API)" : `${o.source === "CSV" ? "CSV içe aktarımı" : "Excel çalışma kitabı"} · ${o.fileName}`;
 
 /** Why an account matched no employee, as a hint for InfoSec: nothing is assigned or removed automatically. */
@@ -99,7 +112,13 @@ export function ExceptionsPage() {
       body: <div className="row-wrap" style={{ gap: 18 }}><Person person={i.employee} sub={false} /><ToolCell tool={i.tool} level={i.level} sub={`İnceleyen: ${i.reviewerName ?? "Bilgi Güvenliği havuzu"} · 21 günde yanıtlanmadı`} /></div>,
     })),
   ];
-  const count = (g: Group) => list.filter((e) => e.group === g).length;
+  // Only the first page of findings is listed here; the counts include them all (PERF-004).
+  const unlisted = x ? x.reviewFindingsTotal - x.reviewFindings.length : 0;
+  // The other lists hold their first (oldest or most urgent) rows; each resolved one makes room for the next.
+  const capped = !x ? [] : (Object.keys(cappedNames) as CappedList[])
+    .map((k) => ({ k, shown: x[k].length, total: x.totals[k] })).filter((c) => c.total > c.shown);
+  const hidden = (g?: Group) => capped.filter((c) => !g || cappedGroup[c.k] === g).reduce((n, c) => n + c.total - c.shown, 0);
+  const count = (g: Group) => list.filter((e) => e.group === g).length + (g === "FLOW" ? unlisted : 0) + hidden(g);
   const shown = list.filter((e) => filter === "ALL" || e.group === filter);
 
   const retry = (op: Operation) => run(() => api.post(`/operations/${op.id}/retry`, { version: op.version }), { success: "İşlem yeniden başlatıldı" })
@@ -109,9 +128,11 @@ export function ExceptionsPage() {
     <>
       <PageHeader title="İstisnalar" sub="Yalnızca gerçek sorunlar: başarısız işlemler, ayrılanların kalan erişimleri, sahipsiz ve şüpheli hesaplar, açık inceleme bulguları ve onaylayıcısı olmayan adımlar. Olağan bekleyen işler burada listelenmez." />
       {readOnly && <div style={{ marginBottom: 14 }}><Callout icon="eye">Denetçi olarak bu ekranı salt okunur görüntülüyorsunuz.</Callout></div>}
+      {capped.length > 0 && <div style={{ marginBottom: 14 }}><Callout tone="warn">Bazı listelerde ilk kayıtlar gösteriliyor, en eski ve en öncelikli olanlar önce: {capped.map((c) => `${cappedNames[c.k]}: ilk ${c.shown.toLocaleString("tr-TR")} / ${c.total.toLocaleString("tr-TR")}`).join(" · ")}. Her çözülen kayıt sıradakine yer açar; sayılar tüm açık kayıtları içerir.</Callout></div>}
+      {unlisted > 0 && <div style={{ marginBottom: 14 }}><Callout tone="warn">{x!.reviewFindingsTotal.toLocaleString("tr-TR")} açık inceleme bulgusunun ilk {x!.reviewFindings.length} tanesi burada listeleniyor. Tümünü sayfa sayfa görmek ve aramak için <Link to="/reviews?view=findings">Erişim Kontrolü › Açık bulgular</Link>.</Callout></div>}
       <div className="toolbar">
         <Segmented<"ALL" | Group> label="İstisna türü" value={filter} onChange={setFilter}
-          options={[{ value: "ALL", label: `Tümü (${list.length})` }, { value: "OPS", label: `İşlem hataları (${count("OPS")})` }, { value: "ACCOUNTS", label: `Sahipsiz ve Şüpheli Hesaplar (${count("ACCOUNTS")})` }, { value: "FLOW", label: `Onay (${count("FLOW")})` }]} />
+          options={[{ value: "ALL", label: `Tümü (${list.length + unlisted + hidden()})` }, { value: "OPS", label: `İşlem hataları (${count("OPS")})` }, { value: "ACCOUNTS", label: `Sahipsiz ve Şüpheli Hesaplar (${count("ACCOUNTS")})` }, { value: "FLOW", label: `Onay ve denetim (${count("FLOW")})` }]} />
       </div>
       {query.isPending ? <TableSkeleton /> : shown.length === 0 ? (
         <div className="card"><EmptyState icon="check" title="Çözülmesi gereken istisna yok" desc="Yeni bir sorun oluştuğunda burada görünür." /></div>
@@ -129,7 +150,8 @@ export function ExceptionsPage() {
                   {e.body}
                 </div>
                 {!readOnly && e.op?.status === "FAILED" && canRetry(e.op) && <div className="row"><Button size="sm" icon="refresh" loading={busy} onClick={() => retry(e.op!)}>Yeniden dene</Button></div>}
-                {!readOnly && e.approval && e.approval.item.beneficiary.id !== me.id && <div className="row"><Button size="sm" onClick={() => setOpenStep(e.approval!)}>{hasRole("SUPER_ADMIN") ? "Yeniden ata veya geçersiz kıl" : "Yeniden ata"}</Button></div>}
+                {!readOnly && e.approval && !e.approval.party && <div className="row"><Button size="sm" onClick={() => setOpenStep(e.approval!)}>{hasRole("SUPER_ADMIN") ? "Yeniden ata veya geçersiz kıl" : "Yeniden ata"}</Button></div>}
+                {!readOnly && e.approval?.party && <Callout tone="warn" title="Bu adımı siz çözemezsiniz">{partyText[e.approval.party]} Görevler ayrılığı gereği yeniden atayamaz veya geçersiz kılamazsınız. Adımı talebe taraf olmayan bir Süper Yönetici veya Bilgi Güvenliği üyesi yeniden atayabilir; böyle biri yoksa yeni bir Bilgi Güvenliği üyesi ya da Süper Yönetici atanmalı veya talep sahibi talebi geri çekmelidir.</Callout>}
                 {e.orphan && !hasRole("INFOSEC") && <div className="small muted" style={{ maxWidth: 220 }}>Bilgi Güvenliği ekibi hesabı kaldırır veya gerekçesiyle kapatır.</div>}
                 {e.orphan && hasRole("INFOSEC") && (
                   <div className="row">

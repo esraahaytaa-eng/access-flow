@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -46,7 +47,7 @@ func newEnv(t *testing.T) *env {
 			NewService(db.App, authSvc).Register(r)
 			people.NewService(db.App, authSvc).Register(r)
 			catalog.NewService(db.App).Register(r)
-			access.NewService(db.App, nil).Register(r)
+			access.NewService(db.App, nil, time.UTC).Register(r)
 			notify.Register(r, db.App)
 		})
 	})

@@ -134,7 +134,8 @@ func (s *Service) verify(id uuid.UUID, stored, pw string) bool {
 // login checks the password under a row lock on the employee and records every outcome.
 // Failed attempts are committed (they are audit evidence); the caller gets one generic error.
 func (s *Service) login(ctx context.Context, email, password string) (Session, error) {
-	if normalized, err := NormalizeEmail(email); err == nil {
+	normalized, invalid := NormalizeEmail(email)
+	if invalid == nil {
 		email = normalized
 	} else {
 		// Not lowercased: Go folds some non-ASCII letters to ASCII (Kelvin sign → "k"), which
@@ -149,6 +150,7 @@ func (s *Service) login(ctx context.Context, email, password string) (Session, e
 	var session Session
 	succeeded := false
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		succeeded = false // fn may run again (platform.InTx)
 		var (
 			id                 uuid.UUID
 			status             string
@@ -158,7 +160,8 @@ func (s *Service) login(ctx context.Context, email, password string) (Session, e
 		)
 		// Lock first, then read in a new statement: a statement that waited for the lock re-reads
 		// only the locked row and keeps the credential it joined before, e.g. one a reset replaced.
-		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE email = $1 FOR UPDATE", email); err != nil {
+		// NO KEY: rows that merely reference the employee (audit, notifications) do not block it.
+		if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE email = $1 FOR NO KEY UPDATE", email); err != nil {
 			return err
 		}
 		err := tx.QueryRow(ctx, `
@@ -167,11 +170,11 @@ func (s *Service) login(ctx context.Context, email, password string) (Session, e
 			WHERE e.email = $1`, email).Scan(&id, &status, &version, &failed, &lockedUntil, &hash, &expAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_, _ = VerifyPassword(s.dummyHash, password)
-			if r := []rune(email); len(r) > MaxEmailLength {
-				email = string(r[:MaxEmailLength])
+			details := map[string]any{"email": email, "reason": "unknown_email"}
+			if invalid != nil { // not an email: often a password typed in the wrong field (security F-3)
+				details = map[string]any{"reason": "invalid_email"}
 			}
-			return audit.Record(ctx, tx, audit.Event{Action: "LOGIN_FAILED", Entity: "employee",
-				Details: map[string]any{"email": email, "reason": "unknown_email"}})
+			return audit.Record(ctx, tx, audit.Event{Action: "LOGIN_FAILED", Entity: "employee", Details: details})
 		}
 		if err != nil {
 			return err
@@ -296,6 +299,7 @@ func (s *Service) changePassword(ctx context.Context, p Principal, current, next
 	var session Session
 	changed, expired := false, false
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		changed, expired = false, false // fn may run again (platform.InTx)
 		id := p.EmployeeID
 		var (
 			failed             int

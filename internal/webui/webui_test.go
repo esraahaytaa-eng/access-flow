@@ -59,3 +59,16 @@ func TestHandlerReturns404ForMissingAssets(t *testing.T) {
 		}
 	}
 }
+
+// PERF-009: Vite's assets carry a content hash, so browsers may keep them; the page itself
+// is never cached, so a rebuild is picked up at once.
+func TestHashedAssetsAreCachedAndThePageIsNot(t *testing.T) {
+	dist := fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")}, "assets/app-1a2b.js": {Data: []byte("x")}}
+	for path, want := range map[string]string{"/assets/app-1a2b.js": "public, max-age=31536000, immutable", "/": "no-cache", "/route": "no-cache"} {
+		rec := httptest.NewRecorder()
+		webui.Handler(dist).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if got := rec.Header().Get("Cache-Control"); got != want {
+			t.Errorf("%s: Cache-Control = %q; want %q", path, got, want)
+		}
+	}
+}

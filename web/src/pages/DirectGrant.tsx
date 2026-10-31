@@ -115,7 +115,7 @@ function RevokeTab() {
   const [employeeId, setEmployeeId] = useState("");
   const [revoke, setRevoke] = useState<Grant | null>(null);
   const grants = useQuery({ queryKey: ["access", "employee", employeeId], enabled: !!employeeId, queryFn: () => api.get<GrantsResponse>(`/employees/${employeeId}/grants`).then((r) => r.grants) });
-  const rows = (grants.data ?? []).filter((g) => g.status !== "REVOCATION_REQUESTED");
+  const rows = (grants.data ?? []).filter((g) => g.status !== "REVOCATION_REQUESTED" && g.status !== "REVOCATION_FAILED");
   const emp = employees.find((e) => e.id === employeeId);
   return (
     <Card title="Doğrudan kaldırma" sub="Seçilen erişim normal kaldırma iş akışıyla kaldırılır ve doğrulanır.">

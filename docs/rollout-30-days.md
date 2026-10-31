@@ -32,7 +32,7 @@ Each step needs the one before it, and AccessFlow enforces this: a workbook row 
 | Secrets: a `JWT_SECRET` of at least 32 bytes and new database passwords from the company secret store, set before the database volume is first created. | IT / platform |
 | Backups: daily PostgreSQL backups; one restore tested into a separate environment before go-live. | IT / platform |
 | One `app` instance; `COMPANY_TIMEZONE` set to the company's zone. | IT / platform |
-| The first Super Admin signs in with the one-time password, assigns at least two InfoSec members, the HR Managers and the Auditor, and nominates a second Super Admin (a different InfoSec member authorizes it, D2). | Super Admin, InfoSec |
+| The first Super Admin signs in with the one-time password, assigns at least two InfoSec members, the HR Managers and the Auditor, and nominates a second Super Admin (an InfoSec member authorizes it; the nominator never does, D2). | Super Admin, InfoSec |
 | HR defines the departments and job positions with the company's exact names (Çalışanlar → Departmanlar ve unvanlar, for example "Senior Backend Developer"). They grant nothing; they drive starter packages. | HR Manager |
 | The Super Admin creates one admin group per team that fulfils tools today (for example "IT Operations", "Vendor Desk"). Members come later (step 5): they must be imported employees. | Super Admin |
 
@@ -45,7 +45,7 @@ Each step needs the one before it, and AccessFlow enforces this: a workbook row 
 | The Super Admin downloads the template (Yönetim ayarları → İçe aktarma → Excel şablonunu indir). It has three sheets — **Employees**, **Tools**, **Existing Access** — and dropdowns with the catalog names, admin groups, fulfillment methods and approval steps. | Super Admin |
 | HR fills **Employees** from its active-employee list (email, name, department, position, manager email). Each tool's owner, with InfoSec, fills **Tools**: one row per tool and access level, with the fulfillment method, owner email, admin group and approval steps. Each tool admin pastes the tool's accounts into **Existing Access** (employee email, tool, level, account). | HR, Tool Owners, InfoSec, tool admins |
 | The Super Admin previews the file, fixes every listed problem (sheet, row, column, value and the defined value) and imports. The import is all or nothing: one problem stores nothing. It creates no passwords (each employee gets an activation link), no roles, admin group members, requests, approvals or tool operations. Existing employees and tools are never changed; differences are shown as warnings. InfoSec gets one notification for the new approval policies; every created record is audited individually. | Super Admin |
-| Add each admin group's members (Yönetim ayarları → Yönetim grupları). Manual and Vendor removal tasks created by the import wait in the group's queue until then. | Super Admin |
+| Add each admin group's members (Yönetim ayarları → Yönetim grupları). Until then nobody can work the group's Manual and Vendor tasks. | Super Admin |
 | **Reconcile.** Run the API tool read (Araç servisinden içe aktar): it verifies the reported API access it finds ("Araçtan doğrulandı"), records access the workbook missed, and counts reported API access the tool does not hold. Check every orphan account (an account matching no employee) and every unverified grant before deciding it. Manual and Vendor access stays "reported": there is no tool to read. | Super Admin, InfoSec, tool admins |
 | Configure starter packages per department and position (F3). | Super Admin, managers |
 
@@ -57,7 +57,7 @@ Each step needs the one before it, and AccessFlow enforces this: a workbook row 
 
 | Step | Owner |
 |---|---|
-| When the imports are reconciled (target: day 12), a Super Admin starts the first **access review** ("Erişim denetimi"). Day 7 reminds, day 14 escalates to InfoSec, day 21 (about day 33) turns every unanswered item into a security finding for InfoSec; nothing is removed automatically (D8, D10). | Super Admin |
+| When the imports are reconciled (target: day 12), a Super Admin starts the first **access review** in Erişim Kontrolü (campaign "Erişim Denetimi — <year> <n>. Çeyrek"). Day 7 reminds, day 14 escalates to InfoSec, day 21 (about day 33) turns every unanswered item into a security finding for InfoSec; nothing is removed automatically (D8, D10). | Super Admin |
 | Employees set their own password through their activation link (valid 24 hours, single use), department by department on a planned day; the Super Admin follows the activation screen and sends new links to anyone pending or expired. With real e-mail (not part of this version) the links would go straight to the employees. | Super Admin, HR Manager |
 | **Pilot:** one or two departments request all new access through AccessFlow; their tools' admins work only from AccessFlow tasks. Brief managers, tool owners and admin groups (about 30 minutes each). | InfoSec lead, pilot managers |
 | Daily during the pilot: InfoSec checks Exceptions (failed tasks, unroutable steps, orphans, stale grants). | InfoSec |
@@ -71,8 +71,8 @@ Each step needs the one before it, and AccessFlow enforces this: a workbook row 
 | Cutover: all departments request through AccessFlow; the Slack access channel becomes read-only with a link. Tool admins grant only from AccessFlow tasks. | CISO / InfoSec lead |
 | HR records every transfer and leaver in AccessFlow on the day it happens; future leavers are scheduled (D5, D7). | HR Manager |
 | Monitoring: Exceptions daily; review progress twice a week; a tool read and a CSV account re-import of a few tools to catch access granted outside AccessFlow. | InfoSec, tool admins |
-| Privileged roles: InfoSec and the Auditor review the Privileged roles report (a manual review outside the software, D11). | InfoSec, Auditor |
-| Audit walkthrough: point-in-time access for a chosen date, approvers of a sensitive grant, and the leavers, overrides, policy and quarter reports. | Auditor, InfoSec |
+| Privileged roles: InfoSec reviews the Privileged roles report (a manual review outside the software, D11); the Auditor checks the role changes in the audit events. | InfoSec, Auditor |
+| Audit walkthrough: InfoSec shows point-in-time access for a chosen date, the approvers of a sensitive grant and the leavers, overrides, policy and quarter reports; the Auditor traces the same actions in the audit events and exports them as CSV. | InfoSec, Auditor |
 
 ## Day 30: done means
 
@@ -83,7 +83,7 @@ Each step needs the one before it, and AccessFlow enforces this: a workbook row 
 - **The 14 former employees:** IT/InfoSec confirms their accounts are closed in every tool, and each removal is confirmed in AccessFlow.
 - **Certification:** the campaign is running with at least 80% of items decided.
 - **Requests:** since cutover, no access was granted outside AccessFlow (a re-import of 5 tools shows no new orphans or unrecorded grants).
-- **Audit:** the Auditor answers "who had access to X on date D, and who approved it" without help.
+- **Audit:** InfoSec answers "who had access to X on date D, and who approved it" from point-in-time access, and the Auditor confirms it from the audit events and their CSV export without help.
 
 ## Known limits during the rollout
 

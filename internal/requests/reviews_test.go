@@ -30,7 +30,7 @@ func (w *world) startCampaign(p person) testutil.Response {
 // reviewItems is what p sees on the review page.
 func (w *world) reviewItems(p person) []map[string]any {
 	w.t.Helper()
-	r := w.get(p.c, "/api/v1/reviews")
+	r := w.get(p.c, "/api/v1/reviews?view=all")
 	testutil.RequireStatus(w.t, r, http.StatusOK, "")
 	var out []map[string]any
 	for _, it := range r.Body["items"].([]any) {
@@ -329,11 +329,11 @@ func TestTerminatedEmployeeAccessCannotBeKept(t *testing.T) {
 	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
 	viewer := w.reviewItem(w.owner, w.dev.ID, w.jiraViewer)
 	testutil.RequireStatus(t, decideReview(w.owner, viewer, "KEEP", ""), http.StatusOK, "")
-	gh := w.reviewItem(w.owner, w.dev.ID, w.github)
+	w.reviewItem(w.owner, w.dev.ID, w.github)
 
 	hr := w.hr()
 	w.mustLifecycle(hr, w.dev.ID, "suspend")
-	gh = w.reviewItem(w.owner, w.dev.ID, w.github) // suspension does not stop reviews (D7)
+	gh := w.reviewItem(w.owner, w.dev.ID, w.github) // suspension does not stop reviews (D7)
 	if gh["employee"].(map[string]any)["status"] != "SUSPENDED" {
 		t.Fatalf("employee status on the item = %v", gh["employee"])
 	}

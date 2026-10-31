@@ -102,7 +102,7 @@ function AssignRoleModal({ employees, onClose }: { employees: Employee[]; onClos
       <div className="stack">
         <Field label="Kişi" required error={errors.emp}><Select value={employeeId} onChange={(e) => { setEmployeeId(e.target.value); setErrors({ ...errors, emp: undefined }); }} placeholder="Seçin" options={managerOptions(employees, me.id)} /></Field>
         <Field label="Rol" required error={errors.role}><Select value={role} onChange={(e) => { setRole(e.target.value); setErrors({ ...errors, role: undefined }); }} placeholder="Seçin" options={assignable.map((r) => ({ value: r, label: roleLabel[r] }))} /></Field>
-        {role === "AUDITOR" && <Callout tone="info">Denetçi rolü salt okunurdur; onay, karşılama veya yönetim yetkisi vermez.</Callout>}
+        {role === "AUDITOR" && <Callout tone="info">Denetçi rolü dış denetçi içindir: hesap yalnızca denetim kayıtlarını görüntüler, filtreler ve CSV olarak indirir. Rol, hesabın diğer rollerinin ve yetkilerinin önüne geçer.</Callout>}
       </div>
     </Modal>
   );
@@ -298,7 +298,7 @@ function ReviewScheduleTab() {
   const reviews = useReviews();
   const [confirm, setConfirm] = useState(false);
   const campaign = reviews.data?.campaign;
-  const waiting = (reviews.data?.items ?? []).filter((i) => i.campaignId === campaign?.id && !i.decision && !i.closedReason).length;
+  const waiting = reviews.data?.counts.waiting ?? 0;
   return (
     <div className="stack">
       <Card title="Üç aylık erişim denetimi takvimi">
@@ -332,6 +332,7 @@ const workbookReasons: Record<string, string> = {
   missing_sheet: "Sayfa eksik",
   invalid_header: "Sütun başlığı şablondakinden farklı",
   too_many_rows: "Satır sınırı aşıldı",
+  too_many_columns: "Z sütunundan sonra veri olamaz",
   empty_workbook: "Dosyada aktarılacak satır yok",
   sample_row: "Örnek satır; silin veya gerçek veriyle değiştirin",
   field_required: "Zorunlu alan boş",

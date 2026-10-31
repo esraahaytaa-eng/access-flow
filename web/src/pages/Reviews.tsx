@@ -1,10 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useReviews } from "../api/queries";
-import type { GrantStatus, ReviewCampaign, ReviewFlag, ReviewItem } from "../api/types";
+import type { GrantStatus, ReviewCampaign, ReviewFlag, ReviewItem, ReviewView } from "../api/types";
 import { useSession } from "../session";
-import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, PageHeader, Person, SearchBox, TableSkeleton, Tabs, Tag, ToolCell, useAction } from "../ui/components";
+import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, PageHeader, Pager, Person, SearchBox, TableSkeleton, Tabs, Tag, ToolCell, useAction } from "../ui/components";
 import { formatDate, todayIn } from "../ui/format";
 import type { Tone } from "../ui/status";
 
@@ -25,7 +26,7 @@ export function campaignTitle(c: Pick<ReviewCampaign, "quarter" | "startedAt">, 
 }
 const DAY = 86_400_000;
 
-type View = "mine" | "esc" | "all";
+type View = ReviewView;
 const open = (i: ReviewItem) => !i.decision && !i.closedReason;
 
 /** D8: the reviewer decides; InfoSec decides pool items and, after day 14, any item; a Super Admin may only Revoke; never one's own access.
@@ -40,36 +41,40 @@ const bulkEligible = (i: ReviewItem) => !i.requiresInfosec && i.flags.length ===
 export function ReviewsPage() {
   const { me, hasRole, timezone } = useSession();
   const qc = useQueryClient();
-  const query = useReviews();
+  const [params] = useSearchParams();
   const roles = { superAdmin: hasRole("SUPER_ADMIN"), infosec: hasRole("INFOSEC") };
-  const seesAll = roles.superAdmin || roles.infosec || hasRole("AUDITOR");
-  const [chosen, setView] = useState<View | null>(null);
-  const [search, setSearch] = useState("");
+  const seesAll = roles.superAdmin || roles.infosec;
+  // Until a tab is chosen the server picks: the reviewer's own items, else what this role works on.
+  const [chosen, setChosen] = useState<View | null>(params.get("view") === "findings" ? "findings" : null);
+  const [search, setSearchText] = useState("");
+  const [page, setPageNo] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [revoking, setRevoking] = useState<ReviewItem | null>(null);
   const [run, busy] = useAction();
+  // Views, search and pages are served by the server over every item (PERF-004).
+  const query = useReviews({ view: chosen ?? undefined, q: search.trim(), page });
   const campaign = query.data?.campaign ?? null;
   const items = query.data?.items ?? [];
+  const counts = query.data?.counts;
   const reload = () => qc.invalidateQueries({ queryKey: ["reviews"] });
+  const setView = (v: View) => { setChosen(v); setPageNo(1); setSelected([]); };
+  const setSearch = (v: string) => { setSearchText(v); setPageNo(1); setSelected([]); };
+  const setPage = (p: number) => { setPageNo(p); setSelected([]); };
 
-  if (query.isPending) return <><PageHeader title="Erişim Kontrolü" /><TableSkeleton /></>;
-  if (!campaign && items.length === 0) {
+  if (query.isPending || !query.data || !counts) return <><PageHeader title="Erişim Kontrolü" /><TableSkeleton /></>;
+  if (!campaign && counts.all === 0) {
     return <><PageHeader title="Erişim Kontrolü" /><div className="card"><EmptyState icon="review" title="Aktif erişim denetimi yok" desc="Denetimler her takvim çeyreğinin başında başlar. Başladığında araç sahipleri bilgilendirilir." /></div></>;
   }
   const escalated = !!campaign?.escalatedAt;
   const decidable = (i: ReviewItem) => mayDecide(i, "KEEP", me.id, roles, escalated) || mayDecide(i, "REVOKE", me.id, roles, escalated);
-  const mine = items.filter((i) => i.reviewerId === me.id && decidable(i));
-  const esc = roles.infosec ? items.filter((i) => open(i) && i.reviewerId !== me.id && decidable(i)) : [];
-  // Until a tab is chosen: the reviewer's own items, else what this role works on.
-  const view: View = chosen ?? (mine.length || !seesAll ? "mine" : roles.infosec ? "esc" : "all");
-  const tabs: { value: View; label: string; count: number }[] = [{ value: "mine", label: "İncelemem gerekenler", count: mine.length }];
-  if (roles.infosec) tabs.push({ value: "esc", label: "Havuz ve eskale edilenler", count: esc.length });
-  tabs.push({ value: "all", label: seesAll ? "Tüm kalemler" : "Tüm kalemlerim", count: items.length });
-  const q = search.trim().toLocaleLowerCase("tr-TR");
-  const shown = (view === "mine" ? mine : view === "esc" ? esc : items)
-    .filter((i) => !q || `${i.employee.fullName} ${i.tool}`.toLocaleLowerCase("tr-TR").includes(q));
+  const view: View = query.data.view;
+  const tabs: { value: View; label: string; count: number }[] = [{ value: "mine", label: "İncelemem gerekenler", count: counts.mine }];
+  if (roles.infosec) tabs.push({ value: "esc", label: "Havuz ve eskale edilenler", count: counts.esc });
+  tabs.push({ value: "all", label: seesAll ? "Tüm kalemler" : "Tüm kalemlerim", count: counts.all });
+  if (counts.findings > 0 || view === "findings") tabs.push({ value: "findings", label: "Açık bulgular", count: counts.findings });
+  const shown = items; // this page of the view, already searched on the server
   const bulk = shown.filter((i) => bulkEligible(i) && mayDecide(i, "KEEP", me.id, roles, escalated));
-  const done = items.filter((i) => !open(i)).length;
+  const done = counts.done;
   const day = campaign ? Math.floor((Date.now() - Date.parse(campaign.startedAt)) / DAY) : 0;
 
   const keep = (i: ReviewItem) => run(() => api.post(`/review-items/${i.id}/decide`, { decision: "KEEP", reason: "", version: i.version }),
@@ -93,8 +98,8 @@ export function ReviewsPage() {
                 <div className="muted small" style={{ marginTop: 2 }}>{campaign.startedBy ? `${campaign.startedBy.fullName} başlattı` : "Çeyrek başında otomatik başladı"} · {formatDate(campaign.startedAt, timezone)}</div>
               </div>
               <div style={{ minWidth: 220 }}>
-                <div className="between small"><span className="muted">Karar verilen</span><span className="strong">{done} / {items.length}</span></div>
-                <div className="progress" style={{ marginTop: 6 }}><div style={{ width: `${items.length ? (done / items.length) * 100 : 0}%` }} /></div>
+                <div className="between small"><span className="muted">Karar verilen</span><span className="strong">{done} / {counts.all}</span></div>
+                <div className="progress" style={{ marginTop: 6 }}><div style={{ width: `${counts.all ? (done / counts.all) * 100 : 0}%` }} /></div>
               </div>
             </div>
             <div className="day-track">
@@ -109,7 +114,7 @@ export function ReviewsPage() {
           </div>
         </Card>
       )}
-      <Tabs value={view} onChange={(v) => { setView(v); setSelected([]); }} tabs={tabs} />
+      <Tabs value={view} onChange={setView} tabs={tabs} />
       <div className="toolbar">
         <SearchBox value={search} onChange={setSearch} placeholder="Çalışan veya araç ara" />
         {bulk.length > 0 && (
@@ -127,7 +132,7 @@ export function ReviewsPage() {
           <table className="table">
             <thead>
               <tr>
-                <th style={{ width: 36 }}>{bulk.length > 0 && <input type="checkbox" aria-label="Uygun olanların tümünü seç" checked={selected.length > 0 && selected.length === bulk.length} onChange={(e) => setSelected(e.target.checked ? bulk.map((i) => i.id) : [])} />}</th>
+                <th style={{ width: 36 }}>{bulk.length > 0 && <input type="checkbox" aria-label="Bu sayfada uygun olanların tümünü seç" checked={selected.length > 0 && selected.length === bulk.length} onChange={(e) => setSelected(e.target.checked ? bulk.map((i) => i.id) : [])} />}</th>
                 <th>Çalışan</th><th>Araç ve seviye</th><th>Erişim</th><th>İşaretler</th><th>Karar</th>
               </tr>
             </thead>
@@ -169,6 +174,7 @@ export function ReviewsPage() {
           </table>
         </div>
       )}
+      <Pager page={query.data.page} pageSize={query.data.pageSize} total={query.data.total} onChange={setPage} />
       <p className="hint" style={{ marginTop: 12 }}>Bilgi Güvenliği onaylı seviyeler ve işaretli kalemler (içe aktarılan, transferde korunan, doğrudan erişim, askıdaki, önceki politikayla onaylanan) toplu onaylanamaz; tek tek değerlendirilir. “Erişim devam etsin” yalnızca bu çeyreğin denetim kararıdır: bitiş tarihini uzatmaz ve çalışan ayrılırsa erişimin kaldırılmasını engellemez.</p>
       <ConfirmDialog open={!!revoking} onClose={() => setRevoking(null)} title="Erişim kaldırılsın mı?" tone="danger" confirmLabel="Erişimi kaldır" reason success="Kaldırma kararı kaydedildi"
         desc={revoking ? `${revoking.employee.fullName} · ${revoking.tool} · ${revoking.level}. Kaldırma normal iş akışıyla başlar ve doğrulanınca tamamlanır.` : undefined}

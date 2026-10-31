@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { api, ApiError } from "../api/client";
-import { useEmployees, useMyGrants, useRequests, useStarterPackages, useTeamGrants, useTools } from "../api/queries";
+import { useEmployees, useMyGrants, useRequests, useStarterPackages, useTeamMemberGrants, useTools } from "../api/queries";
 import type { CatalogTool, Duration, Grant, Request } from "../api/types";
 import { errorMessage } from "../i18n/errors";
 import { stepLabel } from "../i18n/labels";
@@ -22,12 +22,15 @@ export function NewRequestPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [params] = useSearchParams();
-  const { me, timezone } = useSession();
+  const { me, timezone, hasRole } = useSession();
   const flags = useRoleFlags();
   const tools = (useTools().data ?? []).filter((t) => t.levels.some((l) => l.requestable)).sort((a, b) => a.name.localeCompare(b.name, "tr"));
   const query = useEmployees();
   const employees = query.data ?? [];
-  const reports = employees.filter((e) => e.managerId === me.id && (!("status" in e) || e.status === "ACTIVE"));
+  // Anyone below me in the management chain, direct or not (D3 note 2026-10-30); `seen` guards a cycle.
+  const managerOf = new Map(employees.map((e) => [e.id, e.managerId]));
+  const below = (id: string) => { const seen = new Set<string>(); for (let m = managerOf.get(id); m && !seen.has(m); m = managerOf.get(m)) { if (m === me.id) return true; seen.add(m); } return false; };
+  const reports = employees.filter((e) => below(e.id) && (!("status" in e) || e.status === "ACTIVE"));
   const others = flags.hr || flags.superAdmin ? employees.filter((e) => e.id !== me.id && (!("status" in e) || e.status === "ACTIVE")) : reports;
   const [beneficiaryId, setBeneficiaryId] = useState(params.get("for") ?? me.id);
   const [lines, setLines] = useState<Line[]>(() => [newLine(params.get("tool") ?? "", params.get("level") ?? "")]);
@@ -39,11 +42,13 @@ export function NewRequestPage() {
   const isOther = beneficiaryId !== me.id;
   const beneficiary = isOther ? employees.find((e) => e.id === beneficiaryId) : { ...me, managerId: employees.find((e) => e.id === me.id)?.managerId ?? null };
   const isDirectReport = isOther && beneficiary?.managerId === me.id;
+  // D3: the direct manager's submission covers the Manager step, except for those who set reporting lines (R-3).
+  const bySubmission = isDirectReport && !hasRole("HR_MANAGER", "SUPER_ADMIN");
   const manager = employees.find((e) => e.id === beneficiary?.managerId);
   // Held grants are known for oneself and one's direct reports; for anyone else the server checks.
   const myGrants = useMyGrants().data ?? [];
-  const teamGrants = useTeamGrants().data ?? [];
-  const heldGrants = (isOther ? teamGrants.filter((g) => g.employee?.id === beneficiaryId) : myGrants).filter(isOpenGrant);
+  const reportGrants = useTeamMemberGrants(isDirectReport ? beneficiaryId : null).data ?? [];
+  const heldGrants = (isOther ? reportGrants : myGrants).filter(isOpenGrant);
   const requests = useRequests().data ?? [];
   const myPending = isOther ? [] : requests.flatMap((r) => r.items).filter((i) => i.status === "PENDING_APPROVAL" && i.beneficiary.id === me.id);
 
@@ -101,7 +106,7 @@ export function NewRequestPage() {
       () => change
         ? api.post<Request>(`/grants/${change.id}/change`, { submissionId, accessLevelId: lines[0].levelId, justification, duration: duration(lines[0]) })
         : api.post<Request>("/requests", { submissionId, beneficiaryId: isOther ? beneficiaryId : null, items: lines.map((ln) => ({ accessLevelId: ln.levelId, justification, duration: duration(ln) })) }),
-      { success: "Talebiniz gönderildi", successDesc: isDirectReport ? "Yönetici adımı gönderiminizle karşılandı." : "Onaylayıcılara bildirim gönderildi." },
+      { success: "Talebiniz gönderildi", successDesc: bySubmission ? "Yönetici adımı gönderiminizle karşılandı." : "Onaylayıcılara bildirim gönderildi." },
     );
     if (r.ok) {
       qc.invalidateQueries({ queryKey: ["requests"] });
@@ -129,7 +134,9 @@ export function NewRequestPage() {
                 <Segmented label="Hak sahibi" value={isOther ? "other" : "me"} onChange={(v) => setBeneficiaryId(v === "me" ? me.id : others[0].id)}
                   options={[{ value: "me", label: "Kendim için" }, { value: "other", label: flags.hr ? "Bir çalışan adına" : "Ekibimden biri adına" }]} />
                 {isOther && (
-                  <Field label="Çalışan" hint={isDirectReport ? "Doğrudan yöneticisi olduğunuz için yönetici adımı gönderiminizle karşılanır." : "Çalışanın yöneticisi yine onay verecek. Talebin hiçbir adımına siz karar veremezsiniz."}>
+                  <Field label="Çalışan" hint={bySubmission ? "Doğrudan yöneticisi olduğunuz için yönetici adımı gönderiminizle karşılanır."
+                    : isDirectReport ? "Yönetici bağlarını değiştirebildiğiniz için yönetici adımını sizden bağımsız bir onaylayıcı verir. Talebin hiçbir adımına siz karar veremezsiniz."
+                    : "Çalışanın yöneticisi yine onay verecek. Talebin hiçbir adımına siz karar veremezsiniz."}>
                     <Select value={beneficiaryId} onChange={(e) => setBeneficiaryId(e.target.value)} options={others.map((e) => ({ value: e.id, label: e.jobTitle ? `${e.fullName} — ${e.jobTitle}` : e.fullName }))} />
                   </Field>
                 )}
@@ -206,7 +213,7 @@ export function NewRequestPage() {
               <div><div className="label" style={{ marginBottom: 6 }}>Hak sahibi</div><Person person={beneficiary} /></div>
               <div><div className="label" style={{ marginBottom: 6 }}>Yöneticisi</div><Person person={manager} /></div>
               <div className="divider" style={{ margin: 0 }} />
-              {lines.map((ln) => <Summary key={ln.key} tool={toolOf(ln)} levelId={ln.levelId} isDirectReport={isDirectReport} managerName={manager?.fullName} />)}
+              {lines.map((ln) => <Summary key={ln.key} tool={toolOf(ln)} levelId={ln.levelId} isDirectReport={bySubmission} managerName={isDirectReport ? undefined : manager?.fullName} />)}
               <Button variant="primary" size="lg" block loading={busy} onClick={submit}>Talebi gönder</Button>
               <p className="hint" style={{ textAlign: "center" }}>Onay beklerken talebinizi istediğiniz zaman geri çekebilirsiniz.</p>
             </div>

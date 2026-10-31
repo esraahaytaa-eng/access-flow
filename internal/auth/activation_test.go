@@ -377,3 +377,59 @@ func TestExpiredLinksAreCleared(t *testing.T) {
 		t.Fatal("wrong links cleared")
 	}
 }
+
+// issueBy gives id a password reset link issued by actor and returns its mock email.
+func (e *testEnv) issueBy(actor, id uuid.UUID) uuid.UUID {
+	e.t.Helper()
+	ctx := context.Background()
+	if err := platform.InTx(ctx, e.db.App, func(tx pgx.Tx, now time.Time) error {
+		return e.svc.IssueActivation(ctx, tx, now, &actor, id, "RESET")
+	}); err != nil {
+		e.t.Fatalf("issue: %v", err)
+	}
+	var mail uuid.UUID
+	if err := e.db.App.QueryRow(ctx, "SELECT id FROM email_outbox WHERE recipient_id = $1 ORDER BY id DESC LIMIT 1", id).Scan(&mail); err != nil {
+		e.t.Fatal(err)
+	}
+	return mail
+}
+
+// A Super Admin who reset a privileged account cannot reveal its link and sign in as that
+// person: an independent Super Admin hands it over, and the others are told (R-1).
+func TestPrivilegedActivationLinkNeedsAnIndependentSuperAdmin(t *testing.T) {
+	env := newEnv(t)
+	issuer, issuerC := env.admin()
+	other, otherC := env.admin()
+	path := func(mail uuid.UUID) string { return "/api/v1/email-outbox/" + mail.String() + "/activation-link" }
+
+	for _, role := range []string{"SUPER_ADMIN", "INFOSEC"} {
+		target := env.employee(role)
+		mail := env.issueBy(issuer.ID, target.ID)
+		testutil.RequireStatus(t, issuerC.Do(http.MethodGet, path(mail), nil), http.StatusForbidden, "independent_super_admin_required")
+		if env.auditCount("ACTIVATION_LINK_VIEWED", target.ID) != 0 {
+			t.Fatalf("%s: a refused reveal was audited as viewed", role)
+		}
+		reveal(t, otherC, mail)
+		if env.count(`SELECT count(*) FROM notifications WHERE kind = 'PRIVILEGED_ACTIVATION_LINK_VIEWED' AND recipient_id = $1
+			AND details->>'viewedBy' = $2 AND details->>'employee' = $3`, issuer.ID, other.ID.String(), target.ID.String()) != 1 {
+			t.Fatalf("%s: the other Super Admin is not told about the reveal", role)
+		}
+		if env.count("SELECT count(*) FROM notifications WHERE kind = 'PRIVILEGED_ACTIVATION_LINK_VIEWED' AND recipient_id = $1", other.ID) != 0 {
+			t.Fatalf("%s: the revealer notified themself", role)
+		}
+	}
+
+	// Nobody reveals the link to their own account.
+	self, selfC := env.admin()
+	mail := env.issue(self.ID)
+	env.setPassword(self.ID, goodPassword, false, nil)
+	testutil.RequireStatus(t, selfC.Login(self.Email, goodPassword), http.StatusOK, "")
+	testutil.RequireStatus(t, selfC.Do(http.MethodGet, path(mail), nil), http.StatusForbidden, "independent_super_admin_required")
+
+	// An ordinary employee's link is revealed by the issuer as before, with no extra notice.
+	emp := env.employee()
+	reveal(t, issuerC, env.issueBy(issuer.ID, emp.ID))
+	if env.count("SELECT count(*) FROM notifications WHERE kind = 'PRIVILEGED_ACTIVATION_LINK_VIEWED' AND details->>'employee' = $1", emp.ID.String()) != 0 {
+		t.Fatal("an ordinary activation notified the Super Admins")
+	}
+}

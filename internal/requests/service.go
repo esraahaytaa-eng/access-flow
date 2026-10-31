@@ -329,10 +329,11 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 	var req Request
 	created := false
 	err := platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
+		created = false // fn may run again (platform.InTx)
 		// A9: one submission at a time per beneficiary. Lock first, then read (M3).
 		// shortcut: this lock is taken before the tool's FOR SHARE, the reverse of catalog
 		// UpdateTool (tool, then the new owner); making someone a tool's owner while they submit
-		// for it can deadlock, which PostgreSQL resolves by failing one of the two (a 500).
+		// for it can deadlock; PostgreSQL aborts one and platform.InTx retries it.
 		tag, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", beneficiary)
 		if err != nil {
 			return err
@@ -405,8 +406,10 @@ func (s *Service) create(ctx context.Context, tx pgx.Tx, now time.Time, actor au
 			VALUES ($1, $2, $3, $4, $5) RETURNING id`, submissionID, kind, beneficiary, actor.EmployeeID, now).Scan(&requestID); err != nil {
 		return Request{}, err
 	}
-	// D3: the beneficiary's current direct manager's submission satisfies the Manager step.
-	bySubmission := managerID != nil && *managerID == actor.EmployeeID
+	// D3: the beneficiary's current direct manager's submission satisfies the Manager step,
+	// unless the submitter sets reporting lines (HR Manager, Super Admin) and so could have made
+	// themself the manager (R-3, D3 note 2026-10-31): their Manager step goes to someone else.
+	bySubmission := managerID != nil && *managerID == actor.EmployeeID && !actor.HasRole("HR_MANAGER") && !actor.HasRole("SUPER_ADMIN")
 	var details []map[string]any
 	var itemIDs []uuid.UUID
 	for _, c := range all {
@@ -549,11 +552,11 @@ type Email struct {
 	LinkAvailable bool       `json:"linkAvailable"`
 }
 
-// Outbox lists the newest 100 simulated emails the actor may see: access requests for InfoSec,
-// Super Admin and Auditor, activation emails for Super Admins, and role-acceptance emails to
+// Outbox lists the newest 100 simulated emails the actor may see: access requests for InfoSec
+// and Super Admin, activation emails for Super Admins, and role-acceptance emails to
 // their recipient only.
 func (s *Service) Outbox(ctx context.Context, actor auth.Principal) ([]Email, error) {
-	reviewer := actor.HasRole("INFOSEC") || actor.HasRole("SUPER_ADMIN") || actor.HasRole("AUDITOR")
+	reviewer := actor.HasRole("INFOSEC") || actor.HasRole("SUPER_ADMIN")
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, e.id, e.full_name, o.request_id, o.subject, o.body, o.created_at,
 		       o.sealed_token IS NOT NULL AND e.status = 'ACTIVE' AND CASE o.kind
 		         WHEN 'ACTIVATION' THEN t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now()

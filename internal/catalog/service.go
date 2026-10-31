@@ -14,6 +14,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
+	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -96,7 +97,7 @@ func isUnique(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// checkOwner: a Tool Owner must be ACTIVE. FOR SHARE holds off a concurrent termination
+// checkOwner: a Tool Owner must be ACTIVE and not an Auditor. FOR SHARE holds off a concurrent termination
 // or suspension of the owner until this transaction commits.
 func checkOwner(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	var status string
@@ -104,7 +105,10 @@ func checkOwner(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && status != "ACTIVE") {
 		return errOwnerNotActive
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return people.CheckNotAuditor(ctx, tx, id, "ownerId") // an Auditor decides no Tool Owner step or review (O7 note 2026-10-31)
 }
 
 func checkGroup(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
@@ -381,7 +385,8 @@ func (s *Service) UpdateLevel(ctx context.Context, actor auth.Principal, toolID,
 		if !stepsChanged {
 			return nil
 		}
-		// F2: a step added after approval; the next access review decides these grants individually.
+		// F2: a step added after approval; the next access review decides these open grants
+		// individually (the statuses are access.openStatuses).
 		if in.RequiresToolOwner && !cur.RequiresToolOwner || in.RequiresInfosec && !cur.RequiresInfosec {
 			if _, err := tx.Exec(ctx, `UPDATE grants SET earlier_policy_at = $2 WHERE access_level_id = $1 AND earlier_policy_at IS NULL
 				AND status IN ('PROVISIONING', 'PENDING_FULFILLMENT', 'ACTIVE', 'FAILED', 'SUSPENDED')`, id, now); err != nil {

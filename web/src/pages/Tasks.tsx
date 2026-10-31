@@ -3,16 +3,15 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
 import { useTasks } from "../api/queries";
-import type { FulfillmentTask, OperationType } from "../api/types";
+import type { FulfillmentTask, OperationType, TaskTab } from "../api/types";
 import { methodLabel, operationLabel } from "../i18n/labels";
 import { useSession } from "../session";
-import { Badge, Button, Callout, ConfirmDialog, Drawer, EmptyState, Field, Input, KeyValueList, PageHeader, Person, SearchBox, Tabs, TableSkeleton, ToolCell, useAction } from "../ui/components";
+import { Badge, Button, Callout, ConfirmDialog, Drawer, EmptyState, Field, Input, KeyValueList, PageHeader, Pager, Person, SearchBox, Tabs, TableSkeleton, ToolCell, useAction } from "../ui/components";
 import { formatDateTime, sinceText } from "../ui/format";
 import type { Tone } from "../ui/status";
 
-type Tab = "queue" | "mine" | "others";
+type Tab = TaskTab;
 const kindTone: Record<OperationType, Tone> = { GRANT: "blue", REVOKE: "red", SUSPEND: "amber", RESUME: "green" };
-const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
 
 /** PENDING is the queue; IN_PROGRESS is claimed, and a Vendor task with a ticket waits for the vendor. */
 function taskState(t: FulfillmentTask): { label: string; tone: Tone } {
@@ -32,20 +31,23 @@ function instruction(t: FulfillmentTask) {
 }
 
 export function TasksPage() {
-  const { me, adminGroups } = useSession();
-  const query = useTasks();
-  const [tab, setTab] = useState<Tab>("queue");
-  const [q, setQ] = useState("");
-  const [openId, setOpenId] = useState<string | null>(null);
-  const tasks = query.data ?? [];
-  const tabOf = (t: FulfillmentTask): Tab => t.status === "PENDING" ? "queue" : t.claimedBy?.id === me.id ? "mine" : "others";
-  const rows = tasks.filter((t) => tabOf(t) === tab).filter((t) => !q.trim() || [t.employee.fullName, t.tool].some((f) => lower(f).includes(lower(q.trim()))));
-  const open = tasks.find((t) => t.id === openId);
+  const { adminGroups } = useSession();
+  const [tab, setTabValue] = useState<Tab>("queue");
+  const [q, setQText] = useState("");
+  const [page, setPage] = useState(1);
+  // The opened task is kept here: claiming moves it to another tab, the drawer stays.
+  const [open, setOpen] = useState<FulfillmentTask | null>(null);
+  // Tabs, search and pages are served by the server over the whole queue (PERF-004).
+  const query = useTasks({ tab, q: q.trim(), page });
+  const rows = query.data?.tasks ?? [];
+  const counts = query.data?.counts;
+  const setTab = (v: Tab) => { setTabValue(v); setPage(1); };
+  const setQ = (v: string) => { setQText(v); setPage(1); };
 
   return (
     <>
       <PageHeader title="Karşılama görevleri" sub={`Manuel ve tedarikçi araçlarında yapılması gereken işlemler. Üyesi olduğunuz gruplar: ${adminGroups.map((g) => g.name).join(", ")}.`} />
-      <Tabs value={tab} onChange={setTab} tabs={(["queue", "mine", "others"] as Tab[]).map((v) => ({ value: v, label: { queue: "Kuyruk", mine: "Üzerimdekiler", others: "Diğer üyelerde" }[v], count: tasks.filter((t) => tabOf(t) === v).length }))} />
+      <Tabs value={tab} onChange={setTab} tabs={(["queue", "mine", "others"] as Tab[]).map((v) => ({ value: v, label: { queue: "Kuyruk", mine: "Üzerimdekiler", others: "Diğer üyelerde" }[v], count: counts?.[v] }))} />
       <div className="toolbar"><SearchBox value={q} onChange={setQ} placeholder="Çalışan veya araç ara" /></div>
       {query.isPending ? <TableSkeleton /> : rows.length === 0 ? (
         <div className="card"><EmptyState icon="tasks" title={tab === "queue" ? "Kuyrukta görev yok" : tab === "mine" ? "Üzerinizde görev yok" : "Bu görünümde görev yok"} desc={tab === "queue" ? "Onaylanan manuel veya tedarikçi erişimleri burada görev olarak belirir." : undefined} /></div>
@@ -55,7 +57,7 @@ export function TasksPage() {
             <thead><tr><th>İşlem</th><th>Araç ve seviye</th><th>Çalışan</th><th>Grup</th><th>Bekleme</th><th>Durum</th></tr></thead>
             <tbody>
               {rows.map((t) => (
-                <tr key={t.id} className="clickable" tabIndex={0} onClick={() => setOpenId(t.id)} onKeyDown={(e) => e.key === "Enter" && setOpenId(t.id)}>
+                <tr key={t.id} className="clickable" tabIndex={0} onClick={() => setOpen(t)} onKeyDown={(e) => e.key === "Enter" && setOpen(t)}>
                   <td><Badge tone={kindTone[t.type]}>{operationLabel[t.type]}</Badge></td>
                   <td><ToolCell tool={t.tool} level={t.level} sub={methodLabel[t.method]} /></td>
                   <td><Person person={t.employee} sub={false} /></td>
@@ -73,12 +75,13 @@ export function TasksPage() {
           </table>
         </div>
       )}
-      {open && <TaskDrawer task={open} onClose={() => setOpenId(null)} />}
+      {query.data && <Pager page={query.data.page} pageSize={query.data.pageSize} total={query.data.total} onChange={setPage} />}
+      {open && <TaskDrawer task={open} onChange={setOpen} onClose={() => setOpen(null)} />}
     </>
   );
 }
 
-function TaskDrawer({ task, onClose }: { task: FulfillmentTask; onClose: () => void }) {
+function TaskDrawer({ task, onChange, onClose }: { task: FulfillmentTask; onChange: (t: FulfillmentTask) => void; onClose: () => void }) {
   const { me, timezone } = useSession();
   const qc = useQueryClient();
   const [ticket, setTicket] = useState("");
@@ -88,13 +91,12 @@ function TaskDrawer({ task, onClose }: { task: FulfillmentTask; onClose: () => v
   const mine = task.status === "IN_PROGRESS" && task.claimedBy?.id === me.id;
   const needsTicket = mine && task.method === "VENDOR" && !task.ticketRef;
   const state = taskState(task);
-  // Each action returns the task with a new version; the list refetch keeps the drawer current.
+  // Each action returns the task with a new version, which the drawer keeps; the lists refetch.
   const act = async (path: string, body: object, success: string, successDesc?: string) => {
     const r = await run(() => api.post<FulfillmentTask>(`/fulfillment-tasks/${task.id}/${path}`, { version: task.version, ...body }), { success, successDesc });
     if (r.ok) {
-      qc.setQueryData<FulfillmentTask[]>(["tasks"], (all) => r.res.status === "PENDING" || r.res.status === "IN_PROGRESS" ? all?.map((t) => (t.id === task.id ? r.res : t)) : all?.filter((t) => t.id !== task.id));
       qc.invalidateQueries({ queryKey: ["tasks"] });
-      if (r.res.status !== "IN_PROGRESS") onClose();
+      if (r.res.status === "IN_PROGRESS") onChange(r.res); else onClose();
     }
   };
   const recordTicket = () => {

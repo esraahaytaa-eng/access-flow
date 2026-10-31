@@ -2,7 +2,7 @@ import { screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { currentPath, renderPage } from "../test/render";
-import { fakeServer } from "../test/server";
+import { fakeServer, principal } from "../test/server";
 import { addDays, todayIn } from "../ui/format";
 import { NewRequestPage } from "./NewRequest";
 
@@ -70,6 +70,31 @@ describe("new access request", () => {
     expect(body.submissionId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it("lets a manager request for anyone below them in the chain (D3 note, ENG-002)", async () => {
+    const person = (id: string, fullName: string, managerId: string | null) => ({ id, email: `${id}@x.co`, fullName, department: null, jobTitle: null, managerId });
+    const calls = fakeServer(routes({ "GET /employees": { employees: [person("e1", "Elif Yılmaz", null), person("l1", "Lale Lead", "e1"), person("x1", "Ezgi Engineer", "l1"),
+      person("o1", "Oya Other", null), person("c1", "Cem Cycle", "c2"), person("c2", "Cansu Cycle", "c1")] } }));
+    renderPage(<NewRequestPage />, { path: "/request-new?for=x1" });
+    await fillLine("Kullanıcı");
+    const select = screen.getByLabelText(/^Çalışan/) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.textContent)).toEqual(["Lale Lead", "Ezgi Engineer"]);
+    expect(select.value).toBe("x1"); // the deep link is kept
+    await userEvent.click(screen.getByRole("button", { name: /Süreli/ }));
+    await userEvent.type(screen.getByLabelText(/neden ihtiyaç/), why);
+    await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
+    await waitFor(() => expect((calls.find((c) => c.method === "POST")?.body as { beneficiaryId: string }).beneficiaryId).toBe("x1"));
+  });
+
+  it("tells an HR Manager who is the direct manager that someone else approves the Manager step (R-3)", async () => {
+    const hr = principal({ employee: { id: "e1", email: "hr@x.co", fullName: "Elif Yılmaz", roles: ["HR_MANAGER"] } }) as never;
+    fakeServer(routes({ "GET /employees": { employees: [{ id: "x1", email: "x1@x.co", fullName: "Ezgi Engineer", department: null, jobTitle: null, managerId: "e1" }] },
+      "GET /access/team/x1": { grants: [] } }));
+    renderPage(<NewRequestPage />, { path: "/request-new?for=x1", session: hr });
+    await fillLine("Kullanıcı");
+    expect(screen.getByText(/yönetici adımını sizden bağımsız bir onaylayıcı verir/)).toBeTruthy();
+    expect(screen.queryByText(/gönderiminizle karşılanır/)).toBeNull();
+  });
+
   it("validates the form before calling the server", async () => {
     const calls = fakeServer(routes());
     renderPage(<NewRequestPage />, { path: "/request-new" });
@@ -119,7 +144,6 @@ describe("starter package", () => {
     const newHire = { id: "n1", email: "k@x.co", fullName: "Kaan Uslu", department: "Ürün", jobTitle: "Analist", managerId: "m1", status: "ACTIVE", roles: [], adminGroups: [], mustChangePassword: true, termination: null, version: 1, createdAt: "2026-10-29T09:00:00Z" };
     const calls = fakeServer(routes({
       "GET /employees": { employees: [newHire] },
-      "GET /access/team": { grants: [] },
       "GET /starter-packages": { entries: [
         { id: "p1", department: "Ürün", jobTitle: null, accessLevelId: "l1", tool: "Jira", level: "Kullanıcı", requestable: true },
         { id: "p2", department: "Finans", jobTitle: null, accessLevelId: "l2", tool: "Jira", level: "Yönetici", requestable: true },

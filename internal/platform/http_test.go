@@ -146,3 +146,25 @@ func TestDecodeJSONRejectsTrailingData(t *testing.T) {
 		})
 	}
 }
+
+func TestPageParam(t *testing.T) {
+	for _, c := range []struct {
+		query        string
+		page, offset int
+		err          bool
+	}{
+		{"", 1, 0, false},
+		{"page=1", 1, 0, false},
+		{"page=3", 3, 2 * platform.PageSize, false},
+		{"page=0", 0, 0, true},
+		{"page=-2", 0, 0, true},
+		{"page=abc", 0, 0, true},
+		{"page=100001", 0, 0, true}, // bounds the OFFSET
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/x?"+c.query, nil)
+		page, offset, err := platform.PageParam(r)
+		if (err != nil) != c.err || err == nil && (page != c.page || offset != c.offset) {
+			t.Errorf("%q: %d %d %v", c.query, page, offset, err)
+		}
+	}
+}

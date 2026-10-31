@@ -1,6 +1,6 @@
 import { QueryCache, QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
-import { BrowserRouter, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { api, ApiError, setUnauthorizedHandler } from "./api/client";
 import type { Principal } from "./api/types";
 import { ChangePasswordPage, ForcedPasswordChange } from "./pages/ChangePassword";
@@ -29,6 +29,8 @@ import { SetPasswordPage } from "./pages/SetPassword";
 import { SessionProvider, useSession } from "./session";
 import { NoAccess, NotFound, Shell } from "./Shell";
 import { errorMessage } from "./i18n/errors";
+import { useEmployees } from "./api/queries";
+import { useRoleFlags } from "./nav";
 import { ToastProvider, useToast } from "./ui/components";
 
 const isClientError = (e: unknown) => e instanceof ApiError && e.status >= 400 && e.status < 500;
@@ -51,6 +53,13 @@ function Guard({ allow, children }: { allow: (s: ReturnType<typeof useSession>) 
   return allow(useSession()) ? children : <NoAccess />;
 }
 
+/** Managers see the audit page for their reports, known once the directory has loaded. */
+function AuditGuard({ children }: { children: ReactNode }) {
+  const allowed = useRoleFlags().audit;
+  const pending = useEmployees().isPending;
+  return allowed ? children : pending ? null : <NoAccess />;
+}
+
 function Root() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -69,6 +78,15 @@ function Root() {
   return (
     <SessionProvider principal={me.data}>
       <Shell onSignOut={signOut}>
+        {me.data.employee.roles.includes("AUDITOR") ? (
+          // An external auditor reads only the audit events, whatever other roles they hold (O7 note 2026-10-31).
+          <Routes>
+            <Route path="/" element={<Navigate to="/audit" replace />} />
+            <Route path="/audit" element={<AuditPage />} />
+            <Route path="/password" element={<ChangePasswordPage onChanged={setPrincipal} />} />
+            <Route path="*" element={<NoAccess />} />
+          </Routes>
+        ) : (
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/catalog" element={<CatalogPage />} />
@@ -82,17 +100,18 @@ function Root() {
           <Route path="/tasks" element={<Guard allow={(s) => s.adminGroups.length > 0}><TasksPage /></Guard>} />
           <Route path="/employees" element={<Guard allow={(s) => s.hasRole("HR_MANAGER", "SUPER_ADMIN")}><EmployeesPage /></Guard>} />
           <Route path="/employees/:id" element={<Guard allow={(s) => s.hasRole("HR_MANAGER", "SUPER_ADMIN")}><EmployeeDetailPage /></Guard>} />
-          <Route path="/exceptions" element={<Guard allow={(s) => s.hasRole("INFOSEC", "SUPER_ADMIN", "AUDITOR")}><ExceptionsPage /></Guard>} />
+          <Route path="/exceptions" element={<Guard allow={(s) => s.hasRole("INFOSEC", "SUPER_ADMIN")}><ExceptionsPage /></Guard>} />
           <Route path="/tools-admin" element={<Guard allow={superAdmin}><ToolsAdminPage /></Guard>} />
           <Route path="/tools-admin/:id" element={<Guard allow={superAdmin}><ToolEditPage /></Guard>} />
           <Route path="/direct" element={<Guard allow={superAdmin}><DirectGrantPage /></Guard>} />
           <Route path="/settings" element={<Guard allow={superAdmin}><SettingsPage /></Guard>} />
-          <Route path="/audit" element={<AuditPage />} />
+          <Route path="/audit" element={<AuditGuard><AuditPage /></AuditGuard>} />
           <Route path="/password" element={<ChangePasswordPage onChanged={setPrincipal} />} />
           <Route path="/mailbox" element={<MailboxPage />} />
           <Route path="/rol-kabul" element={<RoleAcceptPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
+        )}
       </Shell>
     </SessionProvider>
   );

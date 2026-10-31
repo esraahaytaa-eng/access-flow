@@ -20,6 +20,10 @@ var headers = map[string][]string{
 // maxRows bounds each sheet: about 400 employees and 60 tools fit with room to spare.
 var maxRows = map[string]int{SheetEmployees: 1000, SheetTools: 2000, SheetAccess: 5000}
 
+// maxColumns bounds a sheet's width (A–Z). Loading a sheet fills every row up to its last
+// cell, so one cell far to the right in each row would cost memory per row (security F-2).
+const maxColumns = 26
+
 // maxUnzipped caps the decompressed workbook, so a small upload cannot expand without bound.
 const maxUnzipped = 16 << 20
 
@@ -195,6 +199,9 @@ func readSheet(f *excelize.File, sheet string) ([]sheetRow, *Problem) {
 	if idx, err := f.GetSheetIndex(sheet); err != nil || idx < 0 {
 		return nil, &Problem{Sheet: sheet, Reason: "missing_sheet"}
 	}
+	if p := checkSize(f, sheet); p != nil {
+		return nil, p
+	}
 	rows, err := f.GetRows(sheet, excelize.Options{RawCellValue: true})
 	if err != nil {
 		return nil, &Problem{Sheet: sheet, Reason: "invalid_workbook"}
@@ -209,10 +216,6 @@ func readSheet(f *excelize.File, sheet string) ([]sheetRow, *Problem) {
 			col, _ := excelize.ColumnNumberToName(i + 1)
 			return nil, &Problem{Sheet: sheet, Row: 1, Column: col, Value: got, Reason: "invalid_header", Expected: want}
 		}
-	}
-	// A stray cell far below the data would make every blank row in between work to skip.
-	if len(rows)-1 > 2*maxRows[sheet] {
-		return nil, &Problem{Sheet: sheet, Reason: "too_many_rows", Expected: strconv.Itoa(maxRows[sheet])}
 	}
 	var out []sheetRow
 	for i := 1; i < len(rows); i++ {
@@ -241,4 +244,30 @@ func readSheet(f *excelize.File, sheet string) ([]sheetRow, *Problem) {
 		out = append(out, sheetRow{i + 1, cells})
 	}
 	return out, nil
+}
+
+// checkSize streams the sheet before it is loaded and refuses one too long or too wide: a
+// stray cell far below or to the right of the data would make loading it expensive.
+func checkSize(f *excelize.File, sheet string) *Problem {
+	rows, err := f.Rows(sheet)
+	if err != nil {
+		return &Problem{Sheet: sheet, Reason: "invalid_workbook"}
+	}
+	defer rows.Close()
+	for n := 1; rows.Next(); n++ {
+		if n-1 > 2*maxRows[sheet] {
+			return &Problem{Sheet: sheet, Reason: "too_many_rows", Expected: strconv.Itoa(maxRows[sheet])}
+		}
+		cols, err := rows.Columns(excelize.Options{RawCellValue: true})
+		if err != nil {
+			return &Problem{Sheet: sheet, Reason: "invalid_workbook"}
+		}
+		if len(cols) > maxColumns {
+			return &Problem{Sheet: sheet, Row: n, Reason: "too_many_columns", Expected: "Z"}
+		}
+	}
+	if rows.Error() != nil {
+		return &Problem{Sheet: sheet, Reason: "invalid_workbook"}
+	}
+	return nil
 }

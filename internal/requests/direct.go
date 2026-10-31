@@ -11,7 +11,6 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
-	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -109,22 +108,15 @@ func (s *Service) DirectGrant(ctx context.Context, actor auth.Principal, in Dire
 }
 
 // notifyDirectGrant tells InfoSec, the beneficiary's manager and, when the level requires
-// a Tool Owner step, the tool owner: the approvers the direct grant bypassed (D1).
+// a Tool Owner step, the tool owner: the approvers the direct grant bypassed (D1). Each
+// person is told once, even when bypassed in more than one way.
 func notifyDirectGrant(ctx context.Context, tx pgx.Tx, itemID uuid.UUID, c levelCheck, manager *uuid.UUID, details map[string]any) error {
-	if err := notify.ToRole(ctx, tx, "INFOSEC", "DIRECT_GRANT", "request_item", itemID, details); err != nil {
-		return err
-	}
-	if manager != nil {
-		if err := notify.ToEmployee(ctx, tx, *manager, "DIRECT_GRANT", "request_item", itemID, details); err != nil {
-			return err
-		}
-	}
-	if !slices.Contains(c.steps, "TOOL_OWNER") {
-		return nil
-	}
-	var owner uuid.UUID
-	if err := tx.QueryRow(ctx, "SELECT owner_id FROM tools WHERE id = $1", c.toolID).Scan(&owner); err != nil {
-		return err
-	}
-	return notify.ToEmployee(ctx, tx, owner, "DIRECT_GRANT", "request_item", itemID, details)
+	_, err := tx.Exec(ctx, `
+		INSERT INTO notifications (recipient_id, kind, entity, entity_id, details)
+		SELECT e.id, 'DIRECT_GRANT', 'request_item', $1, $2 FROM employees e
+		WHERE (e.status = 'ACTIVE' AND EXISTS (SELECT 1 FROM role_assignments r WHERE r.employee_id = e.id AND r.role = 'INFOSEC' AND r.valid_to IS NULL))
+		   OR e.id = $3
+		   OR ($4 AND e.id = (SELECT owner_id FROM tools WHERE id = $5))`,
+		itemID, details, manager, slices.Contains(c.steps, "TOOL_OWNER"), c.toolID)
+	return err
 }

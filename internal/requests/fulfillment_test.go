@@ -242,3 +242,32 @@ func TestRetiredIsCheckedBeforeStricterSteps(t *testing.T) {
 		t.Fatalf("STEP_ADDED_BY_POLICY = %d", n)
 	}
 }
+
+// Regression (ENG-003): while someone else holds the employee, a retired grant cannot be
+// cancelled yet; the runner must report it idle so it pauses instead of reclaiming it at once.
+func TestRunnerPausesWhileARetiredGrantsEmployeeIsBusy(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	req := w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer)))
+	w.approve(w.mgr.c, open(t, items(req)[0]))
+	w.exec("UPDATE access_levels SET status = 'RETIRED' WHERE id = $1", w.jiraViewer)
+	ctx := context.Background()
+	tx, err := w.db.App.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", w.dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := tl.runner.RunOnce(ctx); err != nil || found {
+		t.Fatalf("RunOnce = %v, %v; want idle while the employee is busy", found, err)
+	}
+	tx.Rollback(ctx)
+	tl.drain(t)
+	f := items(w.get(w.dev.c, "/api/v1/requests/"+req["id"].(string)).Body)[0]["fulfillment"].(map[string]any)
+	if f["status"] != "CANCELLED" {
+		t.Fatalf("fulfillment = %v", f)
+	}
+}

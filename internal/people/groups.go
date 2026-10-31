@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,6 +90,9 @@ func (s *Service) AddMember(ctx context.Context, actor auth.Principal, group, id
 		}
 		if target.Status != "ACTIVE" {
 			return errNotActive
+		}
+		if slices.Contains(target.Roles, "AUDITOR") { // an Auditor works no tasks (O7 note 2026-10-31)
+			return &platform.Error{Status: http.StatusConflict, Code: "employee_is_auditor", Field: "employeeId"}
 		}
 		tag, err := tx.Exec(ctx, `INSERT INTO admin_group_memberships (group_id, employee_id, valid_from, granted_by)
 			SELECT $1, $2, $3, $4 WHERE NOT EXISTS (

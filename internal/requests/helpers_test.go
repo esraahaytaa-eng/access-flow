@@ -73,7 +73,7 @@ func newWorld(t *testing.T) *world {
 			authSvc.RegisterActivations(r)
 			svc.Register(r)
 			people.NewService(db.App, authSvc).Register(r)
-			access.NewService(db.App, access.NewHTTPToolClient("http://"+toolsLn.Addr().String(), 5*time.Second)).Register(r)
+			access.NewService(db.App, access.NewHTTPToolClient("http://"+toolsLn.Addr().String(), 5*time.Second), istanbul).Register(r)
 			notify.Register(r, db.App)
 			catalog.NewService(db.App).Register(r)
 			reviews.NewService(db.App).Register(r)

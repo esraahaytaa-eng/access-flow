@@ -1,5 +1,5 @@
-// Package access will hold grants, operations and fulfillment. It starts with the client
-// for the Mock Tool Service, reached only over HTTP (A1, A2).
+// Package access holds grants, operations and fulfillment, and the client for the Mock Tool
+// Service, reached only over HTTP (A1, A2).
 package access
 
 import (

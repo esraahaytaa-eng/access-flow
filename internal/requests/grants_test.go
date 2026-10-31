@@ -288,7 +288,7 @@ func TestRevokePermissionMatrix(t *testing.T) {
 		{"the direct manager", w.mgr, http.StatusOK},
 		{"a Super Admin", w.admin, http.StatusOK}, // direct revocation (D1)
 		{"InfoSec", w.is1, http.StatusNotFound},
-		{"an Auditor", auditor, http.StatusNotFound},
+		{"an Auditor", auditor, http.StatusForbidden}, // audit events only (O7 note 2026-10-31)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w.exec("UPDATE grants SET status = 'CANCELLED' WHERE status <> 'CANCELLED'")
@@ -324,15 +324,17 @@ func TestMyAccessAndTeamVisibility(t *testing.T) {
 	}{
 		{w.dev, "/api/v1/access", []string{w.dev.ID.String()}},
 		{w.mgr, "/api/v1/access", []string{w.mgr.ID.String()}},
-		{w.mgr, "/api/v1/access/team", []string{w.dev.ID.String()}}, // direct reports only
-		{w.skip, "/api/v1/access/team", []string{w.mgr.ID.String()}},
-		{w.dev, "/api/v1/access/team", nil},
+		{w.mgr, "/api/v1/access/team/" + w.dev.ID.String(), []string{w.dev.ID.String()}}, // a direct report
+		{w.skip, "/api/v1/access/team/" + w.mgr.ID.String(), []string{w.mgr.ID.String()}},
 		{w.admin, "/api/v1/access", nil},
 	} {
 		if got := grantsOf(tc.who, tc.path); len(got) != len(tc.want) || (len(got) == 1 && got[0] != tc.want[0]) {
 			t.Errorf("%s: %v; want %v", tc.path, got, tc.want)
 		}
 	}
+	// Direct reports only: not a skip-level report, not one's manager.
+	testutil.RequireStatus(t, w.get(w.skip.c, "/api/v1/access/team/"+w.dev.ID.String()), http.StatusNotFound, "not_found")
+	testutil.RequireStatus(t, w.get(w.dev.c, "/api/v1/access/team/"+w.mgr.ID.String()), http.StatusNotFound, "not_found")
 	g := w.myGrant(w.dev.c, w.jiraViewer)
 	if g["tool"] != "Jira" || g["level"] != "Viewer" || g["method"] != "API" || g["displayStatus"] != "PROVISIONING" {
 		t.Fatalf("grant = %v", g)

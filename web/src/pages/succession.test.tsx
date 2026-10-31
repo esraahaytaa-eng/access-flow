@@ -71,17 +71,34 @@ describe("Super Admin succession", () => {
       "POST /super-admin-nominations": () => ({ status: 201, body: nomination({ recovery: true, succession: true }) }) });
     renderPage(<RecoveryBanner />, { session: hr });
     expect(await screen.findByText("Aktif Süper Yönetici yok: kurtarma modu")).toBeTruthy();
+    expect(screen.getByText(/bağımsız bir Bilgi Güvenliği üyesi yetkilendirir/)).toBeTruthy(); // R-2
     await userEvent.click(await screen.findByRole("button", { name: "Yeni Süper Yönetici ata" }));
     const d = dialog("Yeni Süper Yönetici ata");
     expect(within(d.getByLabelText(/Aday/)).queryByText(/Ayşe İK/)).toBeNull();
     await userEvent.selectOptions(d.getByLabelText(/Aday/), "o1");
-    await userEvent.click(d.getByRole("button", { name: "Kabul bağlantısı gönder" }));
+    expect(d.getByText(/Bilgi Güvenliği üyesi veya aktif bir Süper Yönetici yetkilendirdikten sonra/)).toBeTruthy();
+    await userEvent.click(d.getByRole("button", { name: "Yetkilendirmeye gönder" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ nomineeId: "o1" }));
+  });
+
+  it("shows HR a successor awaiting authorization, with no link to reissue yet", async () => {
+    fakeServer({ ...base, "GET /admin/health": health({ activeSuperAdmins: 0, recoveryRequired: true }),
+      "GET /super-admin-nominations": { nominations: [nomination({ succession: true, recovery: true, proposedBy: person("hr", "Ayşe İK"), authorizedAt: null })] } });
+    renderPage(<RecoveryBanner />, { session: hr });
+    expect(await screen.findByText(/Can Owner · yetkilendirme bekleniyor/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Bağlantıyı yeniden gönder" })).toBeNull();
+  });
+
+  it("InfoSec sees HR's succession as an appointment to authorize", async () => {
+    fakeServer({ ...base, "GET /super-admin-nominations": { nominations: [nomination({ succession: true, canAuthorize: true, proposedBy: person("hr", "Ayşe İK") })] } });
+    renderPage(<ApprovalsPage />, { session: is1 });
+    expect(await screen.findByText(/Öneren: Ayşe İK \(İK ataması\)/)).toBeTruthy();
   });
 
   it("shows HR a successor awaiting acceptance without the link", async () => {
     fakeServer({ ...base, "GET /admin/health": health({ activeSuperAdmins: 0, recoveryRequired: true }),
-      "GET /super-admin-nominations": { nominations: [nomination({ succession: true, recovery: true, proposedBy: person("hr", "Ayşe İK"), expiresAt: "2099-01-01T09:00:00Z" })] } });
+      "GET /super-admin-nominations": { nominations: [nomination({ succession: true, recovery: true, proposedBy: person("hr", "Ayşe İK"), expiresAt: "2099-01-01T09:00:00Z",
+        authorizedAt: "2026-10-31T09:00:00Z" })] } });
     renderPage(<RecoveryBanner />, { session: hr });
     expect(await screen.findByText(/Can Owner · kabul bekleniyor/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Yeni Süper Yönetici ata" })).toBeNull();
@@ -94,6 +111,7 @@ describe("Super Admin succession", () => {
     const owner = principal({ employee: { id: "o1", email: "o@x.co", fullName: "Can Owner", roles: [] } }) as never;
     fakeServer({ ...base, "GET /email-outbox": { emails: [mail] }, "GET /email-outbox/m1/role-link": { token: "tok123" } });
     renderPage(<MailboxPage />, { session: owner });
+    expect(screen.getByText(/Kimse kendi bağlantısını görüntüleyemez; Süper Yönetici veya Bilgi Güvenliği hesabının bağlantısını, sıfırlamayı yapmayan başka bir Süper Yönetici görür/)).toBeTruthy(); // R-1
     await userEvent.click(await screen.findByText(/kabulünüz bekleniyor/));
     await userEvent.click(screen.getByRole("button", { name: "Bağlantıyı göster" }));
     expect((await screen.findByRole("link", { name: /rol-kabul#tok123/ })).getAttribute("href")).toBe(`${window.location.origin}/rol-kabul#tok123`);

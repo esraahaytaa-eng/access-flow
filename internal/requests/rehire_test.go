@@ -28,7 +28,7 @@ func TestRehireRestoresNothing(t *testing.T) {
 	w.approved(w.jiraViewer)
 	tl.drain(t)
 	w.fulfilled(f, f.manual)
-	w.exec("INSERT INTO role_assignments (employee_id, role) VALUES ($1, 'AUDITOR')", w.dev.ID)
+	w.exec("INSERT INTO role_assignments (employee_id, role) VALUES ($1, 'HR_MANAGER')", w.dev.ID)
 	w.member(w.dev, f.vendorTool)
 	pending := items(w.mustSubmit(w.dev.c, body(nil, item(w.github))))[0]
 	hr := w.hr()

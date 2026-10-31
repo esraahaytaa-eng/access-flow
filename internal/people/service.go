@@ -232,7 +232,7 @@ func insertEmployee(ctx context.Context, tx pgx.Tx, actor auth.Principal, email,
 		EntityID: &id, SubjectID: &id, Details: details})
 }
 
-// checkManager requires an existing, active manager.
+// checkManager requires an existing, active manager who is not an Auditor.
 func checkManager(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	var status string
 	err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", id).Scan(&status)
@@ -245,7 +245,7 @@ func checkManager(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	if status != "ACTIVE" {
 		return errManagerInactive
 	}
-	return nil
+	return CheckNotAuditor(ctx, tx, id, "managerId") // an Auditor decides no Manager step (O7 note 2026-10-31)
 }
 
 func isUniqueViolation(err error) bool {
@@ -425,6 +425,13 @@ func (s *Service) AssignRole(ctx context.Context, actor auth.Principal, id uuid.
 		}
 		if slices.Contains(target.Roles, role) {
 			return nil
+		}
+		if role == "AUDITOR" {
+			if err := checkNoDuties(ctx, tx, id); err != nil {
+				return err
+			}
+		} else if slices.Contains(target.Roles, "AUDITOR") {
+			return &platform.Error{Status: http.StatusConflict, Code: "employee_is_auditor", Field: "role"}
 		}
 		if _, err := tx.Exec(ctx, "INSERT INTO role_assignments (employee_id, role, valid_from, granted_by) VALUES ($1, $2, $3, $4)",
 			id, role, now, actorRef(actor)); err != nil {

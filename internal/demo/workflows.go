@@ -14,6 +14,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
+	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 	"github.com/esraahaytaa-eng/access-flow/internal/requests"
 )
 
@@ -280,9 +281,16 @@ func (s *seeder) reject(ctx context.Context, it requests.Item, reason string) er
 // task works the beneficiary's open Manual or Vendor grant task as an admin group member.
 func (s *seeder) task(ctx context.Context, beneficiary, tool, member, outcome string) error {
 	actor := s.must(ctx, member)
-	list, err := s.Access.Tasks(ctx, actor)
-	if err != nil {
-		return err
+	var list []access.Task
+	for page := 1; ; page++ { // the tool's queue, every page
+		p, err := s.Access.Tasks(ctx, actor, "queue", tool, page, (page-1)*platform.PageSize)
+		if err != nil {
+			return err
+		}
+		list = append(list, p.Tasks...)
+		if len(p.Tasks) < platform.PageSize {
+			break
+		}
 	}
 	for _, t := range list {
 		if t.Employee.ID != s.ids[beneficiary] || t.Tool != tool || t.Type != "GRANT" {

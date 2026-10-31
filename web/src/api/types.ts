@@ -126,18 +126,6 @@ export type Tool = {
   version: number;
 };
 
-/** Administrative level view returned by the level mutations. */
-export type AccessLevel = {
-  id: string;
-  toolId: string;
-  name: string;
-  requiresToolOwner: boolean;
-  requiresInfosec: boolean;
-  steps: StepType[];
-  status: CatalogStatus;
-  version: number;
-};
-
 export type StarterPackage = {
   id: string;
   department: string;
@@ -244,7 +232,8 @@ export type Request = {
 export type RequestsResponse = { requests: Request[] };
 
 /** Open step with its item. `unroutable`: an InfoSec pool step no eligible member may decide. */
-export type Approval = { step: ApprovalStep; item: RequestItem; unroutable: boolean };
+/** party: in Exceptions, why the caller may not reassign or override the unroutable step (separation of duties). */
+export type Approval = { step: ApprovalStep; item: RequestItem; unroutable: boolean; party?: "beneficiary" | "submitter" | "approver" };
 export type ApprovalsResponse = { approvals: Approval[] };
 
 export type Email = {
@@ -302,6 +291,13 @@ export type Grant = {
 
 export type GrantsResponse = { grants: Grant[] };
 
+/** One page of a server-paged list (PERF-004): `total` rows match, `pageSize` per page. */
+export type Paged = { total: number; page: number; pageSize: number };
+
+/** A direct report with their access counted on the server (GET /access/team). */
+export type TeamMember = { id: string; fullName: string; jobTitle: string | null; department: string | null; active: number; expiringSoon: number };
+export type TeamResponse = Paged & { members: TeamMember[] };
+
 export type OperationType = "GRANT" | "REVOKE" | "SUSPEND" | "RESUME";
 export type OperationStatus = "PENDING" | "IN_PROGRESS" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
@@ -343,10 +339,16 @@ export type Exceptions = {
   securityRevocations: Operation[];
   staleGrants: Operation[];
   /** Review items day 21 left unanswered (D8). */
+  /** The first page of open findings; all of them are on the review page's findings view. */
   reviewFindings: ReviewItem[];
+  reviewFindingsTotal: number;
   /** Imported accounts matching no employee (D10). */
   orphanAccounts: Orphan[];
+  /** Every open record of each capped list; the lists hold the first (oldest or most urgent) ones. */
+  totals: Record<CappedList, number>;
 };
+
+export type CappedList = "failedOperations" | "unroutableSteps" | "overlaps" | "suspensionGaps" | "securityRevocations" | "staleGrants" | "orphanAccounts";
 
 /** A Manual or Vendor operation in its admin group's queue. */
 export type FulfillmentTask = {
@@ -376,7 +378,8 @@ export type FulfillmentTask = {
   createdAt: string;
 };
 
-export type FulfillmentTasksResponse = { tasks: FulfillmentTask[] };
+export type TaskTab = "queue" | "mine" | "others";
+export type FulfillmentTasksResponse = Paged & { tasks: FulfillmentTask[]; counts: Record<TaskTab | "canAct", number> };
 
 // ---- Notifications ----------------------------------------------------------------
 
@@ -393,6 +396,7 @@ export type NotificationKind =
   | "SUPER_ADMIN_NOMINATED"
   | "SUPER_ADMIN_ROLE_OFFERED"
   | "SUPER_ADMIN_ROLE_ACCEPTED"
+  | "PRIVILEGED_ACTIVATION_LINK_VIEWED"
   | "ADMIN_RECOVERY_REQUIRED";
 
 export type Notification = {
@@ -455,7 +459,10 @@ export type ReviewItem = {
   version: number;
 };
 
-export type ReviewPage = { campaign: ReviewCampaign | null; items: ReviewItem[] };
+export type ReviewView = "mine" | "esc" | "all" | "findings";
+/** One page of one view; counts are over every item the caller sees (PERF-004). */
+export type ReviewPage = Paged & { campaign: ReviewCampaign | null; items: ReviewItem[]; view: ReviewView;
+  counts: Record<ReviewView | "done" | "waiting", number> };
 
 // ---- Baseline import and orphan accounts (D10) ------------------------------------------
 
@@ -506,7 +513,8 @@ export type AuditEvent = {
   reason: string | null;
   details: Record<string, unknown> | null;
 };
-export type AuditEventsResponse = { events: AuditEvent[]; truncated: boolean };
+export type AuditEventsResponse = { events: AuditEvent[]; total: number; page: number; pageSize: number };
+export type AuditFilters = { actors: Person[]; tools: { id: string; name: string }[] };
 
 export type HeldState = "ACTIVE" | "SUSPENDED" | "REVOCATION_REQUESTED" | "REVOCATION_FAILED";
 export type HeldGrant = {
@@ -535,11 +543,12 @@ export type LeaverRow = {
 };
 export type QuarterReport = {
   campaign: { id: string; kind: "QUARTERLY" | "MANUAL"; quarter: string | null; startedAt: string; remindedAt: string | null; escalatedAt: string | null; closedAt: string | null } | null;
-  counts: { total: number; kept: number; revoked: number; unanswered: number; alreadyRemoved: number; autoRevoked: number; openFindings: number };
+  counts: { total: number; kept: number; revoked: number; unanswered: number; alreadyRemoved: number; autoRevoked: number; openFindings: number; carriedFindings: number };
   policyChanges: number;
   overrides: number;
   items: { employee: string; tool: string; level: string; reviewer: string | null; decision: "KEEP" | "REVOKE" | null; decidedBy: string | null;
-    decidedAt: string | null; reason: string | null; late: boolean; closedReason: string | null; finding: boolean }[];
+    decidedAt: string | null; reason: string | null; late: boolean; closedReason: string | null; finding: boolean;
+    /** An open finding from an earlier campaign; not counted in total. */ carriedOver: boolean }[];
 };
 
 /** GET /super-admin-nominations: open, unexpired Super Admin nominations (D2). */
@@ -549,8 +558,10 @@ export type SuperAdminNomination = {
   proposedBy: { id: string; fullName: string };
   /** Made while no Super Admin was active. */
   recovery: boolean;
-  /** HR's succession of the last Super Admin: the nominee accepts through a 24-hour link (D2). */
+  /** HR's succession of the last Super Admin: authorized by InfoSec or an active Super Admin, then the nominee accepts through a 24-hour link (D2, R-2). */
   succession: boolean;
+  /** When a succession was authorized; its link exists only from then. */
+  authorizedAt?: string | null;
   status: "PENDING" | "AUTHORIZED" | "DECLINED" | "ACCEPTED" | "EXPIRED" | "CANCELLED";
   createdAt: string;
   expiresAt: string;

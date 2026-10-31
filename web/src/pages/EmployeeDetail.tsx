@@ -56,10 +56,14 @@ export function EmployeeDetailPage() {
           {emp.status === "ACTIVE" && <Button icon="swap" disabled={!grantsLoaded} onClick={() => setModal("transfer")}>Transfer</Button>}
           {emp.status === "ACTIVE" && <Button icon="pause" onClick={() => setModal("suspend")}>Askıya al</Button>}
           {emp.status === "SUSPENDED" && (!emp.roles.includes("SUPER_ADMIN") || hasRole("SUPER_ADMIN")) && <Button icon="play" onClick={() => setModal("reactivate")}>Yeniden etkinleştir</Button>}
-          {emp.termination ? <Button onClick={() => setModal("cancelTerm")}>Planlı çıkışı iptal et</Button> : <Button variant="danger-ghost" icon="logout" disabled={!grantsLoaded} onClick={() => setModal("terminate")}>İşten çıkış</Button>}
+          {emp.termination && <Button onClick={() => setModal("cancelTerm")}>Planlı çıkışı iptal et</Button>}
+          <Button variant="danger-ghost" icon="logout" disabled={!grantsLoaded} onClick={() => setModal("terminate")}>İşten çıkış</Button>
         </>)} />
       {isSelf && <div style={{ marginBottom: 16 }}><Callout>Kendi çalışan kaydınızı değiştiremezsiniz. Değişiklikleri başka bir İK Yöneticisi veya Süper Yönetici yapmalıdır.</Callout></div>}
-      {emp.termination && <div style={{ marginBottom: 16 }}><Callout tone="warn" title={`Planlı işten çıkış: ${formatDateTime(emp.termination.at, timezone)}`}>{emp.termination.reason}. Belirlenen zamanda oturum kapatılır ve tüm erişimler kaldırılır.</Callout></div>}
+      {emp.termination && <div style={{ marginBottom: 16 }}><Callout tone="warn" title={`Planlı işten çıkış: ${formatDateTime(emp.termination.at, timezone)}`}>{emp.termination.reason}. {new Date(emp.termination.at) > new Date() ? "Belirlenen zamanda oturum kapatılır ve tüm erişimler kaldırılır."
+        // the sweep runs every minute; only the last active Super Admin's exit waits longer (D2)
+        : emp.roles.includes("SUPER_ADMIN") ? "Planlanan zaman geçti: çalışan son aktif Süper Yönetici olduğu için çıkış, yeni Süper Yönetici rolü kabul edene kadar bekliyor."
+          : "Planlanan zaman geçti: çıkış birkaç dakika içinde otomatik işlenecek."}</Callout></div>}
       {emp.status === "TERMINATED" && grants.length > 0 && <div style={{ marginBottom: 16 }}><Callout tone="danger" title="Kaldırılması tamamlanmamış erişimler var">Çalışan ayrıldı ancak {grants.length} erişimin kaldırılması henüz doğrulanmadı. Durum İstisnalar ekranında takip ediliyor.</Callout></div>}
       <div className="grid-side">
         <div>
@@ -116,7 +120,7 @@ export function EmployeeDetailPage() {
         confirmLabel="Bağlantı gönder" success="Bağlantı gönderildi" successDesc="Etkinleştirme bağlantısı Mock Email Outbox'a gönderildi."
         onConfirm={async () => { await api.post(`/employees/${emp.id}/password-reset`); refresh(); }} />
       {modal === "transfer" && <TransferModal emp={emp} employees={employees} grants={grants} onClose={close} onDone={refresh} />}
-      {modal === "terminate" && <TerminateModal emp={emp} employees={employees} openGrants={grants.length} onClose={close} onDone={refresh} />}
+      {modal === "terminate" && <TerminateModal emp={emp} employees={employees} openGrants={grants.filter((g) => g.status !== "REVOCATION_REQUESTED" && g.status !== "REVOCATION_FAILED").length} onClose={close} onDone={refresh} />}
       {modal === "rehire" && <RehireModal emp={emp} employees={employees} onClose={close} onDone={refresh} />}
     </>
   );

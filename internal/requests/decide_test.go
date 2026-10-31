@@ -161,8 +161,8 @@ func TestOnlyTheAssigneeDecides(t *testing.T) {
 	if n := w.audits("STEP_APPROVED") + w.audits("STEP_REJECTED"); n != 0 {
 		t.Fatalf("unauthorized decisions were applied: %d", n)
 	}
-	if n := w.audits("APPROVAL_ATTEMPT_REJECTED"); n != 15 {
-		t.Fatalf("recorded attempts = %d; want 15", n)
+	if n := w.audits("APPROVAL_ATTEMPT_REJECTED"); n != 13 { // the Auditor's two never reach the approval (O7 note 2026-10-31)
+		t.Fatalf("recorded attempts = %d; want 13", n)
 	}
 }
 
@@ -287,5 +287,39 @@ func TestApproveSeesAWithdrawalCommittedWhileWaiting(t *testing.T) {
 	}
 	if w.audits("STEP_APPROVED") != 0 {
 		t.Fatal("a withdrawn item was approved")
+	}
+}
+
+// Regression (ENG-005): an override or reassignment re-checks, under the item's lock, that
+// the Super Admin was not suspended after their session was checked (D7).
+func TestOverrideAndReassignSeeASuspensionCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	levels := []uuid.UUID{w.jiraViewer, w.github}
+	for name, call := range map[string]func(uuid.UUID) error{
+		"override": func(step uuid.UUID) error {
+			_, err := w.svc.Override(context.Background(), w.admin.principal("SUPER_ADMIN"), step, 2, "urgent")
+			return err
+		},
+		"reassign": func(step uuid.UUID) error {
+			_, err := w.svc.Reassign(context.Background(), w.admin.principal("SUPER_ADMIN"), step, 2, w.is2.ID, "on leave")
+			return err
+		},
+	} {
+		level := levels[0]
+		levels = levels[1:]
+		it := items(w.mustSubmit(w.dev.c, body(nil, item(level))))[0]
+		step := uuid.MustParse(open(t, it)["id"].(string))
+		w.exec("UPDATE employees SET status = 'ACTIVE' WHERE id = $1", w.admin.ID)
+		err := testutil.WhileLocked(t, w.db.App, func(ctx context.Context, tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT 1 FROM request_items WHERE id = $1 FOR UPDATE", it["id"]); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, "UPDATE employees SET status = 'SUSPENDED' WHERE id = $1", w.admin.ID)
+			return err
+		}, func() error { return call(step) })
+		if !errors.Is(err, platform.ErrUnauthorized) {
+			t.Fatalf("%s = %v; want unauthorized", name, err)
+		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/catalog"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
+	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 	"github.com/esraahaytaa-eng/access-flow/internal/reviews"
 )
@@ -279,14 +280,8 @@ func (s *Service) decide(ctx context.Context, actor auth.Principal, stepID uuid.
 		if err != nil {
 			return err
 		}
-		// The session was checked before the item's lock: a suspension or termination that
-		// committed meanwhile ends the approver's authority (D7).
-		var status string
-		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", actor.EmployeeID).Scan(&status); err != nil {
+		if err := access.StillActive(ctx, tx, actor.EmployeeID); err != nil {
 			return err
-		}
-		if status != "ACTIVE" {
-			return platform.ErrUnauthorized
 		}
 		if step.Status == to && step.DecidedBy != nil && *step.DecidedBy == actor.EmployeeID {
 			out, err = loadItem(ctx, tx, it.id) // a repeat: the current state, no new event
@@ -393,6 +388,9 @@ func (s *Service) Reassign(ctx context.Context, actor auth.Principal, stepID uui
 		if err != nil {
 			return err
 		}
+		if err := access.StillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
 		if it.excluded()[actor.EmployeeID] != "" { // nobody picks who decides an item they are part of
 			return errSeparation
 		}
@@ -403,6 +401,9 @@ func (s *Service) Reassign(ctx context.Context, actor auth.Principal, stepID uui
 			return platform.ValidationError("assigneeId", "self_assignment")
 		}
 		if err := checkAssignee(ctx, tx, it, step, assigneeID); err != nil {
+			return err
+		}
+		if err := people.CheckNotAuditor(ctx, tx, assigneeID, "assigneeId"); err != nil { // O7 note 2026-10-31
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE approval_steps SET assignee_id = $2, pool = NULL, routing_note = $3, version = version + 1
@@ -470,6 +471,9 @@ func (s *Service) Override(ctx context.Context, actor auth.Principal, stepID uui
 		if err != nil {
 			return err
 		}
+		if err := access.StillActive(ctx, tx, actor.EmployeeID); err != nil {
+			return err
+		}
 		if it.excluded()[actor.EmployeeID] != "" {
 			return errSeparation
 		}
@@ -499,12 +503,19 @@ func (s *Service) Override(ctx context.Context, actor auth.Principal, stepID uui
 }
 
 // notifyOverride tells InfoSec, the beneficiary's manager and the bypassed assignee (D1).
+// Each person is told once, whatever roles they hold.
 func notifyOverride(ctx context.Context, tx pgx.Tx, it itemState, step Step, details map[string]any) error {
-	if err := notify.ToRole(ctx, tx, "INFOSEC", "SUPER_ADMIN_OVERRIDE", "approval_step", step.ID, details); err != nil {
-		return err
-	}
 	var manager *uuid.UUID
 	if err := tx.QueryRow(ctx, "SELECT manager_id FROM employees WHERE id = $1", it.beneficiary).Scan(&manager); err != nil {
+		return err
+	}
+	var told []uuid.UUID // notified below in person
+	for _, id := range []*uuid.UUID{manager, step.AssigneeID} {
+		if id != nil {
+			told = append(told, *id)
+		}
+	}
+	if err := notify.ToRole(ctx, tx, "INFOSEC", "SUPER_ADMIN_OVERRIDE", "approval_step", step.ID, details, told...); err != nil {
 		return err
 	}
 	if manager != nil {
@@ -531,15 +542,34 @@ type Approval struct {
 	Step       Step `json:"step"`
 	Item       Item `json:"item"`
 	Unroutable bool `json:"unroutable"`
+	// Party: on an unroutable step in Exceptions, why the caller may not reassign or override
+	// it (beneficiary, submitter, approver), so the UI explains the way out (BUG-A-03).
+	Party string `json:"party,omitempty"`
 }
+
+// partyOf is why who may not act on item's steps (separation of duties, F2/D1), or "".
+func partyOf(it Item, who uuid.UUID) string {
+	var deciders []uuid.UUID
+	for _, s := range it.Steps {
+		if decided[s.Status] && s.DecidedBy != nil {
+			deciders = append(deciders, *s.DecidedBy)
+		}
+	}
+	party := map[string]string{"the beneficiary": "beneficiary", "the submitter": "submitter", "an earlier approver": "approver"}
+	return party[Exclusions(it.Beneficiary.ID, it.SubmittedBy.ID, deciders)[who]]
+}
+
+// openSteps is the open steps of items waiting for approval, followed by the caller's filter
+// over st and r and a closing parenthesis.
+const openSteps = `
+		FROM approval_steps st JOIN request_items i ON i.id = st.item_id JOIN requests r ON r.id = i.request_id
+		WHERE st.status = 'PENDING' AND i.status = 'PENDING_APPROVAL' AND (`
 
 // approvals lists open steps matching where (over st, r), oldest first.
 func (s *Service) approvals(ctx context.Context, where string, args ...any) ([]Approval, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT st.id, st.item_id, st.pool IS NOT NULL AND NOT `+fmt.Sprintf(eligibleInfoSec, "true")+`
-		FROM approval_steps st JOIN request_items i ON i.id = st.item_id JOIN requests r ON r.id = i.request_id
-		WHERE st.status = 'PENDING' AND i.status = 'PENDING_APPROVAL' AND (`+where+`)
-		ORDER BY st.opened_at, st.id LIMIT 200`, args...) // shortcut: oldest 200 only; page when a company has more open steps
+		SELECT st.id, st.item_id, st.pool IS NOT NULL AND NOT `+fmt.Sprintf(eligibleInfoSec, "true")+openSteps+where+`)
+		ORDER BY st.opened_at, st.id LIMIT 200`, args...) // shortcut: oldest 200 only; Exceptions also counts its unroutable steps
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +617,7 @@ func (s *Service) Inbox(ctx context.Context, actor auth.Principal) ([]Approval, 
 
 // Exceptions are what needs a person (O3, F2, D4): FAILED operations, pool steps nobody may
 // decide, level changes whose old level is still held, failed suspensions and the open
-// removals of terminated employees. Read-only for Auditors (O7).
+// removals of terminated employees.
 type Exceptions struct {
 	FailedOperations    []access.Operation `json:"failedOperations"`
 	UnroutableSteps     []Approval         `json:"unroutableSteps"`
@@ -595,45 +625,63 @@ type Exceptions struct {
 	SuspensionGaps      []access.Operation `json:"suspensionGaps"`
 	SecurityRevocations []access.Operation `json:"securityRevocations"`
 	StaleGrants         []access.Operation `json:"staleGrants"`
-	ReviewFindings      []reviews.Item     `json:"reviewFindings"`
+	ReviewFindings      []reviews.Item     `json:"reviewFindings"`      // the first page; the review page lists them all
+	ReviewFindingsTotal int                `json:"reviewFindingsTotal"` // PERF-004
 	OrphanAccounts      []access.Orphan    `json:"orphanAccounts"`
+	Totals              ExceptionTotals    `json:"totals"` // each capped list's full size: nothing open is hidden uncounted
+}
+
+// ExceptionTotals counts every open record of each capped Exceptions list, beyond the rows listed.
+type ExceptionTotals struct {
+	FailedOperations    int `json:"failedOperations"`
+	UnroutableSteps     int `json:"unroutableSteps"`
+	Overlaps            int `json:"overlaps"`
+	SuspensionGaps      int `json:"suspensionGaps"`
+	SecurityRevocations int `json:"securityRevocations"`
+	StaleGrants         int `json:"staleGrants"`
+	OrphanAccounts      int `json:"orphanAccounts"`
 }
 
 func (s *Service) Exceptions(ctx context.Context, actor auth.Principal) (Exceptions, error) {
-	if !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("AUDITOR") {
+	if !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") {
 		return Exceptions{}, platform.ErrForbidden
 	}
-	ops, err := access.FailedOperations(ctx, s.pool)
+	var x Exceptions
+	var err error
+	if x.FailedOperations, x.Totals.FailedOperations, err = access.FailedOperations(ctx, s.pool); err != nil {
+		return Exceptions{}, err
+	}
+	unroutable := "st.pool IS NOT NULL AND NOT " + fmt.Sprintf(eligibleInfoSec, "true")
+	steps, err := s.approvals(ctx, unroutable)
 	if err != nil {
 		return Exceptions{}, err
 	}
-	steps, err := s.approvals(ctx, "st.pool IS NOT NULL AND NOT "+fmt.Sprintf(eligibleInfoSec, "true"))
-	if err != nil {
+	if err := s.pool.QueryRow(ctx, "SELECT count(*)"+openSteps+unroutable+")").Scan(&x.Totals.UnroutableSteps); err != nil {
 		return Exceptions{}, err
 	}
-	overlaps, err := access.Overlaps(ctx, s.pool)
-	if err != nil {
+	for i := range steps {
+		steps[i].Party = partyOf(steps[i].Item, actor.EmployeeID)
+	}
+	x.UnroutableSteps = steps
+	if x.Overlaps, x.Totals.Overlaps, err = access.Overlaps(ctx, s.pool); err != nil {
 		return Exceptions{}, err
 	}
-	gaps, err := access.SuspensionGaps(ctx, s.pool)
-	if err != nil {
+	if x.SuspensionGaps, x.Totals.SuspensionGaps, err = access.SuspensionGaps(ctx, s.pool); err != nil {
 		return Exceptions{}, err
 	}
-	leavers, err := access.SecurityRevocations(ctx, s.pool)
-	if err != nil {
+	if x.SecurityRevocations, x.Totals.SecurityRevocations, err = access.SecurityRevocations(ctx, s.pool); err != nil {
 		return Exceptions{}, err
 	}
-	stale, err := access.StaleGrants(ctx, s.pool)
-	if err != nil {
+	if x.StaleGrants, x.Totals.StaleGrants, err = access.StaleGrants(ctx, s.pool); err != nil {
 		return Exceptions{}, err
 	}
-	findings, err := reviews.OpenFindings(ctx, s.pool)
-	if err != nil {
+	if x.ReviewFindings, x.ReviewFindingsTotal, err = reviews.OpenFindings(ctx, s.pool); err != nil {
 		return Exceptions{}, err
 	}
-	orphans, err := access.OrphanAccounts(ctx, s.pool)
-	return Exceptions{FailedOperations: ops, UnroutableSteps: steps, Overlaps: overlaps, SuspensionGaps: gaps, SecurityRevocations: leavers,
-		StaleGrants: stale, ReviewFindings: findings, OrphanAccounts: orphans}, err
+	if x.OrphanAccounts, x.Totals.OrphanAccounts, err = access.OrphanAccounts(ctx, s.pool); err != nil {
+		return Exceptions{}, err
+	}
+	return x, nil
 }
 
 // Open lists every open step, unroutable ones marked, for InfoSec and Super Admins, who

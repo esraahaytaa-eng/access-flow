@@ -1,16 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useEmployees, useTools } from "../api/queries";
 import type {
-  AccessAtResponse, AuditEventsResponse, HeldGrant, HeldState, LeaverRow, PrivilegedHolder, QuarterReport, Request, RequestItem, RequestsResponse,
+  AccessAtResponse, AuditEventsResponse, AuditFilters, HeldGrant, HeldState, LeaverRow, PrivilegedHolder, QuarterReport, Request, RequestItem, RequestsResponse,
 } from "../api/types";
 import { auditActionText, auditGroups, detailsText } from "../i18n/audit";
 import { requestKindLabel, roleLabel, stepLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
-  Badge, Button, Callout, Card, Drawer, EmptyState, Field, Icon, Input, KeyValueList, PageHeader, Person, SearchBox, Select, TableSkeleton, Tabs, Tag, ToolCell,
+  Badge, Button, Callout, Card, Drawer, EmptyState, Field, Icon, Input, KeyValueList, PageHeader, Pager, Person, SearchBox, Select, TableSkeleton, Tabs, Tag, ToolCell,
 } from "../ui/components";
 import { downloadCsv } from "../ui/csv";
 import type { IconName } from "../ui/icons";
@@ -39,19 +39,21 @@ const holderName = (g: HeldGrant) => g.employee?.fullName ?? g.account ?? "—";
 const query = (params: Record<string, string>) => new URLSearchParams(Object.entries(params).filter(([, v]) => v !== "")).toString();
 
 export function AuditPage() {
-  const { hasRole } = useSession();
-  const full = hasRole("SUPER_ADMIN", "INFOSEC", "AUDITOR");
+  const { hasRole, auditor } = useSession();
+  const full = !auditor && hasRole("SUPER_ADMIN", "INFOSEC");
   const [params, setParams] = useSearchParams();
   const requested = (params.get("tab") ?? "events") as Tab;
-  const tab: Tab = requested === "reports" && !full ? "events" : requested;
+  // An external auditor reads only the event log (O7 note 2026-10-31); the server refuses the rest.
+  const tab: Tab = auditor || (requested === "reports" && !full) ? "events" : requested;
   return (
     <>
       <PageHeader title="Denetim kayıtları" sub="Kim talep etti, kim onayladı, kim verdi veya kaldırdı; hepsi gerçek zaman damgalarıyla. Kayıtlar yalnızca eklenebilir, değiştirilemez." />
-      {!full && <div style={{ marginBottom: 14 }}><Callout icon="users">Yönetici olarak yalnızca şu an size bağlı (doğrudan ve dolaylı) çalışanların kayıtlarını görüyorsunuz.</Callout></div>}
-      {hasRole("AUDITOR") && <div style={{ marginBottom: 14 }}><Callout icon="eye">Salt okunur erişim. Denetçi rolü onay, karşılama veya yönetim yetkisi vermez.</Callout></div>}
-      <Tabs<Tab> value={tab} onChange={(t) => setParams({ tab: t })}
+      {auditor
+        ? <div style={{ marginBottom: 14 }}><Callout icon="eye">Dış denetçi erişimi: yalnızca denetim kayıtlarını görüntüleyebilir, filtreleyebilir ve CSV olarak indirebilirsiniz. Başka bir ekran veya işlem açık değildir.</Callout></div>
+        : !full && <div style={{ marginBottom: 14 }}><Callout icon="users">Yönetici olarak yalnızca şu an size bağlı (doğrudan ve dolaylı) çalışanların kayıtlarını görüyorsunuz.</Callout></div>}
+      {!auditor && <Tabs<Tab> value={tab} onChange={(t) => setParams({ tab: t })}
         tabs={[{ value: "events", label: "Olay geçmişi" }, { value: "pit", label: "Geçmiş erişim sorgusu" }, { value: "evidence", label: "Onay kanıtı" },
-          ...(full ? [{ value: "reports" as Tab, label: "Kanıt raporları" }] : [])]} />
+          ...(full ? [{ value: "reports" as Tab, label: "Kanıt raporları" }] : [])]} />}
       {tab === "events" && <EventsTab />}
       {tab === "pit" && <AccessTab />}
       {tab === "evidence" && <EvidenceTab />}
@@ -62,32 +64,43 @@ export function AuditPage() {
 
 function EventsTab() {
   const { timezone } = useSession();
-  const employees = useEmployees().data ?? [];
+  // The choices come with the audit log, not from the employee directory an Auditor cannot read.
+  const filters = useQuery({ queryKey: ["audit", "filters"], queryFn: () => api.get<AuditFilters>("/audit/filters") }).data;
   const [q, setQ] = useState("");
   const [group, setGroup] = useState("");
   const [actor, setActor] = useState("");
+  const [tool, setTool] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [shown, setShown] = useState(PAGE);
+  const [page, setPage] = useState(1);
   const action = auditGroups.find((g) => g.value === group)?.actions.join(",") ?? "";
-  const search = query({ q: q.trim(), action, actor, from, to });
-  const events = useQuery({ queryKey: ["audit", "events", search], queryFn: () => api.get<AuditEventsResponse>(`/audit/events?${search}`) });
+  const search = query({ q: q.trim(), action, actor, tool, from, to });
+  useEffect(() => setPage(1), [search]);
+  // Pages and totals come from the server over every matching event.
+  const events = useQuery({ queryKey: ["audit", "events", search, page], placeholderData: keepPreviousData,
+    queryFn: () => api.get<AuditEventsResponse>(`/audit/events?${query({ q: q.trim(), action, actor, tool, from, to, page: page > 1 ? String(page) : "" })}`) });
   const rows = events.data?.events ?? [];
-  const exportCsv = () => downloadCsv(`accessflow_denetim_${todayIn(timezone)}.csv`, [
-    [`Zaman (${timezone})`, "Yapan", "Olay", "İlgili çalışan", "Ayrıntı", "Gerekçe"],
-    ...rows.map((e) => [formatDateTime(e.at, timezone), e.actor?.fullName ?? "Sistem", auditActionText(e.action), e.subject?.fullName, detailsText(e.details), e.reason]),
-  ]);
+  const total = events.data?.total ?? 0;
+  // The server streams every matching event, not only the loaded page.
+  const exportCsv = () => {
+    const a = document.createElement("a");
+    a.href = `/api/v1/audit/events/export${search ? `?${search}` : ""}`;
+    a.download = "";
+    a.click();
+  };
   return (
     <>
       <div className="toolbar">
-        <SearchBox value={q} onChange={(v) => { setQ(v); setShown(PAGE); }} placeholder="Olay, kişi veya ayrıntı ara" />
+        <SearchBox value={q} onChange={setQ} placeholder="Olay, kişi veya ayrıntı ara" />
         <div style={{ width: 210 }}><Select aria-label="Olay türü" placeholder="Tüm olay türleri" value={group} onChange={(e) => setGroup(e.target.value)}
           options={auditGroups.map((g) => ({ value: g.value, label: g.label }))} /></div>
         <div style={{ width: 180 }}><Select aria-label="Yapan" placeholder="Tüm kişiler" value={actor} onChange={(e) => setActor(e.target.value)}
-          options={[...employees].sort((a, b) => a.fullName.localeCompare(b.fullName, "tr")).map((e) => ({ value: e.id, label: e.fullName }))} /></div>
+          options={(filters?.actors ?? []).map((e) => ({ value: e.id, label: e.fullName }))} /></div>
+        <div style={{ width: 170 }}><Select aria-label="Araç" placeholder="Tüm araçlar" value={tool} onChange={(e) => setTool(e.target.value)}
+          options={(filters?.tools ?? []).map((t) => ({ value: t.id, label: t.name }))} /></div>
         <Input type="date" aria-label="Başlangıç tarihi" style={{ width: 150 }} value={from} onChange={(e) => setFrom(e.target.value)} />
         <Input type="date" aria-label="Bitiş tarihi" style={{ width: 150 }} value={to} onChange={(e) => setTo(e.target.value)} />
-        <Button icon="download" style={{ marginLeft: "auto" }} disabled={rows.length === 0} onClick={exportCsv}>CSV indir</Button>
+        <Button icon="download" style={{ marginLeft: "auto" }} disabled={total === 0} onClick={exportCsv}>CSV indir</Button>
       </div>
       {events.isPending ? <TableSkeleton /> : rows.length === 0 ? (
         <div className="card"><EmptyState icon="history" title="Eşleşen kayıt yok" desc="Filtreleri değiştirmeyi deneyin." /></div>
@@ -95,7 +108,7 @@ function EventsTab() {
         <>
           <div className="card table-wrap"><table className="table">
             <thead><tr><th>Zaman</th><th>Yapan</th><th>Olay</th><th>İlgili çalışan</th><th>Ayrıntı</th></tr></thead>
-            <tbody>{rows.slice(0, shown).map((e) => (
+            <tbody>{rows.map((e) => (
               <tr key={e.id}>
                 <td className="nowrap small">{formatDateTime(e.at, timezone)}</td>
                 <td className="small nowrap">{e.actor ? e.actor.fullName : <Tag>Sistem</Tag>}</td>
@@ -105,9 +118,9 @@ function EventsTab() {
               </tr>
             ))}</tbody>
           </table></div>
-          {rows.length > shown && <div className="row" style={{ justifyContent: "center", marginTop: 12 }}><Button onClick={() => setShown(shown + PAGE)}>Daha fazla göster ({rows.length - shown})</Button></div>}
+          <Pager page={events.data!.page} pageSize={events.data!.pageSize} total={total} onChange={setPage} />
           <p className="hint" style={{ marginTop: 10 }}>
-            {rows.length} kayıt{events.data?.truncated ? " (en yeni 1000 kayıt; daha eskiler için tarih aralığını daraltın)" : ""} · saatler {timezone}
+            {total.toLocaleString("tr-TR")} kayıt · CSV tüm eşleşen kayıtları içerir · saatler {timezone}
           </p>
         </>
       )}
@@ -123,6 +136,8 @@ function AccessTab() {
   const [date, setDate] = useState(today);
   const [employee, setEmployee] = useState("");
   const [tool, setTool] = useState("");
+  const [shown, setShown] = useState(PAGE);
+  useEffect(() => setShown(PAGE), [date, employee, tool]);
   const search = query({ date, employee, tool });
   const access = useQuery({ queryKey: ["audit", "access", search], queryFn: () => api.get<AccessAtResponse>(`/audit/access?${search}`) });
   const held = access.data?.grants ?? [];
@@ -148,7 +163,7 @@ function AccessTab() {
       ) : (
         <div className="card table-wrap"><table className="table">
           <thead><tr><th>Çalışan</th><th>Araç ve seviye</th><th>{formatDate(date, timezone)} durumu</th><th>Kanıt</th><th>Etkin başlangıç</th><th>Onaylayanlar</th></tr></thead>
-          <tbody>{held.map((g) => (
+          <tbody>{held.slice(0, shown).map((g) => (
             <tr key={g.grantId}>
               <td>{g.employee ? <Person person={g.employee} sub={false} /> : <span className="mono small">{g.account}</span>}</td>
               <td><ToolCell tool={g.tool} level={g.level} /></td>
@@ -160,6 +175,7 @@ function AccessTab() {
           ))}</tbody>
         </table></div>
       )}
+      {held.length > shown && <div className="row" style={{ justifyContent: "center", marginTop: 12 }}><Button onClick={() => setShown(shown + PAGE)}>Daha fazla göster ({held.length - shown})</Button></div>}
       {removed.length > 0 && (
         <Card title="Bu tarihten önceki 30 günde kaldırılanlar" style={{ marginTop: 16 }} pad={false}>
           {removed.map((g) => (
@@ -285,7 +301,7 @@ function quarterReport(q: QuarterReport, dt: (v: string | null) => string, timez
       <div className="stack">
         <div className="grid-3">
           {([["Toplam kalem", c.total], ["Devamı onaylandı", c.kept], ["Kaldırılmasına karar verildi", c.revoked], ["Yanıt bekliyor", c.unanswered], ["Yanıtsız; kaldırıldı", c.autoRevoked],
-            ["Zaten kaldırıldı", c.alreadyRemoved], ["Devreden açık bulgu", c.openFindings]] as const).filter(([l, v]) => l !== "Yanıtsız; kaldırıldı" || v > 0).map(([l, v]) => (
+            ["Zaten kaldırıldı", c.alreadyRemoved], ["Devreden açık bulgu", c.openFindings], ["Önceki denetimlerden açık bulgu", c.carriedFindings]] as const).filter(([l, v]) => l !== "Yanıtsız; kaldırıldı" || v > 0).map(([l, v]) => (
             <div key={l} className="card" style={{ padding: 14 }}><div className="muted small">{l}</div><div style={{ fontSize: 22, fontWeight: 700 }}>{v}</div></div>
           ))}
         </div>
@@ -295,7 +311,8 @@ function quarterReport(q: QuarterReport, dt: (v: string | null) => string, timez
       </div>
     ),
     csv: [["Çalışan", "Araç", "Seviye", "İnceleyen", "Karar", "Karar veren", "Zaman", "Gerekçe", "Not"],
-      ...q.items.map((i) => [i.employee, i.tool, i.level, i.reviewer ?? "Bilgi Güvenliği havuzu", decisionText(i), i.decidedBy, dt(i.decidedAt), i.reason, i.late ? "Geç" : ""])],
+      ...q.items.map((i) => [i.employee, i.tool, i.level, i.reviewer ?? "Bilgi Güvenliği havuzu", decisionText(i), i.decidedBy, dt(i.decidedAt), i.reason,
+        i.carriedOver ? "Önceki denetimden devreden bulgu" : i.late ? "Geç" : ""])],
   };
 }
 

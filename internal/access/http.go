@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -16,16 +17,18 @@ import (
 type Service struct {
 	pool  *pgxpool.Pool
 	tools *HTTPToolClient // read by the baseline import (D10)
+	loc   *time.Location  // the company timezone: Team's expiry window
 }
 
-func NewService(pool *pgxpool.Pool, tools *HTTPToolClient) *Service {
-	return &Service{pool: pool, tools: tools}
+func NewService(pool *pgxpool.Pool, tools *HTTPToolClient, loc *time.Location) *Service {
+	return &Service{pool: pool, tools: tools, loc: loc}
 }
 
 // Register adds the grant routes to r, which must already require a session.
 func (s *Service) Register(r chi.Router) {
 	r.Get("/access", s.handleMine)
 	r.Get("/access/team", s.handleTeam)
+	r.Get("/access/team/{id}", s.handleTeamMember)
 	r.Get("/employees/{id}/grants", s.handleEmployeeGrants)
 	r.Post("/grants/{id}/revoke", s.handleRevoke)
 	r.Post("/operations/{id}/retry", s.handleRetry)
@@ -56,7 +59,22 @@ func (s *Service) handleMine(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleTeam(w http.ResponseWriter, r *http.Request) {
-	gs, err := s.Team(r.Context(), actor(r))
+	page, offset, err := platform.PageParam(r)
+	var members []Member
+	var total int
+	if err == nil {
+		members, total, err = s.Team(r.Context(), actor(r), r.URL.Query().Get("q"), offset)
+	}
+	platform.Respond(w, r, http.StatusOK, map[string]any{"members": members, "total": total, "page": page, "pageSize": platform.PageSize}, err)
+}
+
+func (s *Service) handleTeamMember(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		platform.WriteError(w, r, platform.ErrNotFound)
+		return
+	}
+	gs, err := s.TeamMember(r.Context(), actor(r), id)
 	platform.Respond(w, r, http.StatusOK, map[string]any{"grants": gs}, err)
 }
 
@@ -88,8 +106,12 @@ func (s *Service) handleRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleTasks(w http.ResponseWriter, r *http.Request) {
-	ts, err := s.Tasks(r.Context(), actor(r))
-	platform.Respond(w, r, http.StatusOK, map[string]any{"tasks": ts}, err)
+	page, offset, err := platform.PageParam(r)
+	var out TaskPage
+	if err == nil {
+		out, err = s.Tasks(r.Context(), actor(r), r.URL.Query().Get("tab"), r.URL.Query().Get("q"), page, offset)
+	}
+	platform.Respond(w, r, http.StatusOK, out, err)
 }
 
 // taskRoute serves a task action whose body is {version}, plus the text field when one is named.
