@@ -33,31 +33,68 @@ describe("access reviews", () => {
     renderPage(<ReviewsPage />, { session: owner });
     expect(await screen.findByText("İçe aktarılan")).toBeTruthy();
     const rows = screen.getAllByRole("row");
-    await userEvent.click(within(rows[1]).getByRole("button", { name: "Koru" }));
+    await userEvent.click(within(rows[1]).getByRole("button", { name: "Erişim devam etsin" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/review-items/ri1/decide")?.body).toEqual({ decision: "KEEP", reason: "", version: 3 }));
 
     // Only ri1 and ri4 may be kept in bulk: ri2's level needs InfoSec, ri3 is flagged.
     expect(screen.getAllByRole("checkbox", { name: /^Deniz Kara · / })).toHaveLength(2);
     await userEvent.click(screen.getByRole("checkbox", { name: "Uygun olanların tümünü seç" }));
-    await userEvent.click(screen.getByRole("button", { name: "Seçilenleri koru" }));
+    await userEvent.click(screen.getByRole("button", { name: "Seçilenlerin erişimi devam etsin" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/review-items/bulk-keep")?.body).toEqual({ items: [{ id: "ri1", version: 3 }, { id: "ri4", version: 3 }] }));
   });
 
   it("revokes with a reason; a Super Admin is offered Revoke only", async () => {
     const calls = fakeServer({ ...base, "GET /reviews": { campaign, items: [reviewItem()] }, "POST /review-items/ri1/decide": reviewItem({ decision: "REVOKE" }) });
     renderPage(<ReviewsPage />, { session: sa });
-    expect(await screen.findByText(/yalnızca “Kaldırılsın”/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Koru" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Kaldır" }));
+    expect(await screen.findByText(/yalnızca “Erişimi kaldır”/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Erişim devam etsin" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Erişimi kaldır" }));
     await userEvent.type(dialog("Erişim kaldırılsın mı?").getByRole("textbox"), "Proje bitti");
-    await userEvent.click(dialog("Erişim kaldırılsın mı?").getByRole("button", { name: "Kaldırılsın" }));
+    await userEvent.click(dialog("Erişim kaldırılsın mı?").getByRole("button", { name: "Erişimi kaldır" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ decision: "REVOKE", reason: "Proje bitti", version: 3 }));
+  });
+
+  it("titles the campaign by year and quarter and keeps the day timeline", async () => {
+    fakeServer({ ...base, "GET /reviews": { campaign, items: [reviewItem()] } });
+    renderPage(<ReviewsPage />, { session: owner });
+    expect(await screen.findByText("Erişim Denetimi — 2026 4. Çeyrek")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Erişim Kontrolü" })).toBeTruthy();
+    expect(screen.getByText(/Gün 21/)).toBeTruthy();
+    expect(screen.queryByText(/Ek inceleme/)).toBeNull();
+  });
+
+  it("names a scheduled campaign's quarter from its key", async () => {
+    fakeServer({ ...base, "GET /reviews": { campaign: { ...campaign, kind: "QUARTERLY", quarter: "2027-Q1" }, items: [reviewItem()] } });
+    renderPage(<ReviewsPage />, { session: owner });
+    expect(await screen.findByText("Erişim Denetimi — 2027 1. Çeyrek")).toBeTruthy();
+  });
+
+  it("shows a leaver's earlier decision as history with the access's removal state, and offers no Keep", async () => {
+    const leaver = { id: "e9", fullName: "Deniz Kara", jobTitle: "Analist", status: "TERMINATED" };
+    const items = [
+      reviewItem({ employee: leaver, decision: "KEEP", decidedBy: person("o2", "Can Öztürk"), decidedAt: "2026-10-29T21:08:59Z", grantStatus: "REVOKED" }),
+      reviewItem({ id: "ri2", grantId: "g2", tool: "GitHub", employee: leaver, grantStatus: "REVOCATION_REQUESTED" }),
+      reviewItem({ id: "ri3", grantId: "g3", tool: "Figma", employee: leaver, grantStatus: "REVOCATION_FAILED" }),
+    ];
+    fakeServer({ ...base, "GET /reviews": { campaign, items } });
+    renderPage(<ReviewsPage />, { session: owner });
+    await userEvent.click(await screen.findByRole("tab", { name: /Tüm kalemlerim/ }));
+    await screen.findByText("Kaldırma bekleniyor");
+    const rows = screen.getAllByRole("row");
+    const jira = within(rows.find((r) => r.textContent?.includes("Jira"))!);
+    expect(jira.getByText("Erişimin devamı onaylandı")).toBeTruthy();
+    expect(jira.getByText(/Can Öztürk/)).toBeTruthy();
+    expect(jira.getByText("Kaldırıldı")).toBeTruthy();
+    expect(screen.getByText("Kaldırma bekleniyor")).toBeTruthy();
+    expect(screen.getByText("Kaldırma başarısız")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Erişim devam etsin" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /Deniz Kara · / })).toBeNull();
   });
 
   it("shows when no campaign is active", async () => {
     fakeServer({ ...base, "GET /reviews": { campaign: null, items: [] } });
     renderPage(<ReviewsPage />, { session: owner });
-    expect(await screen.findByText("Aktif inceleme kampanyası yok")).toBeTruthy();
+    expect(await screen.findByText("Aktif erişim denetimi yok")).toBeTruthy();
   });
 });
 
@@ -65,9 +102,12 @@ describe("settings: reviews and imports", () => {
   it("starts a campaign manually", async () => {
     const calls = fakeServer({ ...base, "GET /reviews": { campaign: null, items: [] }, "POST /reviews/campaigns": () => ({ status: 201, body: campaign }) });
     renderPage(<SettingsPage />, { session: sa });
-    await userEvent.click(screen.getByRole("tab", { name: "İnceleme takvimi" }));
-    await userEvent.click(await screen.findByRole("button", { name: "Kampanyayı şimdi başlat" }));
-    await userEvent.click(dialog("Yeni inceleme kampanyası başlatılsın mı?").getByRole("button", { name: "Başlat" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Denetim takvimi" }));
+    expect(await screen.findByText("Üç aylık erişim denetimi takvimi")).toBeTruthy();
+    expect(screen.getByText("Yanıtlanmamış erişimler için güvenlik bulgusu oluşturulur ve Bilgi Güvenliği tarafından takip edilir. Otomatik erişim kaldırılmaz.")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/kampanya/i);
+    await userEvent.click(await screen.findByRole("button", { name: "Erişim denetimi başlat" }));
+    await userEvent.click(dialog("Yeni erişim denetimi başlatılsın mı?").getByRole("button", { name: "Başlat" }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/reviews/campaigns")).toBe(true));
   });
 
@@ -169,6 +209,31 @@ describe("settings: Excel workbook import", () => {
 describe("exceptions: findings and orphans", () => {
   const orphan = { id: "g9", toolId: "t2", tool: "GitHub", accessLevelId: "l9", level: "Developer", method: "API", account: "ghost@example.com", status: "ACTIVE",
     source: "MOCK", fileName: null, importedAt: "2026-10-29T09:00:00Z", version: 1 };
+
+  it("groups orphan and departed-employee accounts and says why and where each came from", async () => {
+    const departed = { id: "op7", grantId: "g7", type: "REVOKE", employee: person("e7", "Eski Çalışan"), tool: "Jira", level: "Kullanıcı", status: "PENDING",
+      attempts: 0, lastError: null, failedAt: null, version: 1, createdAt: "2026-10-29T09:00:00Z" };
+    const accounts = [
+      { ...orphan, id: "o1", account: "ghost@ornekfirma.co" },
+      { ...orphan, id: "o2", account: "designer@ajans.com", source: "CSV", fileName: "figma.csv" },
+      { ...orphan, id: "o3", account: "svc-build", source: "WORKBOOK", fileName: "onboarding.xlsx" },
+      { ...orphan, id: "o4", account: "John@ORNEKFIRMA.CO" }, // case does not matter (no Turkish dotless ı)
+    ];
+    fakeServer({ ...base, "GET /employees": { employees: [{ id: "e1", email: "elif@ornekfirma.co", fullName: "Elif", department: null, jobTitle: null, managerId: null }] },
+      "GET /exceptions": { ...noExceptions, orphanAccounts: accounts, securityRevocations: [departed] } });
+    renderPage(<ExceptionsPage />, { session: infosec });
+    await userEvent.click(await screen.findByRole("button", { name: "Sahipsiz ve Şüpheli Hesaplar (5)" }));
+    const card = (text: string) => within(screen.getByText(text).closest(".card") as HTMLElement);
+    expect(card("Eski Çalışan").getByText("Ayrılan çalışanın kalan erişimi")).toBeTruthy();
+    expect(card("ghost@ornekfirma.co").getByText("Çalışan kaydı olmayan şirket hesabı")).toBeTruthy();
+    expect(card("ghost@ornekfirma.co").getByText(/Araç servisi okuması/)).toBeTruthy();
+    expect(card("designer@ajans.com").getByText("Harici olabilir (tedarikçi veya ajans)")).toBeTruthy();
+    expect(card("designer@ajans.com").getByText(/CSV içe aktarımı · figma.csv/)).toBeTruthy();
+    expect(card("svc-build").getByText("Manuel inceleme gerekli")).toBeTruthy();
+    expect(card("John@ORNEKFIRMA.CO").getByText("Çalışan kaydı olmayan şirket hesabı")).toBeTruthy();
+    expect(card("svc-build").getByText(/Excel çalışma kitabı · onboarding.xlsx/)).toBeTruthy();
+    expect(screen.queryByText(/Hesap tutarsızlıkları/)).toBeNull();
+  });
 
   it("lets InfoSec dismiss an orphan with a reason", async () => {
     const calls = fakeServer({ ...base, "GET /exceptions": { ...noExceptions, orphanAccounts: [orphan], reviewFindings: [reviewItem({ findingAt: "2026-11-10T09:00:00Z" })] },

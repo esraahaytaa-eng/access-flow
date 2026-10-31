@@ -41,21 +41,50 @@ func TestCheckNominator(t *testing.T) {
 	me, nominee := uuid.New(), uuid.New()
 	as := func(roles ...string) auth.Principal { return auth.Principal{EmployeeID: me, Roles: roles} }
 	for _, c := range []struct {
-		name     string
-		actor    auth.Principal
-		nominee  uuid.UUID
-		recovery bool
-		want     error
+		name       string
+		actor      auth.Principal
+		nominee    uuid.UUID
+		active     int // active Super Admins
+		succession bool
+		want       error
 	}{
-		{"a Super Admin proposes", as("SUPER_ADMIN"), nominee, false, nil},
-		{"never themself", as("SUPER_ADMIN"), me, false, errSelfChange},
-		{"an HR Manager only in recovery", as("HR_MANAGER"), nominee, false, platform.ErrForbidden},
-		{"recovery: an HR Manager", as("HR_MANAGER"), nominee, true, nil},
-		{"recovery: themself too", as("HR_MANAGER"), me, true, nil},
-		{"recovery: not InfoSec", as("INFOSEC"), nominee, true, platform.ErrForbidden},
+		{"a Super Admin proposes", as("SUPER_ADMIN"), nominee, 1, false, nil},
+		{"never themself", as("SUPER_ADMIN"), me, 2, false, errSelfChange},
+		{"a Super Admin who is also HR promotes the usual way", as("SUPER_ADMIN", "HR_MANAGER"), nominee, 1, false, nil},
+		{"HR: not while two Super Admins are active", as("HR_MANAGER"), nominee, 2, false, platform.ErrForbidden},
+		{"HR: succession when the last one is leaving", as("HR_MANAGER"), nominee, 1, true, nil},
+		{"HR: succession when none is active", as("HR_MANAGER"), nominee, 0, true, nil},
+		{"HR: never themself", as("HR_MANAGER"), me, 0, false, errSelfChange},
+		{"InfoSec never nominates", as("INFOSEC"), nominee, 0, false, platform.ErrForbidden},
 	} {
-		if got := checkNominator(c.actor, c.nominee, c.recovery); got != c.want {
+		succession, err := checkNominator(c.actor, c.nominee, c.active)
+		if err != c.want || succession != c.succession {
+			t.Errorf("%s: %v %v, want %v %v", c.name, succession, err, c.succession, c.want)
+		}
+	}
+}
+
+func TestCheckLeaverAction(t *testing.T) {
+	me, target := uuid.New(), uuid.New()
+	as := func(roles ...string) auth.Principal { return auth.Principal{EmployeeID: me, Roles: roles} }
+	for _, c := range []struct {
+		name  string
+		actor auth.Principal
+		id    uuid.UUID
+		roles []string
+		want  error
+	}{
+		{"HR ends a Super Admin's employment (D2 succession)", as("HR_MANAGER"), target, []string{"SUPER_ADMIN"}, nil},
+		{"HR still needs a Super Admin for InfoSec", as("HR_MANAGER"), target, []string{"SUPER_ADMIN", "INFOSEC"}, errPrivilegedReset},
+		{"never oneself", as("HR_MANAGER"), me, []string{"SUPER_ADMIN"}, errSelfChange},
+		{"a manager cannot", as(), target, nil, platform.ErrForbidden},
+	} {
+		if got := CheckLeaverAction(c.actor, c.id, c.roles); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+	// Password resets and reactivation keep the stricter rule.
+	if got := CheckAccountAction(as("HR_MANAGER"), target, []string{"SUPER_ADMIN"}); got != errPrivilegedReset {
+		t.Errorf("CheckAccountAction: %v", got)
 	}
 }

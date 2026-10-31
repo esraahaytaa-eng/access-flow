@@ -26,12 +26,34 @@ const routes = (extra: Record<string, unknown> = {}) => ({
 const why = "Ödeme servisi göçü için gerekli.";
 
 async function fillLine(level: string) {
-  await screen.findByRole("option", { name: "Jira" });
-  await userEvent.selectOptions(screen.getByLabelText(/^Araç/), "t1");
+  await userEvent.type(await screen.findByRole("combobox", { name: /^Araç/ }), "Jira");
+  await userEvent.click(await screen.findByRole("option", { name: "Jira" }));
   await userEvent.click(screen.getByRole("radio", { name: new RegExp(`^${level}`) }));
 }
 
 describe("new access request", () => {
+  it("finds a tool by typing and picks it with the keyboard", async () => {
+    const tool = (id: string, name: string) => ({ ...jira, id, name, levels: [{ ...jira.levels[0], id: `${id}-l` }] });
+    const retired = { ...tool("t9", "Jenkins"), levels: [{ ...jira.levels[0], id: "t9-l", requestable: false }] };
+    fakeServer(routes({ "GET /tools": { tools: [jira, tool("t2", "GitHub"), tool("t3", "Jamf"), tool("t4", "Intercom"), retired] } }));
+    renderPage(<NewRequestPage />);
+    const box = await screen.findByRole("combobox", { name: /^Araç/ });
+    await userEvent.type(box, "j");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Jamf", "Jira"]); // only requestable tools
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    expect((box as HTMLInputElement).value).toBe("Jira");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("radio", { name: /^Kullanıcı/ })).toBeTruthy();
+    await userEvent.clear(box);
+    await userEvent.type(box, "inter"); // a capital I still matches (Turkish lowercase makes it ı)
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Intercom"]);
+    await userEvent.clear(box);
+    await userEvent.type(box, "zzz");
+    expect(screen.getByText("Eşleşen araç yok")).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    expect((box as HTMLInputElement).value).toBe("Jira"); // Escape keeps the chosen tool
+  });
+
   it("submits a 30-day request for oneself and opens it", async () => {
     const calls = fakeServer(routes());
     renderPage(<NewRequestPage />, { path: "/request-new" });

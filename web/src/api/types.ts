@@ -249,7 +249,7 @@ export type ApprovalsResponse = { approvals: Approval[] };
 
 export type Email = {
   id: string;
-  kind: "ACCESS_REQUEST" | "ACTIVATION";
+  kind: "ACCESS_REQUEST" | "ACTIVATION" | "ROLE_ACCEPTANCE";
   recipient: Person;
   requestId: string | null;
   subject: string;
@@ -391,6 +391,8 @@ export type NotificationKind =
   | "REVIEW_REMINDER"
   | "REVIEW_ESCALATED"
   | "SUPER_ADMIN_NOMINATED"
+  | "SUPER_ADMIN_ROLE_OFFERED"
+  | "SUPER_ADMIN_ROLE_ACCEPTED"
   | "ADMIN_RECOVERY_REQUIRED";
 
 export type Notification = {
@@ -545,9 +547,11 @@ export type SuperAdminNomination = {
   id: string;
   nominee: { id: string; fullName: string };
   proposedBy: { id: string; fullName: string };
-  /** Proposed by an HR Manager while no Super Admin was active. */
+  /** Made while no Super Admin was active. */
   recovery: boolean;
-  status: "PENDING" | "AUTHORIZED" | "DECLINED" | "EXPIRED" | "CANCELLED";
+  /** HR's succession of the last Super Admin: the nominee accepts through a 24-hour link (D2). */
+  succession: boolean;
+  status: "PENDING" | "AUTHORIZED" | "DECLINED" | "ACCEPTED" | "EXPIRED" | "CANCELLED";
   createdAt: string;
   expiresAt: string;
   version: number;

@@ -46,7 +46,7 @@ describe("exceptions", () => {
   it("is read-only for an auditor", async () => {
     fakeServer({ ...base, "GET /exceptions": { ...noExceptions, securityRevocations: [op()] } });
     renderPage(<ExceptionsPage />, { session: auditor });
-    expect(await screen.findByText("Ayrılan çalışanın erişimi sürüyor")).toBeTruthy();
+    expect(await screen.findByText("Ayrılan çalışanın kaldırması başarısız")).toBeTruthy(); // op() is FAILED: listed with operation errors
     expect(screen.getByText(/salt okunur/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Yeniden dene" })).toBeNull();
   });
@@ -64,6 +64,19 @@ describe("tool administration", () => {
     renderPage(<ToolsAdminPage />, { session: sa });
     expect(await screen.findByText("Jira")).toBeTruthy();
     expect(screen.getByText("Can Owner")).toBeTruthy();
+  });
+
+  it("shows each level's approvals as numbered stages in their order", async () => {
+    const levels = [{ ...jiraAdmin.levels[0], id: "l1", name: "Admin", steps: ["MANAGER", "TOOL_OWNER", "INFOSEC"] },
+      { ...jiraAdmin.levels[0], id: "l2", name: "ReadOnly", steps: ["MANAGER", "TOOL_OWNER"] }];
+    fakeServer({ ...base, "GET /tools": { tools: [{ ...jiraAdmin, levels }] } });
+    renderPage(<ToolsAdminPage />, { session: sa });
+    const admin = (await screen.findByText("Admin")).closest(".level-approvals") as HTMLElement;
+    expect(within(admin).getByText("3 aşamalı onay")).toBeTruthy();
+    expect(within(admin).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["1Yönetici", "2Araç sahibi", "3Bilgi güvenliği"]);
+    const readOnly = screen.getByText("ReadOnly").closest(".level-approvals") as HTMLElement;
+    expect(within(readOnly).getByText("2 aşamalı onay")).toBeTruthy();
+    expect(within(readOnly).getByRole("list").getAttribute("title")).toMatch(/sırayla/);
   });
 
   it("creates a tool and then its levels", async () => {

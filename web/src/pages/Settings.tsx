@@ -2,15 +2,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, ApiError, saveFile } from "../api/client";
 import { useAdminGroups, useAdminHealth, useCompanyCatalog, useEmployees, useNominations, useReviews, useStarterPackages, useTools } from "../api/queries";
-import type { Activation, ActivationsResponse, ActivationStatus, AdminGroup, AssignRoleBody, Email, EmailOutboxResponse, Employee, ImportReport, ImportsResponse, Role, StarterPackage, WorkbookPlan, WorkbookProblem, WorkbookResult } from "../api/types";
+import type { Activation, ActivationsResponse, ActivationStatus, AdminGroup, AssignRoleBody, Employee, ImportReport, ImportsResponse, Role, StarterPackage, WorkbookPlan, WorkbookProblem, WorkbookResult } from "../api/types";
 import { roleLabel } from "../i18n/labels";
 import { useSession } from "../session";
 import {
   Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, FilePicker, Input, KeyValueList, Modal, PageHeader, Person, Segmented, Select, TableSkeleton, Tabs, Textarea, useAction,
 } from "../ui/components";
-import { formatDate, formatDateTime, relativeTime } from "../ui/format";
+import { formatDate, formatDateTime } from "../ui/format";
 import { reissueWarning } from "./EmployeeDetail";
 import { catalogOptions, managerOptions } from "./Employees";
+import { Mailbox } from "./Mailbox";
+import { NominateModal } from "./Succession";
 
 type Tab = "roles" | "groups" | "packages" | "reviews" | "imports" | "activations" | "mail" | "system";
 const assignable: AssignRoleBody["role"][] = ["INFOSEC", "HR_MANAGER", "AUDITOR"];
@@ -19,12 +21,12 @@ export function SettingsPage() {
   const [tab, setTab] = useState<Tab>("roles");
   return (
     <>
-      <PageHeader title="Yönetim ayarları" sub="Ayrıcalıklı roller, yönetim grupları, başlangıç paketleri, inceleme takvimi, içe aktarma ve e-posta kutusu." />
+      <PageHeader title="Yönetim ayarları" sub="Ayrıcalıklı roller, yönetim grupları, başlangıç paketleri, denetim takvimi, içe aktarma ve e-posta kutusu." />
       <Tabs value={tab} onChange={setTab} tabs={[{ value: "roles", label: "Roller" }, { value: "groups", label: "Yönetim grupları" }, { value: "packages", label: "Başlangıç paketleri" },
-        { value: "reviews", label: "İnceleme takvimi" }, { value: "imports", label: "İçe aktarma" },
+        { value: "reviews", label: "Denetim takvimi" }, { value: "imports", label: "İçe aktarma" },
         { value: "activations", label: "Hesap etkinleştirme" }, { value: "mail", label: "E-posta kutusu" }, { value: "system", label: "Sistem" }]} />
       {tab === "roles" ? <RolesTab /> : tab === "groups" ? <GroupsTab /> : tab === "packages" ? <PackagesTab /> : tab === "reviews" ? <ReviewScheduleTab />
-        : tab === "imports" ? <ImportsTab /> : tab === "activations" ? <ActivationsTab /> : tab === "mail" ? <MailboxTab /> : <SystemTab />}
+        : tab === "imports" ? <ImportsTab /> : tab === "activations" ? <ActivationsTab /> : tab === "mail" ? <Mailbox /> : <SystemTab />}
     </>
   );
 }
@@ -40,10 +42,8 @@ function RolesTab() {
   const [remove, setRemove] = useState<{ e: Employee; r: Role } | null>(null);
   const order: Role[] = ["SUPER_ADMIN", "INFOSEC", "HR_MANAGER", "AUDITOR"];
   const rows = order.flatMap((r) => employees.filter((e) => e.status !== "TERMINATED" && e.roles.includes(r)).map((e) => ({ e, r })));
-  const superAdmins = rows.filter((x) => x.r === "SUPER_ADMIN").length;
   return (
     <div className="stack">
-      {!query.isPending && superAdmins < 2 && <Callout tone="warn" title="Yalnızca bir aktif Süper Yönetici var">Süper Yönetici ayrılırsa sistem kurtarma moduna girer. İkinci bir Süper Yönetici önermeniz önerilir. Atama iki kişilik onay gerektirir: siz önerirsiniz, başka bir Süper Yönetici (yoksa Bilgi Güvenliği üyesi) yetkilendirir.</Callout>}
       <Card title="Ayrıcalıklı roller" sub="Kimse kendi rollerini değiştiremez. Rol kaldırıldığında geçmiş kaydı korunur." pad={false}
         actions={<><Button size="sm" onClick={() => setNominateOpen(true)}>Süper Yönetici öner</Button><Button size="sm" variant="primary" icon="plus" onClick={() => setAssignOpen(true)}>Rol ata</Button></>}>
         {query.isPending ? <TableSkeleton /> : (
@@ -103,32 +103,6 @@ function AssignRoleModal({ employees, onClose }: { employees: Employee[]; onClos
         <Field label="Kişi" required error={errors.emp}><Select value={employeeId} onChange={(e) => { setEmployeeId(e.target.value); setErrors({ ...errors, emp: undefined }); }} placeholder="Seçin" options={managerOptions(employees, me.id)} /></Field>
         <Field label="Rol" required error={errors.role}><Select value={role} onChange={(e) => { setRole(e.target.value); setErrors({ ...errors, role: undefined }); }} placeholder="Seçin" options={assignable.map((r) => ({ value: r, label: roleLabel[r] }))} /></Field>
         {role === "AUDITOR" && <Callout tone="info">Denetçi rolü salt okunurdur; onay, karşılama veya yönetim yetkisi vermez.</Callout>}
-      </div>
-    </Modal>
-  );
-}
-
-/** Proposes a Super Admin (D2): a Super Admin proposes someone else; in recovery an HR Manager proposes, themself allowed. */
-export function NominateModal({ employees, recovery = false, onClose }: { employees: Employee[]; recovery?: boolean; onClose: () => void }) {
-  const qc = useQueryClient();
-  const { me } = useSession();
-  const [nomineeId, setNomineeId] = useState("");
-  const [error, setError] = useState<string>();
-  const [run, busy] = useAction();
-  const otherSuperAdmins = employees.filter((e) => e.status === "ACTIVE" && e.roles.includes("SUPER_ADMIN") && e.id !== me.id).length;
-  const candidates = employees.filter((e) => !e.roles.includes("SUPER_ADMIN") && (recovery || e.id !== me.id));
-  const submit = async () => {
-    if (!nomineeId) { setError("Aday seçin."); return; }
-    const r = await run(() => api.post("/super-admin-nominations", { nomineeId }), { success: "Öneri oluşturuldu", successDesc: "Yetkilendirme için bildirim gönderildi." });
-    if (r.ok) { qc.invalidateQueries({ queryKey: ["nominations"] }); onClose(); }
-  };
-  return (
-    <Modal open onClose={onClose} title="Süper Yönetici öner"
-      desc={recovery ? "Kurtarma modu: öneriyi farklı bir Bilgi Güvenliği üyesi yetkilendirecek." : otherSuperAdmins ? "Başka bir Süper Yönetici yetkilendirmelidir." : "Tek Süper Yönetici sizsiniz; öneriyi bir Bilgi Güvenliği üyesi yetkilendirecek."}
-      footer={<><Button onClick={onClose}>Vazgeç</Button><Button variant="primary" loading={busy} onClick={submit}>Öner</Button></>}>
-      <div className="stack">
-        <Field label="Aday" required error={error}><Select value={nomineeId} onChange={(e) => { setNomineeId(e.target.value); setError(undefined); }} placeholder="Seçin" options={managerOptions(candidates)} /></Field>
-        <p className="hint">Aday kendi önerisini yetkilendiremez. Öneriler 7 gün içinde yetkilendirilmezse sona erer. Mevcut rol ve grup üyelikleri korunur.</p>
       </div>
     </Modal>
   );
@@ -270,50 +244,6 @@ function PackagesTab() {
   );
 }
 
-function MailboxTab() {
-  const { timezone } = useSession();
-  const query = useQuery({ queryKey: ["email-outbox"], queryFn: () => api.get<EmailOutboxResponse>("/email-outbox").then((r) => r.emails) });
-  const [open, setOpen] = useState<Email | null>(null);
-  const emails = query.data ?? [];
-  return (
-    <div className="stack">
-      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez; bu kutu yalnızca yerel demo içindir. Yönetici onayı gerektiren her talep gönderiminde yöneticiye tek bir bilgilendirme e-postası düşer; e-posta üzerinden onay verilemez. Yeni, içe aktarılan, yeniden işe alınan ve bağlantısı yenilenen çalışanlara etkinleştirme e-postası düşer; bağlantıyı yalnızca Süper Yönetici, her görüntüleme denetim kaydına yazılarak görebilir.</Callout>
-      {query.isPending ? <TableSkeleton /> : emails.length === 0 ? <div className="card"><EmptyState icon="mail" title="E-posta yok" /></div> : (
-        <div className="card">
-          {emails.map((m) => (
-            <button key={m.id} className="list-row clickable" style={{ width: "100%", border: 0, background: "none", textAlign: "left", borderBottom: "1px solid var(--line-2)" }} onClick={() => setOpen(m)}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>{m.subject}{m.kind === "ACTIVATION" && <> <Badge tone={m.linkAvailable ? "blue" : "outline"}>{m.linkAvailable ? "Etkinleştirme" : "Bağlantı kullanılamaz"}</Badge></>}</div>
-                <div className="cell-sub" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Alıcı: {m.recipient.fullName} · {m.body}</div>
-              </div>
-              <span className="small muted nowrap">{relativeTime(m.createdAt)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      <Modal open={!!open} onClose={() => setOpen(null)} title={open?.subject ?? ""} desc={open ? `Alıcı: ${open.recipient.fullName} · ${formatDateTime(open.createdAt, timezone)}` : undefined} footer={<Button onClick={() => setOpen(null)}>Kapat</Button>}>
-        <p style={{ whiteSpace: "pre-wrap" }}>{open?.body}</p>
-        {open?.kind === "ACTIVATION" && <ActivationLink key={open.id} email={open} />}
-      </Modal>
-    </div>
-  );
-}
-
-/** Reveals an activation link on request only: fetched into this component, never cached, and audited by the server. */
-function ActivationLink({ email }: { email: Email }) {
-  const [link, setLink] = useState("");
-  const [run, busy] = useAction();
-  if (!email.linkAvailable) return <Callout tone="warn">Bu bağlantı artık kullanılamaz (kullanıldı, süresi doldu veya yenisi gönderildi). Gerekirse Hesap etkinleştirme sekmesinden yeni bağlantı gönderin.</Callout>;
-  if (link) return (
-    <Callout tone="warn" title="Etkinleştirme bağlantısı (tek kullanımlık, 24 saat)">
-      <a href={link} target="_blank" rel="noreferrer noopener" style={{ wordBreak: "break-all" }}>{link}</a>
-      <div className="small muted" style={{ marginTop: 6 }}>Görüntülemeniz denetim kaydına yazıldı. Bağlantıyı yalnızca çalışana iletin.</div>
-    </Callout>
-  );
-  return <Button loading={busy} icon="key" onClick={() => run(() => api.get<{ token: string }>(`/email-outbox/${email.id}/activation-link`))
-    .then((r) => { if (r.ok) setLink(`${window.location.origin}/sifre-belirle#${r.res.token}`); })}>Bağlantıyı göster</Button>;
-}
-
 const activationLabel: Record<ActivationStatus, string> = { PENDING: "Bekliyor", EXPIRED: "Süresi doldu", COMPLETED: "Tamamlandı", NO_LINK: "Bağlantı yok" };
 const activationTone = { PENDING: "amber", EXPIRED: "red", COMPLETED: "green", NO_LINK: "outline" } as const;
 const reasonLabel = { CREATED: "Yeni çalışan", IMPORTED: "Excel içe aktarma", REHIRED: "Yeniden işe alım", RESET: "Yenilendi" };
@@ -371,22 +301,22 @@ function ReviewScheduleTab() {
   const waiting = (reviews.data?.items ?? []).filter((i) => i.campaignId === campaign?.id && !i.decision && !i.closedReason).length;
   return (
     <div className="stack">
-      <Card title="Çeyreklik inceleme takvimi">
+      <Card title="Üç aylık erişim denetimi takvimi">
         <KeyValueList items={[
           ["Sıklık", "Her takvim çeyreğinin başında otomatik"],
           ["Kapsam", "Tüm aktif ve askıdaki erişimler (süreli ve kaldırılana kadar)"],
           ["Gün 7", "Yanıtlanmamış her kalem için incelemeciye tek hatırlatma"],
           ["Gün 14", "Yanıtlanmamış kalemler Bilgi Güvenliğine eskale edilir"],
-          ["Gün 21", "Bilgi Güvenliği onaylı seviyelerde yanıtlanmamış erişimler kaldırılır; diğerleri açık bulgu olur"],
+          ["Gün 21", "Yanıtlanmamış erişimler için güvenlik bulgusu oluşturulur ve Bilgi Güvenliği tarafından takip edilir. Otomatik erişim kaldırılmaz."],
         ]} />
       </Card>
-      <Card title="Ek kampanya" sub="Gerektiğinde (örneğin büyük bir içe aktarmadan sonra) kampanyayı elle başlatabilirsiniz.">
+      <Card title="Ek erişim denetimi" sub="Gerektiğinde (örneğin büyük bir içe aktarmadan sonra) erişim denetimini elle başlatabilirsiniz.">
         {reviews.isPending ? <TableSkeleton rows={1} /> : campaign ? (
-          <Callout tone="info" title="Aktif kampanya var">{formatDate(campaign.startedAt, timezone)} tarihinde başladı · {waiting} kalem yanıt bekliyor. Aktif kampanya sürerken yenisi başlatılamaz.</Callout>
-        ) : <Button variant="primary" onClick={() => setConfirm(true)}>Kampanyayı şimdi başlat</Button>}
+          <Callout tone="info" title="Devam eden erişim denetimi var">{formatDate(campaign.startedAt, timezone)} tarihinde başladı · {waiting} kalem yanıt bekliyor. Devam eden denetim bitmeden yenisi başlatılamaz.</Callout>
+        ) : <Button variant="primary" onClick={() => setConfirm(true)}>Erişim denetimi başlat</Button>}
       </Card>
-      <ConfirmDialog open={confirm} onClose={() => setConfirm(false)} title="Yeni inceleme kampanyası başlatılsın mı?" confirmLabel="Başlat" success="Kampanya başlatıldı"
-        desc="Tüm aktif erişimler anlık olarak kampanyaya alınır ve araç sahiplerine bildirim gönderilir. Açık bulgusu olan kalemler eklenmez."
+      <ConfirmDialog open={confirm} onClose={() => setConfirm(false)} title="Yeni erişim denetimi başlatılsın mı?" confirmLabel="Başlat" success="Erişim denetimi başlatıldı"
+        desc="Tüm aktif erişimler anlık olarak denetime alınır ve araç sahiplerine bildirim gönderilir. Açık bulgusu olan kalemler eklenmez."
         onConfirm={async () => { await api.post("/reviews/campaigns", {}); qc.invalidateQueries({ queryKey: ["reviews"] }); }} />
     </div>
   );

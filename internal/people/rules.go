@@ -3,6 +3,7 @@ package people
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -54,6 +55,18 @@ func CheckAccountAction(actor auth.Principal, target uuid.UUID, targetRoles []st
 		return errPrivilegedReset
 	}
 	return nil
+}
+
+// CheckLeaverAction is CheckAccountAction for suspending a person and scheduling or completing
+// their termination: HR Managers own a Super Admin's departure (D2 note 2026-10-30), so they
+// may also act on an account holding Super Admin, unless it holds InfoSec too. Reactivation
+// and password resets keep CheckAccountAction.
+func CheckLeaverAction(actor auth.Principal, target uuid.UUID, targetRoles []string) error {
+	err := CheckAccountAction(actor, target, targetRoles)
+	if err == errPrivilegedReset && actor.HasRole("HR_MANAGER") && !slices.Contains(targetRoles, "INFOSEC") {
+		return nil
+	}
+	return err
 }
 
 var errInvalidRole = platform.ValidationError("role", "invalid_role")

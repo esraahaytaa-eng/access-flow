@@ -1388,7 +1388,7 @@
         ],
         "operationId": "suspendEmployee",
         "summary": "Suspend an employee",
-        "description": "Suspends an `ACTIVE` employee (D7): sign-in and sessions end, their pending request items are cancelled, pending steps assigned to them are re-routed and each grant gets a `SUSPEND` in its tool. Audited as `EMPLOYEE_SUSPENDED`. HR Manager or Super Admin, never on their own account; an account holding Super Admin or InfoSec needs a Super Admin (F4, D7). Runs in one transaction, one person-level action at a time. Returns the employee (`people.Employee`).",
+        "description": "Suspends an `ACTIVE` employee (D7): sign-in and sessions end, their pending request items are cancelled, pending steps assigned to them are re-routed and each grant gets a `SUSPEND` in its tool. Audited as `EMPLOYEE_SUSPENDED`. HR Manager or Super Admin, never on their own account; an account holding InfoSec needs a Super Admin; HR Managers may suspend a Super Admin at once (emergency revocation, D2 note 2026-10-30), which records `ADMIN_RECOVERY_REQUIRED` when none stays active (F4, D7). Runs in one transaction, one person-level action at a time. Returns the employee (`people.Employee`).",
         "security": [
           {
             "session": [],
@@ -1449,7 +1449,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not HR Manager or Super Admin), `self_change_forbidden` (your own account), `privileged_reset_requires_super_admin` (the target holds Super Admin or InfoSec), `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "description": "`forbidden` (not HR Manager or Super Admin), `self_change_forbidden` (your own account), `privileged_reset_requires_super_admin` (the target holds InfoSec), `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1488,7 +1488,7 @@
         ],
         "operationId": "terminateEmployee",
         "summary": "Terminate an employee now",
-        "description": "Terminates an `ACTIVE` or `SUSPENDED` employee now (D7): sign-in and sessions end, roles and admin group memberships close, any scheduled termination is cleared, pending items are cancelled, their pending steps re-routed and every open grant removed at the highest priority. Terminating the last active Super Admin is allowed and starts recovery mode. Audited as `EMPLOYEE_TERMINATED`. HR Manager or Super Admin, never on their own account; an account holding Super Admin or InfoSec needs a Super Admin (F4, D7). Runs in one transaction, one person-level action at a time. Returns the employee (`people.Employee`).",
+        "description": "Terminates an `ACTIVE` or `SUSPENDED` employee now (D7): sign-in and sessions end, roles and admin group memberships close, any scheduled termination is cleared, pending items are cancelled, their pending steps re-routed and every open grant removed at the highest priority. Audited as `EMPLOYEE_TERMINATED`. HR Manager or Super Admin, never on their own account; an account holding InfoSec needs a Super Admin; HR Managers may act on a Super Admin (F4, D7, D2 note 2026-10-30). Runs in one transaction, one person-level action at a time. Returns the employee (`people.Employee`).",
         "security": [
           {
             "session": [],
@@ -1549,7 +1549,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not HR Manager or Super Admin), `self_change_forbidden` (your own account), `privileged_reset_requires_super_admin` (the target holds Super Admin or InfoSec), `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "description": "`forbidden` (not HR Manager or Super Admin), `self_change_forbidden` (your own account), `privileged_reset_requires_super_admin` (the target holds InfoSec), `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1569,7 +1569,7 @@
             }
           },
           "409": {
-            "description": "`employee_status` (the employee is not ACTIVE or SUSPENDED), `version_conflict`.",
+            "description": "`employee_status` (the employee is not ACTIVE or SUSPENDED), `version_conflict`. `last_super_admin`: the last active Super Admin's employment ends only once a successor has accepted (D2 note 2026-10-30).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1588,7 +1588,7 @@
         ],
         "operationId": "scheduleTermination",
         "summary": "Schedule or move a termination",
-        "description": "Schedules, or moves, the termination of an `ACTIVE` or `SUSPENDED` employee to a future time; the sweep (every minute, also after a restart) terminates them then as the system. Audited as `TERMINATION_SCHEDULED` or `TERMINATION_RESCHEDULED`. HR Manager or Super Admin, never on their own account; an account holding Super Admin or InfoSec needs a Super Admin (F4, D7). Runs in one transaction, one person-level action at a time. Returns the employee (`people.Employee`).",
+        "description": "Schedules, or moves, the termination of an `ACTIVE` or `SUSPENDED` employee to a future time; the sweep (every minute, also after a restart) terminates them then as the system. Audited as `TERMINATION_SCHEDULED` or `TERMINATION_RESCHEDULED`. HR Manager or Super Admin, never on their own account; an account holding InfoSec needs a Super Admin; HR Managers may act on a Super Admin (F4, D7, D2 note 2026-10-30). Runs in one transaction, one person-level action at a time. Returns the employee (`people.Employee`).",
         "security": [
           {
             "session": [],
@@ -1649,7 +1649,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not HR Manager or Super Admin), `self_change_forbidden` (your own account), `privileged_reset_requires_super_admin` (the target holds Super Admin or InfoSec), `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "description": "`forbidden` (not HR Manager or Super Admin), `self_change_forbidden` (your own account), `privileged_reset_requires_super_admin` (the target holds InfoSec), `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1669,7 +1669,7 @@
             }
           },
           "409": {
-            "description": "`employee_status` (the employee is not ACTIVE or SUSPENDED), `version_conflict`.",
+            "description": "`employee_status` (the employee is not ACTIVE or SUSPENDED), `version_conflict`. `last_super_admin`: the last active Super Admin's employment ends only once a successor has accepted (D2 note 2026-10-30).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2521,7 +2521,7 @@
         ],
         "operationId": "nominateSuperAdmin",
         "summary": "Nominate a Super Admin",
-        "description": "A Super Admin nominates an active employee other than themself. While no Super Admin is active, an HR Manager nominates instead (themself allowed) and the nomination is a recovery one. Expires after 7 days. The authorizers (other Super Admins, else InfoSec) are notified.",
+        "description": "Never yourself. A Super Admin nominates an active employee for a two-person promotion; it expires after 7 days and the authorizers (other Super Admins, else InfoSec) are notified. An HR Manager who is not a Super Admin starts a succession while at most one Super Admin is active (D2 note 2026-10-30): `succession: true`, and the nominee gets a single-use 24-hour role-acceptance link in their own Mock Email Outbox (audited as `SUPER_ADMIN_ROLE_LINK_ISSUED`, without the token).",
         "security": [
           {
             "session": [],
@@ -2579,7 +2579,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `self_change_forbidden`; `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required` (the session still uses a temporary password).",
+            "description": "`forbidden` (not a Super Admin, or an HR Manager while two or more Super Admins are active), `self_change_forbidden`; `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2716,7 +2716,7 @@
             }
           },
           "409": {
-            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again), `already_super_admin`.",
+            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again), `already_super_admin`. `nomination_needs_acceptance`: a succession nomination is accepted by its nominee.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2833,7 +2833,7 @@
             }
           },
           "409": {
-            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again).",
+            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again). `nomination_needs_acceptance`: a succession nomination is accepted by its nominee.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3968,7 +3968,7 @@
         ],
         "operationId": "submitRequest",
         "summary": "Submit an access request",
-        "description": "Any signed-in employee, for themselves or another employee (`beneficiaryId`). Creates a `NEW_ACCESS` request with 1–20 items, one per tool; one invalid item rejects the whole submission (`field` names it, e.g. `items[1].duration`). Each item gets its approval steps (Manager, then Tool Owner and InfoSec as the level requires); when the beneficiary's direct manager submits, the Manager step is `APPROVED_BY_SUBMISSION` (D3). Idempotent by `submissionId` (A9). Queues one Mock Email Outbox message to the Manager-step assignee.",
+        "description": "Any signed-in employee for themselves; on someone's behalf (`beneficiaryId`) only an employee above them in the management chain (direct or indirect manager), an HR Manager or a Super Admin (`403 beneficiary_not_allowed` otherwise). Creates a `NEW_ACCESS` request with 1–20 items, one per tool; one invalid item rejects the whole submission (`field` names it, e.g. `items[1].duration`). Each item gets its approval steps (Manager, then Tool Owner and InfoSec as the level requires); when the beneficiary's direct manager submits, the Manager step is `APPROVED_BY_SUBMISSION` (D3). Idempotent by `submissionId` (A9). Queues one Mock Email Outbox message to the Manager-step assignee.",
         "security": [
           {
             "session": [],
@@ -4027,7 +4027,7 @@
             }
           },
           "403": {
-            "description": "`csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "description": "`beneficiary_not_allowed` (not the beneficiary's direct or indirect manager, HR Manager or Super Admin); `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5068,7 +5068,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such grant, or the caller may not revoke it.",
+            "description": "`not_found`: no such grant, or the caller may not revoke it (including an orphan account's grant for anyone but a Super Admin).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5078,7 +5078,7 @@
             }
           },
           "409": {
-            "description": "`version_conflict`.",
+            "description": "`version_conflict`; `orphan_account`: the grant belongs to an orphan account (no employee), which InfoSec revokes or dismisses through `POST /orphans/{id}/revoke` or `/dismiss` (a Super Admin gets this answer; nothing is changed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6127,7 +6127,7 @@
             }
           },
           "409": {
-            "description": "`version_conflict`: the item changed since it was read; `review_item_closed`: already decided, closed, or the grant is already being removed.",
+            "description": "`version_conflict`: the item changed since it was read; `review_item_closed`: already decided, closed, or the grant is already being removed. `terminated_access_not_kept`: a terminated employee's access is never kept; termination removes it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7330,7 +7330,7 @@
         ],
         "operationId": "listEmailOutbox",
         "summary": "Mock Email Outbox",
-        "description": "InfoSec, Super Admin and Auditor: the newest 100 simulated emails. `ACCESS_REQUEST` emails (O2) are listed to all three; `ACTIVATION` emails (M18) only to Super Admins. No email ever contains the activation link or token; a Super Admin reveals a still-usable link separately with `GET /email-outbox/{id}/activation-link`.",
+        "description": "Any signed-in user: the newest 100 simulated emails they may see. `ACCESS_REQUEST` emails (O2) to InfoSec, Super Admin and Auditor; `ACTIVATION` emails (M18) only to Super Admins; `ROLE_ACCEPTANCE` emails (D2 succession) only to their recipient. No email ever contains a link or token; it is revealed separately (`…/activation-link`, `…/role-link`).",
         "responses": {
           "200": {
             "description": "The emails.",
@@ -7353,7 +7353,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not InfoSec, Super Admin or Auditor), `password_change_required`.",
+            "description": "`password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7439,6 +7439,294 @@
           },
           "410": {
             "description": "`activation_link_unavailable`: the link was used, replaced or expired, the employee is no longer active, or the mock email key is missing/changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/email-outbox/{id}/role-link": {
+      "get": {
+        "tags": [
+          "Email outbox"
+        ],
+        "operationId": "revealRoleLink",
+        "summary": "Reveal a role-acceptance link from the Mock Email Outbox",
+        "description": "The email's recipient only. Decrypts the token of a role-acceptance email while its succession nomination is open and unexpired. The response carries a credential and is sent with `Cache-Control: no-store`; accepting still needs the recipient's own session.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The Mock Email Outbox message ID.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw role-acceptance token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationLink"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Always `no-store`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session (missing, expired or invalidated cookie, or the employee is no longer active).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_change_required`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such email, not a role-acceptance email, not addressed to the caller, or the ID is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`role_link_unavailable`: the link was used, replaced or expired, the nomination closed, or the mock email key is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/super-admin-nominations/{id}/reissue": {
+      "post": {
+        "tags": [
+          "Super Admin succession"
+        ],
+        "operationId": "reissueRoleLink",
+        "summary": "Reissue a succession nominee's role-acceptance link",
+        "description": "An HR Manager other than the nominee. Sends a new 24-hour link for an open succession nomination, expired or not; the previous link stops working. Audited as `SUPER_ADMIN_ROLE_LINK_ISSUED` (`reissued: true`).",
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The nomination ID.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The nomination.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Nomination"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`field_required` (field `version`), `employee_not_active`, `invalid_json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session, or the signed-in employee is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (not an HR Manager), `self_change_forbidden` (the nominee); `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such nomination.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`nomination_closed` (not an open succession nomination), `version_conflict`, `super_admins_active` (two or more Super Admins are active).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/super-admin-nominations/accept": {
+      "post": {
+        "tags": [
+          "Super Admin succession"
+        ],
+        "operationId": "acceptSuperAdminRole",
+        "summary": "Accept the Super Admin role through a role-acceptance link",
+        "description": "The succession nominee, signed in as themself (D2 note 2026-10-30). Grants Super Admin (granted by the HR proposer), leaves the password unchanged and ends the nominee's sessions so they sign in again. Audited as `ROLE_ASSIGNED` and `SUPER_ADMIN_ROLE_ACCEPTED`; a refused attempt with a known link as `SUPER_ADMIN_ROLE_ACCEPT_FAILED` (reason only). Serialized with every person-level action, so a link is used once.",
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_role_link`: malformed, unknown, replaced, used or expired, or another account's link; `field_required` (field `token`), `invalid_json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session, or the signed-in employee is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_super_admin`, `super_admins_active` (two or more Super Admins are active).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7990,9 +8278,11 @@
               "PENDING",
               "AUTHORIZED",
               "DECLINED",
+              "ACCEPTED",
               "EXPIRED",
               "CANCELLED"
-            ]
+            ],
+            "description": "`EXPIRED` is also shown in the list for an open succession nomination whose link expired (HR reissues it)."
           },
           "createdAt": {
             "type": "string",
@@ -8001,7 +8291,7 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time",
-            "description": "7 days after creation."
+            "description": "7 days after creation; for a succession, 24 hours after the latest link."
           },
           "decidedBy": {
             "type": [
@@ -8029,6 +8319,10 @@
           "canAuthorize": {
             "type": "boolean",
             "description": "Whether the caller may authorize or decline it (UI convenience; the server decides). Computed only in `GET /super-admin-nominations`; always false in create and decide responses."
+          },
+          "succession": {
+            "type": "boolean",
+            "description": "HR's succession of the last Super Admin (D2 note 2026-10-30): the nominee accepts through a 24-hour link instead of being authorized."
           }
         },
         "required": [
@@ -8036,6 +8330,7 @@
           "nominee",
           "proposedBy",
           "recovery",
+          "succession",
           "status",
           "createdAt",
           "expiresAt",
@@ -9352,7 +9647,8 @@
             "type": "string",
             "enum": [
               "ACCESS_REQUEST",
-              "ACTIVATION"
+              "ACTIVATION",
+              "ROLE_ACCEPTANCE"
             ]
           },
           "recipient": {

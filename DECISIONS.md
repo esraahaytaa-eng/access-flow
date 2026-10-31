@@ -75,10 +75,18 @@ HR creates the employee; the system generates a one-time temporary password show
 - **Last resort:** if no eligible authorizer exists, recovery reuses the initial Super Admin bootstrap mechanism. It is available only when no active Super Admin exists, and it is recorded in the audit history.
 - A health warning shows whenever fewer than two active Super Admins exist. Concurrent cases cannot leave inconsistent state.
 - [DEFAULT] Open nominations expire (e.g. 7 days) and are cancelled if the nominee or initiator is terminated. Recovery mode blocks only Super Admin-only configuration; access workflows keep running.
+- *Note — [APPROVED 2026-10-30] (UX simplification): HR owns the last Super Admin's succession.* Supersedes the 2026-10-29 M14 lifting of the guard and the HR-nominates / InfoSec-authorizes recovery above.
+  - **Guard:** the last active Super Admin cannot be terminated, scheduled for termination or terminated by the sweep (`409 last_super_admin`: "Bu çalışan sistemin son Süper Yöneticisidir. İşten çıkış işlemini tamamlamak için önce yeni bir Süper Yönetici atanmalıdır."). A due scheduled termination waits. Serialized by the lifecycle lock.
+  - **Emergency revocation:** an HR Manager may suspend a Super Admin at once (sessions end, privileged use blocked, tool access suspended through the normal workflow and shown suspended only once confirmed), and may schedule or complete their termination; reactivating a Super Admin and resetting their password still need a Super Admin, and an account that also holds InfoSec still needs a Super Admin. Suspending the last one records `ADMIN_RECOVERY_REQUIRED`.
+  - **Succession:** while at most one Super Admin is active, an HR Manager (not a Super Admin) nominates an active employee other than themself; the outgoing Super Admin's approval is not needed. The nominee gets a single-use link valid for 24 hours in their own Mock Email Outbox (only the token's SHA-256 is stored, on the nomination, apart from activation tokens; the encrypted copy is cleared on use, reissue or expiry). Only the nominee, signed in as themself, accepts; their password is unchanged and their sessions end so they sign in again with the role. HR sees the status and reissues an expired or lost link, never the link itself. HR and the nominee are the two people. Nomination, link issue, acceptance (and refused attempts), role assignment, suspension and termination are audited without the token.
+  - **One succession at a time:** a second succession nomination is `409 nomination_pending` while one is open (an expired one is closed first). A link can be reissued or accepted only while at most one Super Admin is active (`409 super_admins_active`), and accepted only while the HR proposer is still an active HR Manager. Suspending or terminating someone cancels the open nominations they proposed or received.
+  - Ordinary promotions keep the two-person rule above. The `recover-admin` command stays the last resort while no Super Admin is active.
+
 
 ## D3. On-behalf requests — [POLICY]
 When the beneficiary's **current direct manager** submits a request for them, the submission satisfies the Manager step, recorded as `APPROVED_BY_SUBMISSION`. Any other submitter triggers the normal Manager step. Remaining steps still apply with distinct people.
 *Rationale:* a separate approval click by the same person adds no control and slows onboarding.
+- *Note — [APPROVED 2026-10-30, user instruction (UX simplification)]:* only the beneficiary themself, someone above them in the management chain (direct or indirect manager), an HR Manager or a Super Admin may submit a request for them; anyone else gets `403 beneficiary_not_allowed`. Previously the server accepted any active beneficiary from any employee and only the UI limited the choice.
 
 ## D4. One access level per tool — [POLICY]
 - At most one active level per person per tool in the settled state.
@@ -129,6 +137,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - *Refinement — [APPROVED 2026-10-28, M8 plan]:* **extensions.** An extension (a later date, or Until Revoked) applies to a temporary `ACTIVE` grant and only changes its expiration date at final approval, with no tool call; the access stays active meanwhile and expiry is never held back by a pending extension. An extension approved after the grant was closed or became due is cancelled ("the access has ended"). Closing a grant (revocation, expiry, cancellation) cancels its pending extension or level change in the same transaction. A direct grant (D1) may be extended only through this normal workflow, including to Until Revoked; the 90-day limit applies to the direct grant itself.
 
 *Trade-off:* privileged permissions (e.g. AWS Admin) may be held Until Revoked after a single approval chain. For these grants expiry provides no protection; removal relies on quarterly reviews (with day-21 auto-revocation for unanswered InfoSec-approved items, D8), manager and HR actions, and termination. Accepted for simplicity and to avoid duration configuration.
+*Note — [APPROVED 2026-10-30] (UX simplification):* day 21 no longer auto-revokes (see the D8 note); unanswered privileged items become security findings that InfoSec follows up.
 
 ## D7. Termination and suspension — [CASE] removal on leaving, [POLICY] the rest
 **Termination**
@@ -154,6 +163,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
   - **Roles and memberships:** termination closes them (audited); suspension keeps them.
   - **Last Super Admin (with D2):** the last active Super Admin cannot be suspended, terminated or scheduled for termination; a Super Admin whose termination is scheduled does not count. The check is serialized across concurrent actions.
     - *Note — [2026-10-29] (M14, per the approved D2 note):* the guard is lifted; terminating the last active Super Admin proceeds and starts D2 recovery.
+    - *Note — [APPROVED 2026-10-30]:* the guard is back for termination (immediate, scheduled and the sweep) until a successor accepts; HR Managers may suspend, schedule and terminate a Super Admin (see D2).
 - *Refinement — [APPROVED 2026-10-29] (M10 plan):* leaver removals (priority 0) keep running after a rehire and stay in the security revocations list until verified or confirmed. A rehire restores no grant, role, admin group membership or request.
 
 ## D8. Quarterly access reviews — [CASE] quarterly review with chasing, [POLICY] the rules
@@ -173,6 +183,11 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - All decisions, escalations, non-response actions and fulfillment outcomes are recorded in the append-only audit history. Jobs and decisions are idempotent and safe under concurrency.
 - [DEFAULT] Campaigns start on calendar quarters; a Super Admin can also start one manually (needed for the D10 go-live certification campaign). Items are snapshotted at start; grants that end during the campaign close as "already removed". An owner's own access, and an InfoSec member's own access, go to a different reviewer.
 - [DEFAULT] Bulk Keep is allowed except for items whose level requires InfoSec approval and flagged items: retained on transfer, override or direct grant, suspended, imported baseline, approved under earlier policy. These are decided individually.
+
+- *Note — [APPROVED 2026-10-30] (UX simplification):*
+  - **Day 21 no longer revokes.** Every unanswered item, InfoSec level or not, becomes an open finding; a missed deadline never removes an active or suspended employee's access. The quarterly campaign, the day-7 reminder, the day-14 escalation, the findings and the evidence report are unchanged. Past `REVOKED_NO_REVIEW` closures stay in history.
+  - **A leaver's access is never kept.** Keep on an item whose employee is terminated is refused (`409 terminated_access_not_kept`; bulk Keep skips it). An earlier Keep stays as audit history only: Keep never authorizes access, and termination removes every grant through the normal workflow regardless of it. The review page shows the access's removal state next to the decision ("Kaldırma bekleniyor", "Kaldırma başarısız", "Kaldırıldı").
+  - **Wording:** the actions are "Erişim devam etsin" and "Erişimi kaldır"; a Keep shows as "Erişimin devamı onaylandı" with who and when. The page is "Erişim Kontrolü"; a campaign is titled "Erişim Denetimi — <year> <n>. Çeyrek".
 
 *Rationale:* CASE.md requires owners to be chased; auto-revoking InfoSec-approved access enforces least privilege where risk is highest, while findings for other items avoid mass disruption without hiding non-response.
 *Trade-off:* unreviewed access to levels not requiring InfoSec can persist until InfoSec acts; it is visible, but not removed.
@@ -198,6 +213,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
 - An unmatched account becomes an `ORPHAN_ACCOUNT` finding for InfoSec, never auto-assigned. [DEFAULT] InfoSec may revoke the account through the normal workflow or dismiss the finding with a reason.
 - Imported grants are Until Revoked; no expiration date is imposed solely because of import.
 - An initial certification campaign under D8 rules runs after import; unanswered items whose level requires InfoSec approval are auto-revoked on day 21.
+  - *Note — [APPROVED 2026-10-30] (UX simplification):* superseded by the D8 note: on day 21 every unanswered item becomes a security finding; nothing is revoked automatically.
 - Seed data includes valid employee access, a terminated employee with an existing account, and an orphan account.
 
 *Rationale:* governance must cover the access most likely to be wrong — access that predates the system.
@@ -208,6 +224,7 @@ When the beneficiary's **current direct manager** submits a request for them, th
   - **Duplicates and conflicts.** Each (tool, account, level) exists once, whichever source imported it first (the existing unique index); a repeat is skipped, an account already imported for another employee or already removed is a warning, and the same account claimed twice in one file is a problem.
   - **Security implications.** (1) The import is trusted input from a Super Admin: a wrong row creates baseline access that grants nothing in the tool but shows as held until certified. (2) For an API tool the account must be empty or the employee's email (`api_account_mismatch`), because the tool read and removals address API accounts by email; another account would let a later automatic removal revoke someone else's real access. (3) Removing a reported API grant the tool does not hold is harmless (the tool answers "no change" and the lookup confirms it is gone); suspending one fails and appears in Exceptions. (4) Manual and Vendor rows cannot be verified by any tool; the certification campaign is their first check.
   - *Rationale:* one file lets a company onboard in dependency order without a separate API-only path, while verification keeps reported and observed access apart.
+- *Note — [APPROVED 2026-10-30, user instruction (UX simplification)]:* the Exceptions screen groups a departed employee's remaining access (open `TERMINATION` removals) and orphan accounts as **"Sahipsiz ve Şüpheli Hesaplar"**, each with its source and why it was flagged. An orphan is labelled from its account as a hint only: a company account with no employee record (its email domain is used by employees), possibly external (a vendor or agency domain), or needing manual investigation (not an email address). Nothing is assigned or removed automatically; InfoSec still revokes or dismisses with a reason. A direct revoke (`POST /grants/{id}/revoke`) of an orphan's grant is `409 orphan_account` for a Super Admin and `404` for others (it used to fail with a 500); orphans are handled only through their finding.
 
 ## D11. AccessFlow privileged roles: evidence report, no review workflow — [POLICY]
 - No review campaign for AccessFlow's own roles and groups.

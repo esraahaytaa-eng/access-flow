@@ -285,6 +285,25 @@ func isUnique(err error, constraint string) bool {
 	return errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == constraint
 }
 
+// checkOnBehalf lets an employee request for themselves, for anyone below them in the
+// management chain, or, as HR or a Super Admin, for anyone (D3, 2026-10-30).
+func checkOnBehalf(ctx context.Context, tx pgx.Tx, actor auth.Principal, beneficiary uuid.UUID) error {
+	if beneficiary == actor.EmployeeID || actor.HasRole("HR_MANAGER") || actor.HasRole("SUPER_ADMIN") {
+		return nil
+	}
+	var manages bool
+	if err := tx.QueryRow(ctx, `WITH RECURSIVE chain AS (
+			SELECT manager_id FROM employees WHERE id = $1
+			UNION SELECT e.manager_id FROM employees e JOIN chain c ON e.id = c.manager_id)
+		SELECT EXISTS (SELECT 1 FROM chain WHERE manager_id = $2)`, beneficiary, actor.EmployeeID).Scan(&manages); err != nil {
+		return err
+	}
+	if !manages {
+		return errBeneficiaryNotAllowed
+	}
+	return nil
+}
+
 // Submit creates a NEW_ACCESS request: every item valid, or nothing is created. The
 // bool is false when the submission ID was already used by this submitter (A9).
 func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submission) (Request, bool, error) {
@@ -325,6 +344,9 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 			if prev != nil {
 				req = *prev
 			}
+			return err
+		}
+		if err := checkOnBehalf(ctx, tx, actor, beneficiary); err != nil {
 			return err
 		}
 		var status string
@@ -513,8 +535,9 @@ func queueEmail(ctx context.Context, tx pgx.Tx, req Request) error {
 	return err
 }
 
-// Email is one Mock Email Outbox message: an access request (O2) or an activation link (M18),
-// whose link is never listed; a Super Admin reveals it separately while linkAvailable.
+// Email is one Mock Email Outbox message: an access request (O2), an activation link (M18) or
+// a role-acceptance link (D2 succession), whose link is never listed; it is revealed
+// separately while linkAvailable.
 type Email struct {
 	ID            uuid.UUID  `json:"id"`
 	Kind          string     `json:"kind"`
@@ -526,17 +549,19 @@ type Email struct {
 	LinkAvailable bool       `json:"linkAvailable"`
 }
 
-// Outbox lists the newest 100 simulated emails for InfoSec, Super Admin and Auditor; activation
-// emails only for Super Admins.
+// Outbox lists the newest 100 simulated emails the actor may see: access requests for InfoSec,
+// Super Admin and Auditor, activation emails for Super Admins, and role-acceptance emails to
+// their recipient only.
 func (s *Service) Outbox(ctx context.Context, actor auth.Principal) ([]Email, error) {
-	if !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("AUDITOR") {
-		return nil, platform.ErrForbidden
-	}
+	reviewer := actor.HasRole("INFOSEC") || actor.HasRole("SUPER_ADMIN") || actor.HasRole("AUDITOR")
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, e.id, e.full_name, o.request_id, o.subject, o.body, o.created_at,
-		       o.sealed_token IS NOT NULL AND t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now() AND e.status = 'ACTIVE'
+		       o.sealed_token IS NOT NULL AND e.status = 'ACTIVE' AND CASE o.kind
+		         WHEN 'ACTIVATION' THEN t.used_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now()
+		         WHEN 'ROLE_ACCEPTANCE' THEN n.status = 'PENDING' AND n.expires_at > now() END
 		FROM email_outbox o JOIN employees e ON e.id = o.recipient_id LEFT JOIN activation_tokens t ON t.id = o.activation_id
-		WHERE o.kind = 'ACCESS_REQUEST' OR $1
-		ORDER BY o.id DESC LIMIT 100`, actor.HasRole("SUPER_ADMIN"))
+		LEFT JOIN super_admin_nominations n ON n.id = o.nomination_id
+		WHERE (o.kind = 'ACCESS_REQUEST' AND $1) OR (o.kind = 'ACTIVATION' AND $2) OR (o.kind = 'ROLE_ACCEPTANCE' AND o.recipient_id = $3)
+		ORDER BY o.id DESC LIMIT 100`, reviewer, actor.HasRole("SUPER_ADMIN"), actor.EmployeeID)
 	if err != nil {
 		return nil, err
 	}

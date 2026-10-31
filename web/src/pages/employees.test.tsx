@@ -83,32 +83,46 @@ describe("employee detail", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ effectiveAt: "2099-11-15T15:00:00.000Z", reason: "İstifa", version: 5 }));
   });
 
-  it("warns and asks for confirmation before the last Super Admin leaves (D2 recovery)", async () => {
-    const sa = principal({ employee: { id: "sa", email: "sa@x.co", fullName: "Okan Admin", roles: ["SUPER_ADMIN"] } }) as never;
-    const scheduledAdmin = employee({ id: "sa", fullName: "Okan Admin", roles: ["SUPER_ADMIN"], termination: { at: "2099-12-01T15:00:00Z", reason: "İstifa", scheduledBy: "x" } });
+  it("blocks the last Super Admin's termination until a successor accepts, and lets HR appoint one (D2 succession)", async () => {
     const target = employee({ roles: ["SUPER_ADMIN"] });
-    const calls = fakeServer({ ...dir(), "GET /employees": { employees: [manager, scheduledAdmin, target] }, "GET /employees/e2/grants": { grants: [] },
-      "PUT /employees/e2/termination": employee() });
-    renderPage(<EmployeeDetailPage />, { path: "/employees/e2", pattern: "/employees/:id", session: sa });
+    const calls = fakeServer({ ...dir(), "GET /employees": { employees: [manager, manager2, target] }, "GET /employees/e2/grants": { grants: [] },
+      "GET /super-admin-nominations": { nominations: [] },
+      "POST /super-admin-nominations": () => ({ status: 201, body: { id: "n1", nominee: { id: "m1", fullName: "Burak Manager" }, proposedBy: { id: "hr", fullName: "Ayşe İK" },
+        recovery: false, succession: true, status: "PENDING", createdAt: "2026-10-30T09:00:00Z", expiresAt: "2026-10-31T09:00:00Z", version: 1, canAuthorize: false } }) });
+    detail({});
     await userEvent.click(await screen.findByRole("button", { name: "İşten çıkış" }));
     const d = dialog("Deniz Kara · işten çıkış");
-    expect(d.getByText("Sistem Yönetici Kurtarma moduna girecek")).toBeTruthy();
-    await userEvent.click(d.getByRole("button", { name: "Planlı" }));
-    await userEvent.type(d.getByLabelText(/Geçerlilik tarihi/), "2099-11-15");
-    await userEvent.type(d.getByLabelText(/Ayrılış nedeni/), "İstifa");
-    await userEvent.click(d.getByRole("button", { name: "Çıkışı planla" }));
-    expect(await d.findByText("Devam etmek için onaylayın.")).toBeTruthy();
-    expect(calls.some((c) => c.method === "PUT")).toBe(false);
-    await userEvent.click(d.getByLabelText(/kurtarma moduna gireceğini anlıyorum/));
-    await userEvent.click(d.getByRole("button", { name: "Çıkışı planla" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    expect(d.getByText(/Bu çalışan sistemin son Süper Yöneticisidir. İşten çıkış işlemini tamamlamak için önce yeni bir Süper Yönetici atanmalıdır./)).toBeTruthy();
+    expect((d.getByRole("button", { name: "Hemen işten çıkar" }) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(d.getByRole("button", { name: "Yeni Süper Yönetici ata" }));
+    const pick = dialog("Yeni Süper Yönetici ata");
+    expect(within(pick.getByLabelText(/Aday/)).queryByText(/Ayşe İK/)).toBeNull(); // never oneself
+    await userEvent.selectOptions(pick.getByLabelText(/Aday/), "m1");
+    await userEvent.click(pick.getByRole("button", { name: "Kabul bağlantısı gönder" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ nomineeId: "m1" }));
+    expect(calls.some((c) => c.path.endsWith("/terminate"))).toBe(false);
+  });
+
+  it("shows HR the successor's status and reissues an expired link", async () => {
+    const target = employee({ roles: ["SUPER_ADMIN"], status: "SUSPENDED" });
+    const n = { id: "n1", nominee: { id: "m1", fullName: "Burak Manager" }, proposedBy: { id: "hr", fullName: "Ayşe İK" }, recovery: true, succession: true,
+      status: "EXPIRED", createdAt: "2026-10-28T09:00:00Z", expiresAt: "2026-10-29T09:00:00Z", version: 2, canAuthorize: false };
+    const calls = fakeServer({ ...dir(), "GET /employees": { employees: [manager, manager2, target] }, "GET /employees/e2/grants": { grants: [] },
+      "GET /super-admin-nominations": { nominations: [n] }, "POST /super-admin-nominations/n1/reissue": { ...n, status: "PENDING", version: 3 } });
+    detail({});
+    await userEvent.click(await screen.findByRole("button", { name: "İşten çıkış" }));
+    const d = dialog("Deniz Kara · işten çıkış");
+    expect(await d.findByText(/Burak Manager · bağlantının süresi doldu/)).toBeTruthy();
+    expect(d.queryByRole("button", { name: "Yeni Süper Yönetici ata" })).toBeNull();
+    await userEvent.click(d.getByRole("button", { name: "Bağlantıyı yeniden gönder" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ version: 2 }));
   });
 
   it("does not warn while another Super Admin stays", async () => {
     fakeServer({ ...dir(), "GET /employees": { employees: [manager, employee({ id: "sa", roles: ["SUPER_ADMIN"] }), employee({ roles: ["SUPER_ADMIN"] })] }, "GET /employees/e2/grants": { grants: [] } });
     renderPage(<EmployeeDetailPage />, { path: "/employees/e2", pattern: "/employees/:id", session: hr });
     await userEvent.click(await screen.findByRole("button", { name: "İşten çıkış" }));
-    expect(dialog("Deniz Kara · işten çıkış").queryByText(/Kurtarma moduna girecek/)).toBeNull();
+    expect(dialog("Deniz Kara · işten çıkış").queryByText(/son Süper Yöneticisidir/)).toBeNull();
   });
 
   it("transfers to a new manager, keeping one grant with a justification", async () => {

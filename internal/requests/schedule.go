@@ -25,9 +25,12 @@ var errNotScheduled = platform.NewError(http.StatusConflict, "termination_not_sc
 // the sweep runs it then.
 func (s *Service) ScheduleTermination(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, at time.Time,
 	reason string) (people.Employee, error) {
-	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
+	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, people.CheckLeaverAction, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		if !at.After(now) {
 			return platform.ValidationError("effectiveAt", "effective_at_not_future")
+		}
+		if err := people.CheckNotLastSuperAdmin(ctx, tx, e); err != nil {
+			return err
 		}
 		if err := people.SetTermination(ctx, tx, id, &at, &actor.EmployeeID, &reason); err != nil {
 			return err
@@ -42,7 +45,7 @@ func (s *Service) ScheduleTermination(ctx context.Context, actor auth.Principal,
 }
 
 func (s *Service) CancelTermination(ctx context.Context, actor auth.Principal, id uuid.UUID, version int, reason string) (people.Employee, error) {
-	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
+	return s.personAction(ctx, actor, id, version, reason, []string{"ACTIVE", "SUSPENDED"}, people.CheckLeaverAction, func(tx pgx.Tx, now time.Time, e people.Employee, reason string) error {
 		if e.Termination == nil {
 			return errNotScheduled
 		}
@@ -88,6 +91,13 @@ func TerminateDue(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 			}
 			e, err := people.LockEmployee(ctx, tx, id)
 			if err != nil || e.Status == "TERMINATED" || e.Termination == nil || e.Termination.At.After(now) {
+				return err
+			}
+			// The last active Super Admin's termination waits for a successor (D2); HR sees it overdue.
+			if err := people.CheckNotLastSuperAdmin(ctx, tx, e); err != nil {
+				if errors.Is(err, people.ErrLastSuperAdmin) {
+					return nil
+				}
 				return err
 			}
 			ran = true

@@ -31,6 +31,8 @@ func (s *Service) Register(r chi.Router) {
 	r.Post("/super-admin-nominations", s.handleNominate)
 	r.Post("/super-admin-nominations/{id}/authorize", s.handleDecide(true))
 	r.Post("/super-admin-nominations/{id}/decline", s.handleDecide(false))
+	r.Post("/super-admin-nominations/{id}/reissue", s.handleReissue)
+	r.Post("/super-admin-nominations/accept", s.handleAccept)
 	r.Get("/admin/health", s.handleHealth)
 }
 
@@ -291,4 +293,30 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	platform.WriteJSON(w, http.StatusOK, h)
+}
+
+func (s *Service) handleReissue(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Version *int }
+	id, err := pathID(r, "id")
+	if err == nil {
+		err = platform.DecodeRequired(w, r, &in, func() []platform.Field {
+			return []platform.Field{{Name: "version", Present: in.Version != nil}}
+		})
+	}
+	var n Nomination
+	if err == nil {
+		n, err = s.ReissueRoleLink(r.Context(), actor(r), id, *in.Version)
+	}
+	platform.Respond(w, r, http.StatusOK, n, err)
+}
+
+func (s *Service) handleAccept(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Token *string }
+	err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
+		return []platform.Field{{Name: "token", Present: in.Token != nil}}
+	})
+	if err == nil {
+		err = s.AcceptRole(r.Context(), actor(r), *in.Token)
+	}
+	platform.Respond(w, r, http.StatusOK, map[string]bool{"accepted": err == nil}, err)
 }

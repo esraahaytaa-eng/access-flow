@@ -18,6 +18,10 @@ import (
 
 var errSeparation = platform.NewError(http.StatusForbidden, "separation_of_duties")
 
+// errBeneficiaryNotAllowed: only the beneficiary's management chain, HR or a Super Admin
+// requests on their behalf (D3, 2026-10-30).
+var errBeneficiaryNotAllowed = platform.NewError(http.StatusForbidden, "beneficiary_not_allowed")
+
 // Excluded says why each listed person may not decide a step on an item (F2).
 type Excluded map[uuid.UUID]string
 

@@ -2,7 +2,7 @@ import { screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { grant, item, person, step } from "../test/fixtures";
-import { renderPage } from "../test/render";
+import { currentPath, renderPage } from "../test/render";
 import { fakeServer, principal } from "../test/server";
 import { ApprovalsPage } from "./Approvals";
 import { TasksPage } from "./Tasks";
@@ -124,6 +124,16 @@ describe("fulfillment tasks", () => {
 });
 
 describe("team", () => {
+  it("offers only a request on the report's behalf, no starter-package shortcut", async () => {
+    const report = { id: "e2", email: "d@x.co", fullName: "Deniz Kara", department: "Ürün", jobTitle: "Analist", managerId: "e1" };
+    fakeServer({ "GET /employees": { employees: [report] }, "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] }, "GET /access/team": { grants: [] } });
+    renderPage(<TeamPage />);
+    await userEvent.click(await screen.findByText("Deniz Kara"));
+    expect(screen.queryByRole("button", { name: /Başlangıç paketi/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Adına erişim talep et" }));
+    expect(currentPath).toBe("/request-new");
+  });
+
   it("shows reports' access and removes a grant with its version", async () => {
     const report = { id: "e2", email: "d@x.co", fullName: "Deniz Kara", department: "Ürün", jobTitle: "Analist", managerId: "e1" };
     const calls = fakeServer({

@@ -2,25 +2,37 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
 import { useReviews } from "../api/queries";
-import type { ReviewFlag, ReviewItem } from "../api/types";
+import type { GrantStatus, ReviewCampaign, ReviewFlag, ReviewItem } from "../api/types";
 import { useSession } from "../session";
 import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, PageHeader, Person, SearchBox, TableSkeleton, Tabs, Tag, ToolCell, useAction } from "../ui/components";
-import { formatDate } from "../ui/format";
+import { formatDate, todayIn } from "../ui/format";
+import type { Tone } from "../ui/status";
 
 export const flagLabel: Record<ReviewFlag, string> = {
   RETAINED_ON_TRANSFER: "Transferde korundu", EARLIER_POLICY: "Önceki politikayla onaylandı", DIRECT_GRANT: "Doğrudan erişim",
   OVERRIDE: "Süper Yönetici geçersiz kıldı", SUSPENDED: "Askıda", IMPORTED_BASELINE: "İçe aktarılan",
 };
 const closedLabel = { REVOKED_NO_REVIEW: "Yanıtsız; kaldırıldı", ALREADY_REMOVED: "Erişim zaten kaldırıldı" };
+/** The access's own state once its removal has started: the review decision never overrides it. */
+const removalBadge: Partial<Record<GrantStatus, [string, Tone]>> = {
+  REVOCATION_REQUESTED: ["Kaldırma bekleniyor", "amber"], REVOCATION_FAILED: ["Kaldırma başarısız", "red"], REVOKED: ["Kaldırıldı", "outline"], CANCELLED: ["Kaldırıldı", "outline"],
+};
+/** "Erişim Denetimi — 2026 4. Çeyrek": a scheduled campaign's quarter key, else the quarter it started in. */
+export function campaignTitle(c: Pick<ReviewCampaign, "quarter" | "startedAt">, timeZone: string) {
+  const day = todayIn(timeZone, new Date(c.startedAt));
+  const [year, quarter] = c.quarter?.split("-Q") ?? [day.slice(0, 4), String(Math.ceil(+day.slice(5, 7) / 3))];
+  return `Erişim Denetimi — ${year} ${quarter}. Çeyrek`;
+}
 const DAY = 86_400_000;
 
 type View = "mine" | "esc" | "all";
 const open = (i: ReviewItem) => !i.decision && !i.closedReason;
 
-/** D8: the reviewer decides; InfoSec decides pool items and, after day 14, any item; a Super Admin may only Revoke; never one's own access. */
+/** D8: the reviewer decides; InfoSec decides pool items and, after day 14, any item; a Super Admin may only Revoke; never one's own access.
+ * Access being removed has nothing left to decide, and a leaver's access is never kept (D7). */
 function mayDecide(i: ReviewItem, decision: "KEEP" | "REVOKE", me: string, roles: { superAdmin: boolean; infosec: boolean }, escalated: boolean) {
-  if (!open(i) || i.employee.id === me) return false;
-  if (decision === "KEEP" && roles.superAdmin) return false;
+  if (!open(i) || i.employee.id === me || removalBadge[i.grantStatus]) return false;
+  if (decision === "KEEP" && (roles.superAdmin || i.employee.status === "TERMINATED")) return false;
   return i.reviewerId === me || (roles.infosec && (i.reviewerId === null || escalated || !!i.findingAt)) || (decision === "REVOKE" && roles.superAdmin);
 }
 const bulkEligible = (i: ReviewItem) => !i.requiresInfosec && i.flags.length === 0;
@@ -40,13 +52,13 @@ export function ReviewsPage() {
   const items = query.data?.items ?? [];
   const reload = () => qc.invalidateQueries({ queryKey: ["reviews"] });
 
-  if (query.isPending) return <><PageHeader title="Erişim incelemeleri" /><TableSkeleton /></>;
+  if (query.isPending) return <><PageHeader title="Erişim Kontrolü" /><TableSkeleton /></>;
   if (!campaign && items.length === 0) {
-    return <><PageHeader title="Erişim incelemeleri" /><div className="card"><EmptyState icon="review" title="Aktif inceleme kampanyası yok" desc="Kampanyalar her takvim çeyreğinin başında başlar. Başladığında araç sahipleri bilgilendirilir." /></div></>;
+    return <><PageHeader title="Erişim Kontrolü" /><div className="card"><EmptyState icon="review" title="Aktif erişim denetimi yok" desc="Denetimler her takvim çeyreğinin başında başlar. Başladığında araç sahipleri bilgilendirilir." /></div></>;
   }
   const escalated = !!campaign?.escalatedAt;
   const decidable = (i: ReviewItem) => mayDecide(i, "KEEP", me.id, roles, escalated) || mayDecide(i, "REVOKE", me.id, roles, escalated);
-  const mine = items.filter((i) => open(i) && i.reviewerId === me.id && i.employee.id !== me.id);
+  const mine = items.filter((i) => i.reviewerId === me.id && decidable(i));
   const esc = roles.infosec ? items.filter((i) => open(i) && i.reviewerId !== me.id && decidable(i)) : [];
   // Until a tab is chosen: the reviewer's own items, else what this role works on.
   const view: View = chosen ?? (mine.length || !seesAll ? "mine" : roles.infosec ? "esc" : "all");
@@ -59,35 +71,34 @@ export function ReviewsPage() {
   const bulk = shown.filter((i) => bulkEligible(i) && mayDecide(i, "KEEP", me.id, roles, escalated));
   const done = items.filter((i) => !open(i)).length;
   const day = campaign ? Math.floor((Date.now() - Date.parse(campaign.startedAt)) / DAY) : 0;
-  const autoRevoke = items.filter((i) => open(i) && i.requiresInfosec && !i.findingAt).length;
 
   const keep = (i: ReviewItem) => run(() => api.post(`/review-items/${i.id}/decide`, { decision: "KEEP", reason: "", version: i.version }),
-    { success: "Erişim korunacak", successDesc: "Karar kayda geçti. Bitiş tarihi değişmez." }).then(reload);
+    { success: "Erişimin devamı onaylandı", successDesc: "Bu çeyreğin denetim kararı kayda geçti. Bitiş tarihi değişmez." }).then(reload);
   const keepSelected = () => run(() => api.post<{ kept: number; skipped: number }>("/review-items/bulk-keep",
     { items: bulk.filter((i) => selected.includes(i.id)).map((i) => ({ id: i.id, version: i.version })) }))
     .then((r) => { if (r.ok) setSelected([]); reload(); });
 
   return (
     <>
-      <PageHeader title="Erişim incelemeleri" sub="Araç sahipleri her erişim için “Korunsun” ya da “Kaldırılsın” kararı verir. Yanıtlanmayan kalemler takvime göre takip edilir." />
+      <PageHeader title="Erişim Kontrolü" sub="Her çeyrekte araç sahipleri, aracındaki her erişim için “Erişim devam etsin” ya da “Erişimi kaldır” kararı verir. Yanıtlanmayan kalemler takvime göre takip edilir." />
       {campaign && (
         <Card style={{ marginBottom: 18 }}>
           <div className="stack" style={{ gap: 18 }}>
             <div className="between" style={{ flexWrap: "wrap" }}>
               <div>
                 <div className="row" style={{ gap: 8 }}>
-                  <span className="card-title" style={{ fontSize: 16 }}>{campaign.quarter ? `${campaign.quarter} çeyreklik inceleme` : "Ek inceleme kampanyası"}</span>
+                  <span className="card-title" style={{ fontSize: 16 }}>{campaignTitle(campaign, timezone)}</span>
                   <Badge tone="blue" dot>Gün {day}</Badge>
                 </div>
-                <div className="muted small" style={{ marginTop: 2 }}>{campaign.startedBy ? `${campaign.startedBy.fullName} başlattı` : "Takvime göre başladı"} · {formatDate(campaign.startedAt, timezone)}</div>
+                <div className="muted small" style={{ marginTop: 2 }}>{campaign.startedBy ? `${campaign.startedBy.fullName} başlattı` : "Çeyrek başında otomatik başladı"} · {formatDate(campaign.startedAt, timezone)}</div>
               </div>
               <div style={{ minWidth: 220 }}>
-                <div className="between small"><span className="muted">İlerleme</span><span className="strong">{done} / {items.length}</span></div>
+                <div className="between small"><span className="muted">Karar verilen</span><span className="strong">{done} / {items.length}</span></div>
                 <div className="progress" style={{ marginTop: 6 }}><div style={{ width: `${items.length ? (done / items.length) * 100 : 0}%` }} /></div>
               </div>
             </div>
             <div className="day-track">
-              {[[0, "Başladı"], [7, "Hatırlatma"], [14, "Bilgi Güvenliğine eskalasyon"], [21, "Otomatik kaldırma ve bulgular"]].map(([d, t], k, all) => (
+              {[[0, "Denetim başladı"], [7, "Araç sahiplerine hatırlatma"], [14, "Yanıtsızlar Bilgi Güvenliğine geçer"], [21, "Yanıtsızlar güvenlik bulgusu olur"]].map(([d, t], k, all) => (
                 <div key={d} className={`day ${day >= (d as number) ? "done" : ""} ${day < (d as number) && (k === 0 || day >= (all[k - 1][0] as number)) ? "next" : ""}`}>
                   <span className="pin" />
                   <div className="dt">Gün {d} · {t}</div>
@@ -95,7 +106,6 @@ export function ReviewsPage() {
                 </div>
               ))}
             </div>
-            {day < 21 && autoRevoke > 0 && <Callout tone="warn" title={`Gün 21’de ${autoRevoke} kalem otomatik kaldırılacak`}>Yanıtlanmamış ve seviyesi Bilgi Güvenliği onayı gerektiren erişimler gün 21’de kaldırılır. Diğer yanıtlanmamış kalemler aktif kalır ancak açık bulgu olarak İstisnalar’a düşer.</Callout>}
           </div>
         </Card>
       )}
@@ -105,11 +115,11 @@ export function ReviewsPage() {
         {bulk.length > 0 && (
           <div className="row" style={{ marginLeft: "auto" }}>
             <span className="muted small">{selected.length} seçili</span>
-            <Button size="sm" variant="primary" disabled={!selected.length} loading={busy} onClick={keepSelected}>Seçilenleri koru</Button>
+            <Button size="sm" variant="primary" disabled={!selected.length} loading={busy} onClick={keepSelected}>Seçilenlerin erişimi devam etsin</Button>
           </div>
         )}
       </div>
-      {roles.superAdmin && !roles.infosec && <div style={{ marginBottom: 14 }}><Callout tone="info">Süper Yönetici olarak yalnızca “Kaldırılsın” kararı verebilirsiniz. “Korunsun” kararı yalnızca araç sahibinden veya Bilgi Güvenliğinden gelir.</Callout></div>}
+      {roles.superAdmin && !roles.infosec && <div style={{ marginBottom: 14 }}><Callout tone="info">Süper Yönetici olarak yalnızca “Erişimi kaldır” kararı verebilirsiniz. “Erişim devam etsin” kararı yalnızca araç sahibinden veya Bilgi Güvenliğinden gelir.</Callout></div>}
       {shown.length === 0 ? (
         <div className="card"><EmptyState icon="review" title={view === "mine" ? "İncelemeniz gereken kalem kalmadı" : "Bu görünümde kalem yok"} /></div>
       ) : (
@@ -141,13 +151,14 @@ export function ReviewsPage() {
                   <td className="nowrap">
                     {i.decision ? (
                       <div className="stack-sm" style={{ gap: 2 }}>
-                        <Badge tone={i.decision === "KEEP" ? "green" : "red"} dot>{i.decision === "KEEP" ? "Korunsun" : "Kaldırılsın"}</Badge>
+                        <Badge tone={i.decision === "KEEP" ? "green" : "red"} dot>{i.decision === "KEEP" ? "Erişimin devamı onaylandı" : "Erişimin kaldırılmasına karar verildi"}</Badge>
                         <span className="cell-sub">{i.decidedBy?.fullName} · {i.decidedAt && formatDate(i.decidedAt, timezone)}{i.late ? " · geç" : ""}</span>
+                        {removalBadge[i.grantStatus] && <RemovalBadge status={i.grantStatus} />}
                       </div>
-                    ) : i.closedReason ? <Badge tone="outline">{closedLabel[i.closedReason]}</Badge> : (
+                    ) : i.closedReason ? <Badge tone="outline">{closedLabel[i.closedReason]}</Badge> : removalBadge[i.grantStatus] ? <RemovalBadge status={i.grantStatus} /> : (
                       <div className="row" style={{ gap: 6 }}>
-                        {mayDecide(i, "REVOKE", me.id, roles, escalated) && <Button size="sm" variant="danger-ghost" onClick={() => setRevoking(i)}>Kaldır</Button>}
-                        {mayDecide(i, "KEEP", me.id, roles, escalated) && <Button size="sm" loading={busy} onClick={() => keep(i)}>Koru</Button>}
+                        {mayDecide(i, "REVOKE", me.id, roles, escalated) && <Button size="sm" variant="danger-ghost" onClick={() => setRevoking(i)}>Erişimi kaldır</Button>}
+                        {mayDecide(i, "KEEP", me.id, roles, escalated) && <Button size="sm" loading={busy} onClick={() => keep(i)}>Erişim devam etsin</Button>}
                         {!decidable(i) && <span className="muted small">{escalated ? "Eskale edildi" : "Bekliyor"}</span>}
                       </div>
                     )}
@@ -158,10 +169,15 @@ export function ReviewsPage() {
           </table>
         </div>
       )}
-      <p className="hint" style={{ marginTop: 12 }}>Bilgi Güvenliği onaylı seviyeler ve işaretli kalemler (içe aktarılan, transferde korunan, doğrudan erişim, askıdaki, önceki politikayla onaylanan) toplu korunamaz; tek tek değerlendirilir. “Korunsun” kararı bitiş tarihini uzatmaz.</p>
-      <ConfirmDialog open={!!revoking} onClose={() => setRevoking(null)} title="Erişim kaldırılsın mı?" tone="danger" confirmLabel="Kaldırılsın" reason success="Kaldırma kararı kaydedildi"
+      <p className="hint" style={{ marginTop: 12 }}>Bilgi Güvenliği onaylı seviyeler ve işaretli kalemler (içe aktarılan, transferde korunan, doğrudan erişim, askıdaki, önceki politikayla onaylanan) toplu onaylanamaz; tek tek değerlendirilir. “Erişim devam etsin” yalnızca bu çeyreğin denetim kararıdır: bitiş tarihini uzatmaz ve çalışan ayrılırsa erişimin kaldırılmasını engellemez.</p>
+      <ConfirmDialog open={!!revoking} onClose={() => setRevoking(null)} title="Erişim kaldırılsın mı?" tone="danger" confirmLabel="Erişimi kaldır" reason success="Kaldırma kararı kaydedildi"
         desc={revoking ? `${revoking.employee.fullName} · ${revoking.tool} · ${revoking.level}. Kaldırma normal iş akışıyla başlar ve doğrulanınca tamamlanır.` : undefined}
         onConfirm={async (reason) => { await api.post(`/review-items/${revoking!.id}/decide`, { decision: "REVOKE", reason, version: revoking!.version }); reload(); }} />
     </>
   );
+}
+
+function RemovalBadge({ status }: { status: GrantStatus }) {
+  const [label, tone] = removalBadge[status]!;
+  return <Badge tone={tone} dot>{label}</Badge>;
 }

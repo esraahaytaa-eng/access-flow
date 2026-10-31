@@ -137,7 +137,7 @@ function ToolForm({ tool }: { tool?: CatalogTool }) {
                         <label className="row" style={{ gap: 8 }}><Switch checked={l.infosec} disabled={off} label="Bilgi güvenliği onayı" onChange={(v) => setLevel(l.key, { infosec: v })} /><span className="small">Bilgi güvenliği</span></label>
                       </div>
                       <div className="between" style={{ flexWrap: "wrap" }}>
-                        <div className="row" style={{ gap: 10 }}><span className="muted small">Onay zinciri:</span><ApprovalChain steps={stepsOf(l).map((type) => ({ type, status: "WAITING" }))} /></div>
+                        <ApprovalChain steps={stepsOf(l)} />
                         {!l.id ? form.levels.length > 1 && <Button size="sm" variant="ghost" icon="trash" onClick={() => setForm((f) => ({ ...f, levels: f.levels.filter((x) => x.key !== l.key) }))}>Kaldır</Button>
                           : l.retired ? <Badge tone="outline">Kullanımdan kaldırıldı</Badge>
                           : <Button size="sm" variant={l.retire ? "default" : "danger-ghost"} onClick={() => setLevel(l.key, { retire: !l.retire })}>{l.retire ? "Geri al" : "Kullanımdan kaldır"}</Button>}

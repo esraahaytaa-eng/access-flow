@@ -18,6 +18,7 @@ import { ItemStateCell } from "../ui/domain";
 import { formatDate, formatDateTime, todayIn } from "../ui/format";
 import { evidenceBadge } from "../ui/status";
 import { ItemTimeline } from "./RequestDetail";
+import { campaignTitle } from "./Reviews";
 
 type Tab = "events" | "pit" | "evidence" | "reports";
 const PAGE = 40;
@@ -218,7 +219,7 @@ function EvidenceTab() {
 
 type ReportId = "quarter" | "priv" | "override" | "policy" | "leavers";
 const reports: { id: ReportId; icon: IconName; title: string; desc: string }[] = [
-  { id: "quarter", icon: "file", title: "Çeyreklik kanıt paketi", desc: "İnceleme kampanyası kararları, eskalasyonlar, otomatik kaldırmalar ve devreden açık bulgular." },
+  { id: "quarter", icon: "file", title: "Çeyreklik kanıt paketi", desc: "Erişim denetimi kararları, eskalasyonlar ve yanıtsız kalemlerden doğan açık bulgular." },
   { id: "priv", icon: "shield", title: "Ayrıcalıklı roller", desc: "Süper Yönetici, Bilgi Güvenliği, İK, Denetçi ve yönetim grubu üyeleri; ne zamandan beri, kim atadı." },
   { id: "override", icon: "zap", title: "Geçersiz kılmalar ve doğrudan erişimler", desc: "Onay adımlarını atlayan tüm Süper Yönetici işlemleri." },
   { id: "policy", icon: "settings", title: "Politika değişiklikleri", desc: "Erişim seviyelerinin onay adımlarında yapılan değişiklikler." },
@@ -256,7 +257,7 @@ function ReportDrawer({ id, title, desc, onClose }: { id: ReportId; title: strin
   const dt = (v: string | null | undefined) => formatDateTime(v ?? null, timezone);
   let r: Rendered = { body: null, csv: null };
   if (data.data) {
-    if (id === "quarter") r = quarterReport(data.data as QuarterReport, dt);
+    if (id === "quarter") r = quarterReport(data.data as QuarterReport, dt, timezone);
     if (id === "priv") r = privilegedReport((data.data as { holders: PrivilegedHolder[] }).holders, date, timezone);
     if (id === "override" || id === "policy") r = eventReport((data.data as AuditEventsResponse & { rows: AuditEventsResponse["events"] }).rows, id, dt);
     if (id === "leavers") r = leaversReport((data.data as { rows: LeaverRow[] }).rows, dt, timezone);
@@ -272,23 +273,23 @@ function ReportDrawer({ id, title, desc, onClose }: { id: ReportId; title: strin
 }
 
 const decisionText = (i: QuarterReport["items"][number]) =>
-  i.decision === "KEEP" ? "Korunsun" : i.decision === "REVOKE" ? "Kaldırılsın"
+  i.decision === "KEEP" ? "Erişimin devamı onaylandı" : i.decision === "REVOKE" ? "Erişimin kaldırılmasına karar verildi"
     : i.closedReason === "REVOKED_NO_REVIEW" ? "Yanıtsız; kaldırıldı" : i.closedReason === "ALREADY_REMOVED" ? "Erişim zaten kaldırıldı"
       : i.finding ? "Açık bulgu" : "Yanıt bekliyor";
 
-function quarterReport(q: QuarterReport, dt: (v: string | null) => string): Rendered {
+function quarterReport(q: QuarterReport, dt: (v: string | null) => string, timezone: string): Rendered {
   if (!q.campaign) return { body: null, csv: null };
   const c = q.counts;
   return {
     body: (
       <div className="stack">
         <div className="grid-3">
-          {([["Toplam kalem", c.total], ["Korunsun", c.kept], ["Kaldırılsın", c.revoked], ["Yanıt bekliyor", c.unanswered], ["Yanıtsız; kaldırıldı", c.autoRevoked],
-            ["Zaten kaldırıldı", c.alreadyRemoved], ["Devreden açık bulgu", c.openFindings]] as const).map(([l, v]) => (
+          {([["Toplam kalem", c.total], ["Devamı onaylandı", c.kept], ["Kaldırılmasına karar verildi", c.revoked], ["Yanıt bekliyor", c.unanswered], ["Yanıtsız; kaldırıldı", c.autoRevoked],
+            ["Zaten kaldırıldı", c.alreadyRemoved], ["Devreden açık bulgu", c.openFindings]] as const).filter(([l, v]) => l !== "Yanıtsız; kaldırıldı" || v > 0).map(([l, v]) => (
             <div key={l} className="card" style={{ padding: 14 }}><div className="muted small">{l}</div><div style={{ fontSize: 22, fontWeight: 700 }}>{v}</div></div>
           ))}
         </div>
-        <KeyValueList items={[["Kampanya", q.campaign.quarter ?? "Elle başlatılan kampanya"], ["Başlangıç", dt(q.campaign.startedAt)],
+        <KeyValueList items={[["Denetim", campaignTitle(q.campaign, timezone)], ["Başlangıç", dt(q.campaign.startedAt)],
           ["Hatırlatma (gün 7)", dt(q.campaign.remindedAt)], ["Eskalasyon (gün 14)", dt(q.campaign.escalatedAt)], ["Kapanış (gün 21)", dt(q.campaign.closedAt)],
           ["Politika değişiklikleri", `${q.policyChanges}`], ["Doğrudan erişim ve geçersiz kılma", `${q.overrides}`]]} />
       </div>

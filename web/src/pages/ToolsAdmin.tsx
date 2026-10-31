@@ -36,7 +36,7 @@ export function ToolsAdminPage() {
                   <td className="small">{t.adminGroup.name}</td>
                   <td>
                     <div className="stack-sm" style={{ gap: 4 }}>
-                      {t.levels.filter((l) => l.status !== "RETIRED").map((l) => <div key={l.id} className="row" style={{ gap: 8 }}><span className="small" style={{ minWidth: 110 }}>{l.name}</span><ApprovalChain steps={l.steps.map((type) => ({ type, status: "WAITING" }))} /></div>)}
+                      {t.levels.filter((l) => l.status !== "RETIRED").map((l) => <div key={l.id} className="row level-approvals" style={{ gap: 8 }}><span className="small" style={{ minWidth: 110 }}>{l.name}</span><ApprovalChain steps={l.steps} /></div>)}
                     </div>
                   </td>
                 </tr>

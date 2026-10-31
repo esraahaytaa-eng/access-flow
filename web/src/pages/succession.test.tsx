@@ -6,6 +6,8 @@ import { employee, person } from "../test/fixtures";
 import { renderPage } from "../test/render";
 import { fakeServer, principal } from "../test/server";
 import { ApprovalsPage } from "./Approvals";
+import { MailboxPage } from "./Mailbox";
+import { RoleAcceptPage } from "./RoleAccept";
 import { SettingsPage } from "./Settings";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -63,16 +65,49 @@ describe("Super Admin succession", () => {
     expect(screen.queryByRole("button", { name: "Yetkilendir" })).toBeNull();
   });
 
-  it("in recovery an HR Manager is told and may nominate, themself included", async () => {
-    const calls = fakeServer({ ...base, "GET /admin/health": health({ activeSuperAdmins: 0, recoveryRequired: true }),
-      "POST /super-admin-nominations": () => ({ status: 201, body: nomination({ recovery: true }) }) });
+  it("in recovery an HR Manager is told and appoints a successor, never themself", async () => {
+    const calls = fakeServer({ ...base, "GET /employees": { employees: [...people, employee({ id: "hr", fullName: "Ayşe İK", roles: ["HR_MANAGER"] })] },
+      "GET /admin/health": health({ activeSuperAdmins: 0, recoveryRequired: true }), "GET /super-admin-nominations": { nominations: [] },
+      "POST /super-admin-nominations": () => ({ status: 201, body: nomination({ recovery: true, succession: true }) }) });
     renderPage(<RecoveryBanner />, { session: hr });
     expect(await screen.findByText("Aktif Süper Yönetici yok: kurtarma modu")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Süper Yönetici öner" }));
-    const d = dialog("Süper Yönetici öner");
+    await userEvent.click(await screen.findByRole("button", { name: "Yeni Süper Yönetici ata" }));
+    const d = dialog("Yeni Süper Yönetici ata");
+    expect(within(d.getByLabelText(/Aday/)).queryByText(/Ayşe İK/)).toBeNull();
     await userEvent.selectOptions(d.getByLabelText(/Aday/), "o1");
-    await userEvent.click(d.getByRole("button", { name: "Öner" }));
+    await userEvent.click(d.getByRole("button", { name: "Kabul bağlantısı gönder" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ nomineeId: "o1" }));
+  });
+
+  it("shows HR a successor awaiting acceptance without the link", async () => {
+    fakeServer({ ...base, "GET /admin/health": health({ activeSuperAdmins: 0, recoveryRequired: true }),
+      "GET /super-admin-nominations": { nominations: [nomination({ succession: true, recovery: true, proposedBy: person("hr", "Ayşe İK"), expiresAt: "2099-01-01T09:00:00Z" })] } });
+    renderPage(<RecoveryBanner />, { session: hr });
+    expect(await screen.findByText(/Can Owner · kabul bekleniyor/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Yeni Süper Yönetici ata" })).toBeNull();
+    expect(screen.queryByText(/rol-kabul/)).toBeNull();
+  });
+
+  it("the nominee reveals their own role link in the mailbox and accepts it signed in", async () => {
+    const mail = { id: "m1", kind: "ROLE_ACCEPTANCE", recipient: person("o1", "Can Owner"), requestId: null, subject: "Süper Yönetici rolü size atandı: kabulünüz bekleniyor",
+      body: "Merhaba", createdAt: "2026-10-30T09:00:00Z", linkAvailable: true };
+    const owner = principal({ employee: { id: "o1", email: "o@x.co", fullName: "Can Owner", roles: [] } }) as never;
+    fakeServer({ ...base, "GET /email-outbox": { emails: [mail] }, "GET /email-outbox/m1/role-link": { token: "tok123" } });
+    renderPage(<MailboxPage />, { session: owner });
+    await userEvent.click(await screen.findByText(/kabulünüz bekleniyor/));
+    await userEvent.click(screen.getByRole("button", { name: "Bağlantıyı göster" }));
+    expect((await screen.findByRole("link", { name: /rol-kabul#tok123/ })).getAttribute("href")).toBe(`${window.location.origin}/rol-kabul#tok123`);
+  });
+
+  it("accepts the role with the link's token and asks to sign in again", async () => {
+    window.history.replaceState(null, "", "/rol-kabul#tok123");
+    const owner = principal({ employee: { id: "o1", email: "o@x.co", fullName: "Can Owner", roles: [] } }) as never;
+    const calls = fakeServer({ ...base, "POST /super-admin-nominations/accept": { accepted: true } });
+    renderPage(<RoleAcceptPage />, { session: owner });
+    expect(window.location.hash).toBe(""); // the token leaves the address bar
+    await userEvent.click(screen.getByRole("button", { name: "Rolü kabul et" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ token: "tok123" }));
+    expect(await screen.findByText("Süper Yönetici rolünüz etkinleşti")).toBeTruthy();
   });
 
   it("shows no banner outside recovery", async () => {

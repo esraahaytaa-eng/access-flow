@@ -61,10 +61,7 @@ function MemberDrawer({ employee, grants, onClose }: { employee: BasicEmployee; 
   const [revoke, setRevoke] = useState<Grant | null>(null);
   return (
     <Drawer open onClose={onClose} title={employee.fullName} sub={[employee.jobTitle, employee.department].filter(Boolean).join(" · ")}
-      footer={<>
-        <Button onClick={() => navigate(`/request-new?for=${employee.id}&pkg=1`)}>Başlangıç paketini talep et</Button>
-        <Button variant="primary" icon="plus" onClick={() => navigate(`/request-new?for=${employee.id}`)}>Adına erişim talep et</Button>
-      </>}>
+      footer={<Button variant="primary" icon="plus" onClick={() => navigate(`/request-new?for=${employee.id}`)}>Adına erişim talep et</Button>}>
       <div className="stack" style={{ gap: 22 }}>
         <div className="section-title">Erişimler ({grants.length})</div>
         {grants.length === 0 ? <p className="muted small">Açık erişim yok.</p> : grants.map((g) => (
