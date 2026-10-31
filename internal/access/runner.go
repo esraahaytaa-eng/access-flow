@@ -34,10 +34,13 @@ func NewRunner(pool *pgxpool.Pool, client ToolClient) *Runner {
 // lease is how long a claim is exclusive; it covers one call and one lookup (5 s each).
 const lease = 30 * time.Second
 
+// invitationCheck is how often a GitHub invitation is checked until it is accepted.
+const invitationCheck = time.Minute
+
 // claimed is an operation leased to this worker.
 type claimed struct {
 	op, grant, employee, tool, level, token uuid.UUID
-	typ, account                            string
+	typ, account, lastError                 string
 	attempts                                int // including this one
 }
 
@@ -90,10 +93,10 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 		next := claimed{op: id, token: uuid.New()}
 		var neverSent bool
 		// The account is the employee's email, or the identifier an import found (D10).
-		if err := tx.QueryRow(ctx, `SELECT o.type, o.attempts + 1, o.first_attempt_at IS NULL, g.id, `+holder+`, coalesce(g.account, e.email),
-			       g.tool_id, g.access_level_id
+		if err := tx.QueryRow(ctx, `SELECT o.type, o.attempts + 1, o.first_attempt_at IS NULL, coalesce(o.last_error, ''), g.id, `+holder+`,
+			       coalesce(g.account, e.email), g.tool_id, g.access_level_id
 			FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id WHERE o.id = $1`, id).
-			Scan(&next.typ, &next.attempts, &neverSent, &next.grant, &next.employee, &next.account, &next.tool, &next.level); err != nil {
+			Scan(&next.typ, &next.attempts, &neverSent, &next.lastError, &next.grant, &next.employee, &next.account, &next.tool, &next.level); err != nil {
 			return err
 		}
 		if next.typ == "GRANT" && neverSent {
@@ -166,13 +169,26 @@ func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 		}
 
 		msg := strings.ToValidUTF8(callErr.Error()[:min(len(callErr.Error()), 500)], "")
-		if err := audit.Record(ctx, tx, audit.Event{Action: "OPERATION_ATTEMPT_FAILED", Entity: "operation", EntityID: &c.op,
-			SubjectID: &c.employee, Details: map[string]any{"attempt": c.attempts, "error": msg}}); err != nil {
-			return err
+		// Waiting for a person to accept a GitHub invitation is not a failed attempt: it is
+		// audited once, checked again every invitationCheck and keeps the retry budget.
+		pending := errors.Is(callErr, ErrInvitationPending)
+		event := audit.Event{Action: "OPERATION_ATTEMPT_FAILED", Entity: "operation", EntityID: &c.op,
+			SubjectID: &c.employee, Details: map[string]any{"attempt": c.attempts, "error": msg}}
+		if pending {
+			event.Action, event.Details = "INVITATION_PENDING", map[string]any{}
+		}
+		if !pending || c.lastError != msg {
+			if err := audit.Record(ctx, tx, event); err != nil {
+				return err
+			}
 		}
 		wait, final := Backoff(c.attempts)
+		set := "next_attempt_at = $2, last_error = $3"
+		if pending {
+			wait, final, set = invitationCheck, false, set+", attempts = attempts - 1"
+		}
 		var rejected *StatusError
-		if errors.As(callErr, &rejected) && rejected.Status == http.StatusConflict {
+		if errors.As(callErr, &rejected) && rejected.Status == http.StatusConflict || errors.As(callErr, new(rejection)) {
 			final = true // the tool refused the operation: retrying cannot help (O3)
 		}
 		stale, err := unwanted(ctx, tx, c.op, c.grant, c.typ, grantStatus)
@@ -180,7 +196,7 @@ func (r *Runner) record(ctx context.Context, c claimed, callErr error) error {
 			return err
 		}
 		if !final && !stale && !(c.typ == "GRANT" && grantStatus == "REVOCATION_REQUESTED") {
-			return setOp(ctx, tx, c.op, "IN_PROGRESS", "PENDING", "next_attempt_at = $2, last_error = $3", now.Add(wait), msg)
+			return setOp(ctx, tx, c.op, "IN_PROGRESS", "PENDING", set, now.Add(wait), msg)
 		}
 		return fail(ctx, tx, now, nil, c.op, c.grant, c.employee, c.typ, grantStatus, msg, map[string]any{"attempts": c.attempts})
 	})

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
@@ -127,7 +128,13 @@ func run(args []string) error {
 	// One runner and one sweeps loop (A2: one instance); they stop with ctx and finish
 	// before the pool closes.
 	tools := access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second)
-	runner := access.NewRunner(pool, tools)
+	var client access.ToolClient = tools
+	if cfg.GitHubToken != "" { // optional GitHub sandbox adapter; LoadConfig checked the settings
+		if client, err = gitHubClient(ctx, pool, cfg, tools); err != nil {
+			return err
+		}
+	}
+	runner := access.NewRunner(pool, client)
 	var wg sync.WaitGroup
 	wg.Go(func() { runner.Run(ctx) })
 	wg.Go(func() { sweeps.New(pool, loc, requests.TerminateDue).Run(ctx) })
@@ -153,6 +160,26 @@ func run(args []string) error {
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
 	return platform.Serve(ctx, srv)
+}
+
+// gitHubClient routes GITHUB_TOOL_ID to the GitHub sandbox adapter and every other tool to
+// the Mock Tool Service. It fails closed: an unreachable or public repository, or a tool that
+// is missing or not an API tool, stops the start. The token is never logged.
+func gitHubClient(ctx context.Context, pool *pgxpool.Pool, cfg platform.Config, mock access.ToolClient) (access.ToolClient, error) {
+	users, err := platform.ParseGitHubUsers(cfg.GitHubUsers)
+	if err != nil {
+		return nil, err
+	}
+	tool := uuid.MustParse(cfg.GitHubToolID) // checked by LoadConfig
+	gh := access.NewGitHubToolClient(pool, "https://api.github.com", cfg.GitHubRepository, cfg.GitHubToken, users, 5*time.Second)
+	if err := gh.CheckRepository(ctx); err != nil {
+		return nil, err
+	}
+	if err := gh.CheckTool(ctx, tool); err != nil {
+		return nil, err
+	}
+	slog.Info("GitHub sandbox adapter on", "repository", cfg.GitHubRepository, "tool", tool, "mappedUsers", len(users))
+	return access.RouteTool(tool, gh, mock), nil
 }
 
 // newRouter serves the JSON API under /api and the web app on every other path. Demo
