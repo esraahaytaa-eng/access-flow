@@ -7,7 +7,7 @@
 - a 29-endpoint × 7-role GET matrix;
 - code reading for injection, XSS, token handling and audit integrity.
 
-Evidence (`matrix.txt`, `getmatrix.txt`, `lib.sh`, `xl/bomb400.xlsx`) is in the session scratch directory `audit/security/`.
+Evidence files (`matrix.txt`, `getmatrix.txt`, `lib.sh`, `xl/bomb400.xlsx`) were kept in a local working directory during the audit and are not part of the repository; their names are given for traceability only.
 
 ## 1. Findings
 
@@ -158,6 +158,8 @@ Run live against an isolated stack (`afqa`, port 8091, upgraded from `main` with
 - **Completeness:** the events are paged on the server with exact totals, a tool filter was added, and the CSV export streams every matching event (formula cells neutralised; a failure mid-stream aborts the connection instead of leaving a silently cut file). The filter choices come from the audit log, not the directory.
 - **UI:** only "Denetim kayıtları"; every other route shows the access-denied page; no forbidden API call is made.
 
-**Verification:** `TestAuditorReachesOnlyTheAuditEvents` walks every registered API route as an Auditor and as an Auditor who is also Super Admin, InfoSec and HR Manager; live checks on an isolated stack (`execution-results.md`, AUD-R-01..08), 23 of 23 API and 4 of 4 browser checks pass. Rows SEC-100..111, SEC-120..125 and SEC-170..176 above remain valid (the Auditor is still refused there, now by the gate).
+**Verification:** `TestAuditorReachesOnlyTheAuditEvents` (renamed `TestAuditorReachesOnlyTheAuditEvidence` by the amendment below) walks every registered API route as an Auditor and as an Auditor who is also Super Admin, InfoSec and HR Manager; live checks on an isolated stack (`execution-results.md`, AUD-R-01..08), 23 of 23 API and 4 of 4 browser checks pass. Rows SEC-100..111, SEC-120..125 and SEC-170..176 above remain valid (the Auditor is still refused there, now by the gate).
+
+**Amendment (2026-10-31, user decision, O7 note "the Auditor also reads point-in-time access and approval evidence"):** with the events alone the Auditor could not answer CASE §5 directly. The allowlist now holds five exact `GET` routes: the three above plus `/audit/access` and `/audit/requests`, both company-wide and read-only. `explorer.ReportScope` is removed; the five evidence reports refuse `AUDITOR` in `requireFull`, whatever other roles the account holds. Approval steps now carry `decidedByName` (one `LEFT JOIN` on the step's decider), so the UI needs no directory. `TestAuditorReachesOnlyTheAuditEvidence` walks every route again (Auditor alone and with Super Admin, InfoSec and HR Manager): exactly the five return `200`, everything else `403 forbidden`. No write route, report or other role's permission changed.
 
 **Residual (closed 2026-10-31):** an Auditor account holds no operational duty. `AUDITOR` is refused while the account has another role, group membership, owned tool, direct report, pending approval, open review item or nomination (`409 auditor_has_duties`), and those duties are refused for an Auditor (`409 employee_is_auditor`), so routed work cannot reach an Auditor. Only data written outside the API is unchecked; precedence still keeps such an account read-only.

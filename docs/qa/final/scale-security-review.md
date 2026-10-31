@@ -55,7 +55,7 @@ No exploitable vulnerability was confirmed in this round. Every probe ran live a
 
 ## B. Benchmark results
 
-All latencies are in ms unless marked otherwise; the queries behind each row are in the scripts listed under "Reproducing".
+All latencies are in ms unless marked otherwise. The scripts that produced them are not in the repository (see "Reproducing").
 
 | Scenario | Data volume | Duration | Throughput | p95 | Result |
 |---|---|---|---|---|---|
@@ -129,29 +129,34 @@ All latencies are in ms unless marked otherwise; the queries behind each row are
 
 1. **An import locks every employee it names until it commits.** Measured: 17 s for 4,668 rows on a quiet host and 28.5 s while 20 users browse. A named employee's sign-in waits the whole import out; browsing and request submission are not affected. This is the PERF-002 trade-off accepted earlier, and the measured 6.1 ms per row is inside the documented 4–20 ms range. Onboarding is a rare rollout action, done before employees sign in.
    - *Not changed without approval.* The smaller fix is to lock only the employees whose row creates a grant, so a re-import that skips everything locks no one. It changes accepted, concurrency-sensitive import code.
-2. **Audit text search reads every event.** About 0.5–1 s at 300k events, while the other filters stay under about 0.2 s. A trigram index would fix it if search becomes frequent. Newly documented.
+2. **Audit text search reads every event.** At 314k events: about 0.45 s in the database (445–465 ms, index review below and §B), a median of 0.7–1.0 s through the API, and p95 1.05 s on a quieter host but up to 3.0 s under host load 20+ (§B table), while the other filters stay under about 0.2 s. A trigram index would fix it if search becomes frequent. Newly documented.
 3. **Imports are round-trip bound:** about 5 statements per new access row. Batching would speed up onboarding, but it is a one-off action.
 4. **The heavy InfoSec and Auditor pages slow down only under saturation.** Unfiltered point-in-time access (2.1 MB at 3.5k held grants) and the full review list are fast alone (188 and 57 ms) but take 1–3 s when the database is CPU-saturated by 20 workers with no think time. That is far beyond a two-person InfoSec team.
 5. **Absolute numbers come from a shared laptop.** A dedicated host would show lower tails; the medians and the relative before/after results hold.
 
+## E. PostgreSQL index and query-plan review (2026-10-31)
+
+After PERF-011, every critical query was captured with `auto_explain` while each feature ran once, then re-run with `EXPLAIN (ANALYZE, BUFFERS)` as the runtime role, JIT off, median of 3. The database was a disposable stack with 418 employees, 63 tools, 4,982 grants, 3,778 review items, 1,878 operations, 200 pending request items and 314,055 audit events (132 MB), analyzed.
+
+| Query | Plan | Median |
+|---|---|---|
+| Sign-in principal; employee by email; import dedupe; already-held check | index scans (`employees` pkey, `employees_email_key`, `grants_imported_once`, `grants_one_open` index-only) | 0.10–0.39 ms |
+| Request duplicate checks; approval inbox; My Access | `request_items_one_open`, `grants_one_open`; `approval_steps_assignee_idx` (partial); `grants_employee_idx` | 0.20 · 0.92 · 1.16 ms |
+| Runner poll and `SKIP LOCKED` claim (every ~2 s) | seq scan of `operations` joined to `grants`; grows with open tasks, not with history | 1.9 ms |
+| Expiry sweep (every minute) | seq scan of 4,984 grants | 0.87 ms |
+| Review page (all) · counts · "mine" | hash joins, top-N sort · `review_items_campaign_idx` | 14.1 · 9.9 · 2.05 ms |
+| Audit page 1 · offset 4,900 · offset 299,900 | `audit_events_recent` index scan, no sort, stops after the page | 0.62 · 7.65 · 442 ms |
+| Audit date range · action · tool · manager scope | index range scan · skip scan on `audit_events_entity` · index · `audit_events_subject` | 0.68 · 3.1 · 4.4 · 2.1 ms |
+| Audit count (unfiltered · tool) | seq scan · seq scan with hashed subplans | 28.6 · 94.5 ms |
+| Audit text search · filter options (actor list) | seq scan of every event | 445 · 77.6 ms |
+| Point-in-time access, unfiltered | one index probe per held grant (4,584) | 118 ms |
+| Audit insert (every change) | 4 index updates | 1.85 ms |
+
+**Result.** The important queries are indexed, and PERF-011 uses the time index as intended. No missing index is needed: the sequential scans are on small tables, or are inherent (exact counts, text search). Most indexes that showed zero scans enforce a rule (one open grant, one open removal, one active campaign) or back a composite foreign key, so they stay. One is redundant: `review_items_campaign_idx`, whose column leads the unique `(campaign_id, grant_id)` index. It is small, and dropping it is optional. An `actor_id` index would bring the filter-options query from 78 ms to about 1 ms, but would add a fifth index to the busiest insert table, so it was not added. No index or migration changed.
+
 ## Reproducing
 
-The scripts are not in the repository. They lived in this session's scratch directory, `…/scratchpad/perf/`:
-- `gen/main.go`: the workbook generator.
-- `malwb.py`: the hostile workbooks.
-- `imports.py`, `load.py` (`requests`, `approvals`, `fulfil`, `revoke`, `review` phases), `pages.py`, `mixed.py` and `import_under_load.py`: the benchmarks.
-- `sec_wb.py`, `sec_race.py`, `sec_import_race.py` and `sec_idor.py`: the security probes.
-- `results/*.json`: the raw outputs.
+The load and probe scripts (the workbook generator, the hostile workbooks, the benchmark and race scripts, and their raw JSON outputs) were run from a local working directory and are **not part of the repository**, so the benchmark numbers above cannot be re-run from this repository as is. What is reproducible from the repository:
 
-Commands, in order:
-
-```sh
-ACCESSFLOW_PORT=8095 docker compose -p afperf -f compose.yaml -f override.yaml up -d --build --wait   # override: pg_stat_statements, lock logging
-docker compose --profile test run --rm --no-deps -T -v $PWD/perf:/perf tests sh -c 'cp -r /src /tmp/w && mkdir /tmp/w/cmd/perfgen && cp /perf/gen/main.go /tmp/w/cmd/perfgen/ && cd /tmp/w && go run ./cmd/perfgen /perf/out'
-python3 imports.py out preview:wb-broken.xlsx import:wb-broken.xlsx preview:wb-all.xlsx import:wb-employees.xlsx import:wb-tools.xlsx import:wb-access.xlsx import:wb-all.xlsx import:wb-access.xlsx
-python3 load.py requests 150 20 && python3 load.py approvals 24 && python3 load.py fulfil && python3 load.py revoke 1200 20 && python3 load.py review 24
-python3 pages.py 50 && python3 mixed.py 50 60 1 && python3 mixed.py 20 60 && python3 import_under_load.py
-docker compose -p afperf down -v   # disposable project only
-```
-
-Regression test: `docker compose --profile test run --rm tests go test -race -count=1 -run TestAuditPageReadsOnlyItsPage ./internal/explorer/`
+- The fixes, through their regression tests, in the normal suite: `docker compose --profile test run --rm tests`. For PERF-011 alone: `docker compose --profile test run --rm tests go test -race -count=1 -run TestAuditPageReadsOnlyItsPage ./internal/explorer/`.
+- The setup: a disposable Compose project with its own port and volumes (`ACCESSFLOW_PORT=8095 docker compose -p afperf up -d --build --wait`), loaded through the onboarding workbook import and the public API, then removed with `docker compose -p afperf down -v` (that project only).

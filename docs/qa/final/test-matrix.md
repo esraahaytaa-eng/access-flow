@@ -83,19 +83,20 @@ Go test names below are real functions, mostly in `internal/requests/*_test.go`,
 | `TestSubmissionSurvivesADeadlockWithAToolOwnerChange`, `TestInTxRetriesOnlyDeadlocksAndOnlyThreeTimes` | FR-3 |
 | `TestOverrideNotifiesEachPersonOnce` | FR-4 |
 | `TestEveryErrorCodeIsTranslated` (new codes) | FR-1 |
-| `TestAuditorReachesOnlyTheAuditEvents` (every API route walked, Auditor and Auditor + Super Admin + InfoSec + HR Manager); `TestAuditorPagesFiltersAndExportsEveryEvent`; App.test "gives an Auditor only the audit events, even with other roles"; audit.test "shows an Auditor only the event log…" (×2) | AUD-R (O7 note 2026-10-31) |
+| `TestAuditorReachesOnlyTheAuditEvidence` (every API route walked, Auditor and Auditor + Super Admin + InfoSec + HR Manager); `TestAuditorPagesFiltersAndExportsEveryEvent`; App.test "gives an Auditor only the audit evidence, even with other roles"; audit.test "shows an Auditor the event log…" (×2) | AUD-R (O7 note 2026-10-31) |
 
 ### Auditor restriction (2026-10-31)
 
-The Auditor is now an external auditor who reads only the audit events (DECISIONS.md O7 note 2026-10-31). Rows and manual cases above that show an Auditor reading the directory, point-in-time access, approval evidence, the evidence reports, Exceptions, reviews, imports or the outbox (for example EMP-05, PRV-09, UI-12, RBAC-16, AUD-01, RT-B03, RT-B08 and the Exceptions browser check) record the earlier rule and are **historical**. The tests now asserting the new rule:
+The Auditor is now an external auditor who reads only the audit evidence: the audit events, and since a later O7 note of the same day also point-in-time access and approval evidence, but not the evidence reports (DECISIONS.md O7 notes 2026-10-31). Rows and manual cases above that show an Auditor reading the directory, point-in-time access, approval evidence, the evidence reports, Exceptions, reviews, imports or the outbox (for example EMP-05, PRV-09, UI-12, RBAC-16, AUD-01, RT-B03, RT-B08 and the Exceptions browser check) record the earlier rule and are **historical**. The tests now asserting the new rule:
 
 | Requirement | Automated | Manual / live |
 |---|---|---|
-| Sign in, sign out, `me` | `TestAuditorReachesOnlyTheAuditEvents` | AUD-R-01, AUD-R-07 |
+| Sign in, sign out, `me` | `TestAuditorReachesOnlyTheAuditEvidence` | AUD-R-01, AUD-R-07 |
 | List, filter (date, actor, action, tool, text), page every event | `TestAuditorPagesFiltersAndExportsEveryEvent` (230 events over 3 pages; tool, actor, date filters); audit.test Auditor cases | AUD-R-01, AUD-R-05 |
 | CSV export of every matching event, formulas neutralised | `TestAuditorPagesFiltersAndExportsEveryEvent` (231 rows) | AUD-R-02 |
-| Every other endpoint refused (requests, on-behalf, own access, directory, team, approvals, grants, tools, roles, groups, tasks, Exceptions, reviews, outbox, HR/InfoSec/admin actions, point-in-time, evidence, reports) | `TestAuditorReachesOnlyTheAuditEvents` (every route); updated `TestRevokePermissionMatrix`, `TestOnlyTheAssigneeDecides`, `TestPermissionMatrix`, `TestDirectoryVisibility`, `TestAuditExplorerScope`, Exceptions tests | AUD-R-03 |
+| Every other endpoint refused (requests, on-behalf, own access, directory, team, approvals, grants, tools, roles, groups, tasks, Exceptions, reviews, outbox, HR/InfoSec/admin actions, the evidence reports) | `TestAuditorReachesOnlyTheAuditEvidence` (every route); updated `TestRevokePermissionMatrix`, `TestOnlyTheAssigneeDecides`, `TestPermissionMatrix`, `TestDirectoryVisibility`, `TestAuditExplorerScope`, Exceptions tests | AUD-R-03 |
 | No operational duty on an Auditor account, both directions (O7 note 2026-10-31): AUDITOR refused with each open duty named; roles, group, tool owner (create, update), manager (create, transfer), reassignment and nomination refused for an Auditor | `TestAuditorRoleRefusedWhileDutiesAreOpen` (7 duties), `TestAuditorGetsNoOperationalDuty` (8 paths); errors.test (Turkish text per duty) | AUD-D |
-| Mixed roles: AUDITOR takes precedence | `TestAuditorReachesOnlyTheAuditEvents` (Auditor + Super Admin + InfoSec + HR Manager); App.test (Auditor + Super Admin) | AUD-R-04 |
-| Direct URL access in the UI refused, no forbidden API call | App.test (12 URLs) | AUD-R-06 |
-| Other roles keep their permissions | `TestAuditorReachesOnlyTheAuditEvents` (Super Admin control), the full suite | AUD-R-08 |
+| Mixed roles: AUDITOR takes precedence | `TestAuditorReachesOnlyTheAuditEvidence` (Auditor + Super Admin + InfoSec + HR Manager); App.test (Auditor + Super Admin) | AUD-R-04 |
+| Direct URL access in the UI refused, no forbidden API call | App.test (14 URLs, including `?tab=reports`) | AUD-R-06 |
+| CASE §5 directly: point-in-time access on a past date with approvers, and approval evidence with who decided (O7 note 2026-10-31, evidence access) | `TestAuditorAnswersWhoHadAccessAndWhoApproved` (a revoked grant still shown at its past date); `TestAuditExplorerScope` (company-wide; every `/audit/reports/*` refused); audit.test "lets an Auditor … answer who had access…" (×2: tabs, date, tool filter, people from the date's access, approval chain names, only audit endpoints called) | AUD-E-01..05 |
+| Other roles keep their permissions | `TestAuditorReachesOnlyTheAuditEvidence` (Super Admin control), the full suite | AUD-R-08 |
