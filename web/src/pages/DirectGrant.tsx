@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, newSubmissionId } from "../api/client";
 import { useEmployees, useTools } from "../api/queries";
 import type { Employee, Grant, GrantsResponse, Request } from "../api/types";
 import { errorMessage } from "../i18n/errors";
@@ -33,7 +33,7 @@ function GrantTab() {
   const tools = (useTools().data ?? []).filter((t) => t.status !== "RETIRED");
   const [form, setForm] = useState<Form>({ employeeId: "", toolId: "", levelId: "", days: "30", why: "" });
   const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({});
-  const [submissionId] = useState(() => crypto.randomUUID());
+  const [submissionId] = useState(newSubmissionId);
   const [run, busy] = useAction();
   const tool = tools.find((t) => t.id === form.toolId);
   const levels = (tool?.levels ?? []).filter((l) => l.status !== "RETIRED");

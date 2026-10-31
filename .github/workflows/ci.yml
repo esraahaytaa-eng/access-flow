@@ -1,5 +1,5 @@
-# Runs the same Docker commands as local development (plan milestone C1). The image build
-# and the Go checks are independent, so they run as two parallel jobs (M16).
+# Runs the same Docker commands as local development (plan milestone C1). The image build,
+# the Go checks and the browser smoke test are independent, so they run as parallel jobs (M16).
 name: CI
 
 on:
@@ -43,3 +43,15 @@ jobs:
 
       - name: Test (gofmt, go vet, go test -race against PostgreSQL)
         run: docker compose --profile test run --rm -e GOMODCACHE=/src/.cache/mod -e GOCACHE=/src/.cache/go-build tests
+
+  e2e:
+    name: Browser E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Browser smoke test (Playwright, fresh isolated Compose project)
+        run: ./e2e.sh

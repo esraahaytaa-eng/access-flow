@@ -54,7 +54,7 @@ services:
       # deployment removes these three lines.
       ACCESSFLOW_DEMO: "true"
       ACCESSFLOW_ENV: local
-      DEMO_PASSWORDS: admin=Demo-Admin-2026,infosec=Demo-InfoSec-2026,hr=Demo-HR-2026,auditor=Demo-Auditor-2026,manager=Demo-Manager-2026,owner=Demo-Owner-2026,cloud=Demo-Cloud-2026,employee=Demo-Employee-2026
+      DEMO_PASSWORDS: &demo-passwords admin=Demo-Admin-2026,infosec=Demo-InfoSec-2026,hr=Demo-HR-2026,auditor=Demo-Auditor-2026,manager=Demo-Manager-2026,owner=Demo-Owner-2026,cloud=Demo-Cloud-2026,employee=Demo-Employee-2026
       MOCK_TOOLS_URL: http://mocktools:8081
     volumes:
       - appdata:/var/lib/accessflow
@@ -110,6 +110,26 @@ services:
         # internal/requests is the longest package (its tests run in parallel, about 4 minutes
         # locally with -race); 20m leaves room on slow machines.
         go test -race -count=1 -timeout 20m ./...
+
+  # Browser smoke test (e2e profile): run ./e2e.sh, which starts a separate, fresh Compose project
+  # and removes it afterwards. Playwright's official image; its dependency lives in e2e/ only.
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.64.1-noble
+    profiles: [e2e]
+    working_dir: /e2e
+    volumes:
+      - ./e2e:/e2e
+      - /e2e/node_modules # installed in the container, never on the host
+    # Shares the app's network namespace, so the browser opens http://localhost:8080 exactly as a
+    # reviewer does (a secure context; Chromium also forces HTTPS on the bare host "app").
+    network_mode: service:app
+    environment:
+      BASE_URL: http://localhost:8080
+      DEMO_PASSWORDS: *demo-passwords
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["sh", "-c", "npm ci --no-audit --no-fund --loglevel=error && npx playwright test"]
 
 volumes:
   pgdata:

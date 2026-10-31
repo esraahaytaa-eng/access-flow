@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, newSubmissionId } from "../api/client";
 import { useEmployees, useMyGrants, useRequests, useStarterPackages, useTeamMemberGrants, useTools } from "../api/queries";
 import type { CatalogTool, Duration, Grant, Request } from "../api/types";
 import { errorMessage } from "../i18n/errors";
@@ -36,7 +36,7 @@ export function NewRequestPage() {
   const [lines, setLines] = useState<Line[]>(() => [newLine(params.get("tool") ?? "", params.get("level") ?? "")]);
   const [why, setWhy] = useState("");
   const [errors, setErrors] = useState<{ lines: Record<number, string[]>; why?: string }>({ lines: {} });
-  const [submissionId] = useState(() => crypto.randomUUID());
+  const [submissionId] = useState(newSubmissionId);
   const [run, busy] = useAction();
 
   const isOther = beneficiaryId !== me.id;
