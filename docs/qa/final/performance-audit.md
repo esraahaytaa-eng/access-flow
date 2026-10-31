@@ -10,7 +10,9 @@
 - Reliable from those runs: lock waits measured in tens of seconds, and EXPLAIN A/B pairs run back to back.
 - The **isolated re-run (2026-10-31, §8)** supersedes their endpoint numbers. No test workload ran during it (every other container stayed under 12% CPU, recorded at the start and end of each run).
 
-Scripts and raw outputs are in the session scratch directory `audit/performance/`. The file names are given below.
+Scripts and raw outputs were kept in a local working directory during the audit and are not part of the repository; their names are given for traceability only. The fixes are covered by the Go and Vitest suites, which run in CI. Current figures at the case's scale (400 employees, 60 tools, 314,000 audit events) are in [`scale-security-review.md`](scale-security-review.md) §B; this report records the findings, the fixes and their before/after measurements.
+
+**Roles in the tables are as on 2026-10-30.** The Auditor then also read point-in-time access and the evidence reports. Since the O7 notes of 2026-10-31 the Auditor reads the audit events, point-in-time access and approval evidence; the evidence reports are for InfoSec and Super Admins. The point-in-time and approval-evidence figures below therefore still apply to the Auditor; no query changed.
 
 ## 1. Dataset
 

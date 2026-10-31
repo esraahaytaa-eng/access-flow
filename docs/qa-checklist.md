@@ -17,7 +17,7 @@ Open http://localhost:8090 and read every `localhost:8080` below as `localhost:8
 ## 1. Sign-in page
 
 - [ ] One centered card: logo, "Oturum açın", e-mail, password, "Oturum aç". No side panel or marketing text.
-- [ ] "Demo Accounts" lists seven accounts with their English role ("Super Admin" … "Employee") and e-mail, the line "Select an account. Passwords are listed in the README.", and an amber "Demo Environment" badge. No password is shown.
+- [ ] "Demo Accounts" lists eight accounts with their English role ("Super Admin" … "Employee") and e-mail, the line "Select an account. Passwords are listed in the README.", and an amber "Demo Environment" badge. No password is shown.
 - [ ] Clicking an account fills the e-mail and moves the focus to the password.
 - [ ] "Oturum aç" with empty fields shows "E-posta adresinizi girin." and "Parolanızı girin."; no request is sent (DevTools → Network).
 - [ ] A wrong password shows "E-posta adresi veya parola hatalı."
@@ -60,19 +60,20 @@ Open http://localhost:8090 and read every `localhost:8080` below as `localhost:8
 - [ ] Yeni çalışan: Departman and Unvan are pickers with the catalog names only.
 - [ ] Karşılama görevleri (Vendor Desk): Ece Polat's Payroll Portal task shows the vendor ticket TDR-2026-0142, "Tedarikçi bekleniyor".
 
-## 8. Auditor — gizem.arslan (external auditor: audit events only, O7 note 2026-10-31)
+## 8. Auditor — gizem.arslan (external auditor: audit evidence only, O7 notes 2026-10-31)
 
-- [ ] After sign-in the app opens on Denetim kayıtları. The sidebar has that one item; there is no "Erişim talep et" button, no notification bell and no tabs (no Geçmiş erişim sorgusu, Onay kanıtı or Kanıt raporları). The notice reads "Dış denetçi erişimi: …".
+- [ ] After sign-in the app opens on Denetim kayıtları. The sidebar has that one item; there is no "Erişim talep et" button and no notification bell. The tabs are Olay geçmişi, Geçmiş erişim sorgusu and Onay kanıtı (no Kanıt raporları, also not with `?tab=reports`). The notice reads "Dış denetçi erişimi: …".
+- [ ] Geçmiş erişim sorgusu: pick a past date and Araç (e.g. Jira). Each row shows who held it then, its state and evidence, and Onaylayanlar (e.g. "Yönetici: Burak Şahin"); Çalışan lists the people with access on that date. Onay kanıtı: search "Jira"; the approval chain names who decided each step, and a row opens its timeline.
 - [ ] Filters: event type, Yapan (people who appear in the log), Araç (e.g. Jira: only events about Jira's requests, approvals, grants and tasks), date range and text. The footer shows the exact total; Sonraki pages through every matching event, 100 a page.
 - [ ] CSV indir with a filter: one file with every matching event (header plus one row per event; compare the row count with the total), not only the shown page.
 - [ ] Type each address in the address bar: http://localhost:8090/access, /requests, /request-new, /employees, /team, /approvals, /reviews, /tasks, /exceptions, /settings, /mailbox. Each shows "Bu sayfaya erişiminiz yok"; DevTools → Network shows no call to those APIs. http://localhost:8090/ opens Denetim kayıtları.
-- [ ] Direct API calls are refused. Sign in with curl and try a few endpoints (expect `200` for the first two lines, `403` for the rest):
+- [ ] Direct API calls are refused. Sign in with curl and try a few endpoints (expect `200` for the first two and the `audit/access` and `audit/requests` lines, `403` for the rest):
 
 ```bash
 B=http://localhost:8090/api/v1; J=$(mktemp)
 curl -s -c $J -o /dev/null -H 'Content-Type: application/json' -d '{"email":"gizem.arslan@accessflow.local","password":"Demo-Auditor-2026"}' $B/auth/login
 CSRF=$(awk '/accessflow_csrf/ {print $7}' $J)
-for p in audit/events audit/filters access requests employees exceptions reviews audit/access audit/reports/privileged email-outbox; do
+for p in audit/events audit/filters audit/access audit/requests access requests employees exceptions reviews audit/reports/privileged email-outbox; do
   echo "$(curl -s -b $J -o /dev/null -w '%{http_code}' $B/$p) GET /$p"; done
 curl -s -b $J -o /dev/null -w '%{http_code} POST /requests\n' -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' -d '{}' $B/requests
 ```
@@ -100,10 +101,10 @@ curl -s -b $J -o /dev/null -w '%{http_code} POST /requests\n' -H "X-CSRF-Token: 
 
 Use a private window (or a second browser) for the employee side, so the Super Admin stays signed in. Links are revealed in Yönetim ayarları → E-posta kutusu ("Bağlantıyı göster"); every reveal is audited.
 
-**Seven demo accounts**
-- [ ] On a fresh start all seven accounts sign in with the README passwords.
+**Eight demo accounts**
+- [ ] On a fresh start all eight accounts sign in with the README passwords.
 - [ ] Super Admin → Yönetim ayarları → E-posta kutusu: no activation e-mail exists yet (the seed sends none).
-- [ ] Hesap etkinleştirme: none of the seven accounts is listed; the other demo employees are under "Bağlantı yok".
+- [ ] Hesap etkinleştirme: none of the eight accounts is listed; the other demo employees are under "Bağlantı yok".
 
 **Excel import**
 - [ ] After the import in section 9, the new employee has one e-mail "AccessFlow hesabınızı etkinleştirin" in E-posta kutusu, with the badge "Etkinleştirme". The e-mail text contains no link.

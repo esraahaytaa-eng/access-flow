@@ -1,6 +1,17 @@
-# Release readiness — final QA (2026-10-30, fix rounds 2026-10-31)
+# Release readiness — final QA (2026-10-30, fix rounds 2026-10-31, updated after the merge)
 
-## Verdict: **CONDITIONAL**
+## Current verdict: **PASS for the case submission**
+
+This verdict is about the case submission, not production readiness.
+
+- **Merged and green.** Every QA fix is in `main` through PR #18 (squash commit `81d6430`, 2026-10-31). Both CI jobs passed on its final commit: "Build images" (the image build, which runs `tsc --noEmit`, the Vitest suite and the frontend build) and "Go checks and tests" (`gofmt`, `go vet` and `go test -race` against PostgreSQL).
+- **Findings.** Every confirmed defect and every security and scale finding of this audit is fixed with a regression test (sections below). PERF-008 (campaign start, about 9 s at 12,000 grants) is accepted. PERF-011 (audit log paging) was found and fixed afterwards in the [scale and security review](scale-security-review.md).
+- **Accepted residuals.** R-4, R-5, R-6, R-8 and R-9, and collusion by two Super Admins (R-1) or by HR, an authorizer and the nominee (R-2), are documented in [`docs/known-limitations.md`](../../known-limitations.md).
+- **Not production-ready, by design of the case.** A real deployment needs real e-mail delivery and tool connectors, HTTPS with managed secrets, SSO or MFA, and monitoring ([`docs/deployment.md`](../../deployment.md#before-real-use)).
+
+The sections below are the dated record of the audit as it ran. Their "NOT RUN (uncommitted)" CI rows and the conditions under "Verdict before the merge" were met by PR #18.
+
+## Verdict before the merge (2026-10-31): **CONDITIONAL** (superseded above)
 
 Every confirmed defect and every open security and scale finding is fixed, and the Auditor is restricted to the audit events (P0, below) with regression tests: F-1/R-2, R-1, R-3, R-7, ENG-006, BUG-A-03 and PERF-004 in the first fix round, then a deadlock that answered `500` (FR-3), a duplicate override notification (FR-4) and the silent row caps (FR-5) in the final engineering round. The local checks pass on the final tree. PERF-008 (campaign start, about 9 s) is accepted (Q7). Nothing is committed yet.
 
@@ -10,7 +21,7 @@ Conditions for PASS:
 
 ## Auditor restriction (2026-10-31, P0, user decision)
 
-The Auditor is an external auditor who reads only the audit events (DECISIONS.md O7 note 2026-10-31): default deny in the API session middleware with a three-route allowlist, AUDITOR taking precedence over every other role, service-level reads removed, paged events with exact totals and a tool filter, a server-streamed CSV export of every matching event, and an events-only UI. Details: `security-audit.md` "Auditor restriction"; live results: `execution-results.md` AUD-R-01..08.
+*(Amended later on 2026-10-31: the Auditor also reads point-in-time access and approval evidence (O7 note "the Auditor also reads point-in-time access and approval evidence", 2026-10-31; [current rules](../../../DECISIONS.md#current-rules-at-a-glance)). The evidence reports stay refused; `TestAuditorReachesOnlyTheAuditEvents` is now `TestAuditorReachesOnlyTheAuditEvidence`.)* The Auditor is an external auditor who reads only the audit events (DECISIONS.md O7 note 2026-10-31): default deny in the API session middleware with a three-route allowlist, AUDITOR taking precedence over every other role, service-level reads removed, paged events with exact totals and a tool filter, a server-streamed CSV export of every matching event, and an events-only UI. Details: `security-audit.md` "Auditor restriction"; live results: `execution-results.md` AUD-R-01..08.
 
 | Check (final tree, after the Auditor change) | Result |
 |---|---|
@@ -25,6 +36,8 @@ The Auditor is an external auditor who reads only the audit events (DECISIONS.md
 | GitHub CI | NOT RUN (uncommitted) |
 
 **Auditor duty exclusivity (2026-10-31, after the table above).** An Auditor account holds no operational duty, in both directions (O7 note 2026-10-31; `bug-report.md` AUD-D). Re-run on the final tree: `gofmt`, `go vet`, `staticcheck` clean; `go test -race -count=1 ./...` all 16 test packages pass; Vitest 20 files, 182 tests pass; `tsc --noEmit` clean; `vite build` builds. The live mixed-role step above (AUDITOR assigned to the demo manager) predates this rule and would now be refused with `auditor_has_duties` (`directReports`); the live and browser checks were NOT RUN again.
+
+**Auditor evidence access (2026-10-31, after the tables above, user decision).** The Auditor also reads point-in-time access and approval evidence, so it answers CASE §5 directly (DECISIONS.md O7 note; `security-audit.md` "Amendment"); the evidence reports stay refused. Tests: `TestAuditorReachesOnlyTheAuditEvidence` (every route, Auditor alone and with Super Admin, InfoSec and HR Manager), `TestAuditorAnswersWhoHadAccessAndWhoApproved`, `TestAuditExplorerScope`, Vitest (audit and App tests). Live: `execution-results.md` AUD-E-01..07 on an isolated stack, 30 of 30 API checks and the browser check pass.
 
 ## Final engineering round (2026-10-31)
 
@@ -133,7 +146,7 @@ Database: one new migration, `00018_audit_recent_index.sql`, which only adds an 
 | PERF-010 (2026-10-31): `TestNewPoolTurnsJITOff` | red with the fix disabled (`jit = "on"`), green with it; `go test -race ./internal/platform/ ./cmd/accessflow/` pass, `gofmt -l cmd internal` clean, `go vet ./cmd/... ./internal/platform/` clean (isolated compose project `accessflow-perftest`) |
 | Full suite after PERF-010 (2026-10-31) | `gofmt -l` and `go vet ./...` clean; `go test -race ./...`: all 15 packages pass, no data races |
 | Isolated performance re-run (2026-10-31, no competing test workload) | `performance-audit.md` §8. The earlier interrupted run (exit 144: stopped by the auditor's own `pkill`, incomplete) and its p95-equals-max flaw are documented there and superseded |
-| Concurrency and performance after the fixes | sign-in wait during the review sweep: 38.7 s → 0.79 s (day 7), 138.8 s → 1.0 s (day 21); see `performance-audit.md` |
+| Concurrency and performance after the fixes | sign-in wait during the review sweep: day 7 38.7 s → 786 ms on a loaded host, max 105–212 ms isolated; day 21 138.8 s → 1,008 ms loaded, max 147 ms isolated (`performance-audit.md` PERF-001 and §8.4) |
 | Browser retest of the fixed bugs (fresh stack) | 9 of 9 PASS (`execution-results.md`, "Re-verification") |
 | Independent code and security review of the final diff | done; 2 confirmed findings (RV-1 reverted, RV-2 fixed), 1 test restored (RV-3), 1 accepted (RV-4) |
 

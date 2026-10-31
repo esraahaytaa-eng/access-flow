@@ -21,10 +21,10 @@ import (
 )
 
 const passwords = "admin=Demo-Admin-Pass-1,infosec=Demo-InfoSec-Pass-2,hr=Demo-HR-Pass-3,auditor=Demo-Audit-Pass-4," +
-	"manager=Demo-Manager-Pass-5,owner=Demo-Owner-Pass-6,employee=Demo-Employee-Pass-7"
+	"manager=Demo-Manager-Pass-5,owner=Demo-Owner-Pass-6,cloud=Demo-Cloud-Pass-8,employee=Demo-Employee-Pass-7"
 
 func TestParsePasswords(t *testing.T) {
-	if got, err := ParsePasswords(passwords); err != nil || len(got) != 7 || got["owner"] != "Demo-Owner-Pass-6" {
+	if got, err := ParsePasswords(passwords); err != nil || len(got) != 8 || got["owner"] != "Demo-Owner-Pass-6" || got["cloud"] != "Demo-Cloud-Pass-8" {
 		t.Fatalf("got %v, %v", got, err)
 	}
 	// A malformed pair never reaches the startup log with its password.
@@ -139,6 +139,8 @@ func TestSeedCreatesARealisticIdempotentDemo(t *testing.T) {
 		{"the English company catalog", "SELECT count(*) FROM departments WHERE active AND name IN ('Engineering', 'Human Resources', 'Compliance', 'Management')", 4},
 		{"every employee placed in it", "SELECT count(*) FROM employees e JOIN departments d ON d.name = e.department JOIN job_positions p ON p.name = e.job_title", 17},
 		{"English access levels", "SELECT count(*) FROM access_levels l JOIN tools t ON t.id = l.tool_id WHERE (t.name, l.name) IN (('GitHub', 'Developer'), ('Jira', 'User'))", 2},
+		{"the cloud account owns AWS Console", `SELECT count(*) FROM tools t JOIN employees e ON e.id = t.owner_id
+			WHERE t.name = 'AWS Console' AND e.email = 'emre.kaya@accessflow.local'`, 1},
 		{"two InfoSec members (F2)", "SELECT count(*) FROM role_assignments WHERE role = 'INFOSEC' AND valid_to IS NULL", 2},
 		{"approvals waiting at each step type", "SELECT count(DISTINCT type) FROM approval_steps WHERE status = 'PENDING'", 3},
 		{"a rejected request", "SELECT count(*) FROM request_items WHERE status = 'REJECTED'", 1},

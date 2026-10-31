@@ -16,7 +16,7 @@ Every case below was executed against a real running stack (browser over the Chr
 
 **Build note:** QA ran on the code at the start of the audit (baseline plus the first fixes). Every bug found was rechecked against the final tree. Fixed bugs were re-verified with regression tests and the retests in the "Re-verification" section at the end.
 
-Status values: PASS, FAIL, PARTIAL, BLOCKED, NOT RUN. Evidence files (screenshots, scripts, CSVs) were kept in the session's scratch directory (`audit/qa-a`, `audit/qa-b`); their names are given below.
+Status values: PASS, FAIL, PARTIAL, BLOCKED, NOT RUN. Evidence files (screenshots, scripts, CSVs) were kept in a local working directory during the audit and are not part of the repository; their names are given for traceability only. The counts below are the 2026-10-30 run, with 7 demo accounts; the eighth (`emre.kaya`, 2026-10-31) came later.
 
 ## Summary
 
@@ -348,7 +348,7 @@ The first two script runs failed on the script's side (stale hard-coded totals; 
 
 ## Auditor restriction: live checks (2026-10-31)
 
-DECISIONS.md O7 note 2026-10-31 makes the Auditor an external auditor who reads only the audit events. Earlier rows in this file that show an Auditor using the directory, point-in-time access, evidence reports, Exceptions or reviews (EMP-05, PRV-09, UI-12, RBAC-16, AUD-01, RT-B03, RT-B08, the Exceptions browser check) were correct under the earlier rule and are kept as **historical** evidence; they no longer describe current behaviour.
+DECISIONS.md O7 note 2026-10-31 makes the Auditor an external auditor who reads only the audit events. *(Amended later the same day: the Auditor also reads point-in-time access and approval evidence; see "Auditor evidence access: live checks" at the end of this file and [current rules](../../../DECISIONS.md#current-rules-at-a-glance).)* Earlier rows in this file that show an Auditor using the directory, point-in-time access, evidence reports, Exceptions or reviews (EMP-05, PRV-09, UI-12, RBAC-16, AUD-01, RT-B03, RT-B08, the Exceptions browser check) were correct under the earlier rule and are kept as **historical** evidence; they no longer describe current behaviour.
 
 Isolated throwaway stack `afqa3` (port 8093, fresh volumes, fresh demo seed, removed afterwards). API checks with each demo role's own session (`roles.py`); browser checks in headless Chrome over CDP (`e2e-auditor.mjs`).
 
@@ -364,3 +364,21 @@ Isolated throwaway stack `afqa3` (port 8093, fresh volumes, fresh demo seed, rem
 | AUD-R-08 | Other six roles keep their access (employee, manager, owner, InfoSec, HR, Super Admin; 20 endpoints); employee still refused the audit events; browser: employee menu unchanged, InfoSec audit page keeps point-in-time and reports | 200 / 403 as before | as expected | PASS |
 
 One first-run failure was a script error, not a defect: the list contained `GET /employees/{id}`, which is not a route (the router answers 405 for every caller); removed and re-run, 23 of 23 API checks pass, browser 4 of 4.
+
+## Auditor evidence access: live checks (2026-10-31)
+
+DECISIONS.md O7 note "the Auditor also reads point-in-time access and approval evidence" (2026-10-31) adds `GET /audit/access` and `GET /audit/requests` to the Auditor's allowlist; the evidence reports stay refused. AUD-R-05 ("no tabs") is superseded: the Auditor now sees three tabs.
+
+Isolated throwaway stack `afaudit` (port 8099, fresh volumes, fresh demo seed, removed afterwards with its volumes); the demo on port 8080 was not touched (baseline before and after: 25 employees, migration 19, password hashes unchanged). API checks with the demo accounts' own sessions; browser checks in headless Chrome over CDP.
+
+| ID | Case | Expected | Actual | Status |
+|---|---|---|---|---|
+| AUD-E-01 | Auditor: `GET /audit/events`, `…/export`, `/audit/filters`, `/audit/access`, `/audit/requests` | 200 | 200 ×5 | PASS |
+| AUD-E-02 | Auditor: the five `/audit/reports/*`, and `/employees`, `/tools`, `/exceptions`, `/reviews`, `/approvals`, `/requests`, `/access`, `/email-outbox`, `/imports` | 403 forbidden | 403 ×14 | PASS |
+| AUD-E-03 | Auditor: submit a request, approve, direct grant, revoke, create and update an employee, start a campaign | 403 forbidden | 403 ×7 | PASS |
+| AUD-E-04 | CASE §5: point-in-time at a grant's activation instant, filtered by its tool (GitHub) | the holder with approvers; same answer as InfoSec | Deniz Kara, Developer; Yönetici: Burak Şahin, Araç sahibi: Can Öztürk; identical to InfoSec's response | PASS |
+| AUD-E-05 | Approval evidence for that grant | each decided step names its decider | MANAGER Burak Şahin, TOOL_OWNER Can Öztürk (`decidedByName`) | PASS |
+| AUD-E-06 | Deniz Kara gives up Jira (API, removal verified), then the Auditor asks about the instant before | gone now, listed as removed; still held at the past instant with its approver | removed now (VERIFIED); held at the past instant, Yönetici: Burak Şahin | PASS |
+| AUD-E-07 | Browser, Auditor: Denetim kayıtları | menu "Denetim kayıtları" only; tabs Olay geçmişi, Geçmiş erişim sorgusu, Onay kanıtı; approvers shown; Araç and Çalışan filters filled; approval chain names deciders; `?tab=reports` falls back to the event log | as expected; API calls only `/auth/me`, `/demo`, `/audit/filters`, `/audit/events`, `/audit/access`, `/audit/requests` | PASS |
+
+Two first-run failures were script errors, not defects: `GET /grants/mine` and `POST /review-campaigns` are not routes (404 for every caller). Replaced with `/access` and `/reviews/campaigns` and re-run: 30 of 30. A first try of AUD-E-06 used GitHub, a Manual tool: its removal stays `REVOCATION_REQUESTED` (still access, O1) until an admin confirms it, which is correct; the check was repeated with Jira (API).

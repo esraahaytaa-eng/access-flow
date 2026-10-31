@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderPage } from "../test/render";
@@ -102,16 +102,16 @@ describe("audit explorer", () => {
     expect(within(tile).getByText("1")).toBeTruthy();
   });
 
-  // An external auditor reads only the event log (O7 note 2026-10-31).
+  // An external auditor reads the audit evidence only: events, point-in-time access and approval evidence (O7 notes 2026-10-31).
   for (const [name, session] of [["an Auditor", auditor], ["an Auditor who also holds other roles", mixed]] as const) {
-    it(`shows ${name} only the event log, paged, filtered by tool and exported in full`, async () => {
+    it(`shows ${name} the event log, paged, filtered by tool and exported in full`, async () => {
       const calls = fakeServer({ ...base, "GET /audit/events?": page([event()], 230), "GET /audit/events?page=2": page([event({ id: "ev101" })], 230, 2),
         "GET /audit/events?tool=t1": page([event()], 7) });
       const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { calls.push({ method: "DOWNLOAD", path: this.getAttribute("href")!, body: undefined }); });
       renderPage(<AuditPage />, { session, path: "/audit?tab=reports" });
       expect(await screen.findByText("Onay adımı onaylandı")).toBeTruthy();
       expect(screen.getByText(/Dış denetçi erişimi/)).toBeTruthy();
-      expect(screen.queryByRole("tab")).toBeNull(); // no point-in-time, evidence or reports
+      expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Olay geçmişi", "Geçmiş erişim sorgusu", "Onay kanıtı"]);
       expect(screen.getByText(/230 kayıt/)).toBeTruthy();
       await userEvent.click(screen.getByRole("button", { name: "Sonraki" }));
       await waitFor(() => expect(calls.some((c) => c.path === "/audit/events?page=2")).toBe(true));
@@ -122,6 +122,27 @@ describe("audit explorer", () => {
       // Nothing outside the audit events is requested: no directory, catalog, approvals or reports.
       expect(calls.filter((c) => c.method === "GET" && !c.path.startsWith("/audit/events") && c.path !== "/audit/filters")).toEqual([]);
       click.mockRestore();
+    });
+
+    it(`lets ${name} answer who had access to a tool on a past date and who approved it`, async () => {
+      const step = { id: "s1", position: 1, type: "MANAGER", status: "APPROVED", assigneeId: "m1", assigneeName: "Murat Yönetici", routingNote: null,
+        openedAt: "2026-08-30T09:00:00Z", decidedBy: "m1", decidedByName: "Murat Yönetici", decidedAt: "2026-08-31T09:00:00Z", reason: null, version: 2 };
+      const calls = fakeServer({ ...base,
+        [`GET /audit/access?date=${today}`]: { at: "2026-10-29T20:59:59Z", grants: [held()], removed: [] },
+        "GET /audit/access?date=2026-09-15": { at: "2026-09-15T20:59:59Z", grants: [held()], removed: [] },
+        "GET /audit/access?date=2026-09-15&tool=t1": { at: "2026-09-15T20:59:59Z", grants: [held()], removed: [] },
+        "GET /audit/requests?": { requests: [{ id: "r1", kind: "NEW_ACCESS", createdAt: "2026-08-30T09:00:00Z", items: [{ id: "i1", tool: "Jira", level: "Viewer",
+          status: "APPROVED", beneficiary: { id: "e2", fullName: "Deniz Kara" }, steps: [step] }] }] } });
+      renderPage(<AuditPage />, { session, path: "/audit?tab=pit" });
+      expect(await screen.findByText("Yönetici: Murat Yönetici")).toBeTruthy();
+      fireEvent.change(screen.getByLabelText("Tarih"), { target: { value: "2026-09-15" } });
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Araç" }), "t1");
+      await waitFor(() => expect(calls.some((c) => c.path === "/audit/access?date=2026-09-15&tool=t1")).toBe(true));
+      expect(within(screen.getByRole("combobox", { name: "Çalışan" })).getByRole("option", { name: "Deniz Kara" })).toBeTruthy();
+      await userEvent.click(screen.getByRole("tab", { name: "Onay kanıtı" }));
+      expect(await screen.findByText("Yönetici: Murat Yönetici")).toBeTruthy();
+      // Only the audit evidence endpoints are called: no directory, catalog, approvals or reports.
+      expect(calls.filter((c) => c.method === "GET" && !/^\/audit\/(events|filters|access|requests)/.test(c.path))).toEqual([]);
     });
   }
 });

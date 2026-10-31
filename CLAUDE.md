@@ -35,7 +35,7 @@ Work proceeds in small, focused, independently testable milestones defined in th
 
 ## Development Skills
 
-Use Superpowers and Ponytail as in Smart Campaign Composer. Both must be installed and loaded in this project before implementation starts. Invoke them through the Skill tool when they apply. Never claim a skill was executed if its instructions were only read manually; say "applied manually" in that case.
+Use the Superpowers and Ponytail skill plugins for Claude Code. Both must be installed and loaded in this project before implementation starts. Invoke them through the Skill tool when they apply. Never claim a skill was executed if its instructions were only read manually; say "applied manually" in that case.
 
 **Superpowers**
 - `brainstorming` / `writing-plans` — requirements analysis and milestone planning.

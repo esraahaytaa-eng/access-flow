@@ -79,7 +79,7 @@ function Root() {
     <SessionProvider principal={me.data}>
       <Shell onSignOut={signOut}>
         {me.data.employee.roles.includes("AUDITOR") ? (
-          // An external auditor reads only the audit events, whatever other roles they hold (O7 note 2026-10-31).
+          // An external auditor reads only the audit evidence on Denetim kayıtları, whatever other roles they hold (O7 notes 2026-10-31).
           <Routes>
             <Route path="/" element={<Navigate to="/audit" replace />} />
             <Route path="/audit" element={<AuditPage />} />

@@ -101,7 +101,7 @@ describe("navigation", () => {
     window.history.pushState({}, "", "/");
   });
 
-  it("gives an Auditor only the audit events, even with other roles (O7 note 2026-10-31)", async () => {
+  it("gives an Auditor only the audit evidence, even with other roles (O7 notes 2026-10-31)", async () => {
     const auditor = principal({ employee: { id: "a1", email: "a@x.co", fullName: "Ada Denetçi", roles: ["AUDITOR", "SUPER_ADMIN"] } });
     const events = { "GET /audit/events?": { events: [], total: 0, page: 1, pageSize: 100 }, "GET /audit/filters": { actors: [], tools: [] } };
     window.history.pushState({}, "", "/");
@@ -113,13 +113,14 @@ describe("navigation", () => {
     expect(screen.queryByRole("button", { name: "Erişim talep et" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Bildirimler/ })).toBeNull();
     unmount();
-    for (const path of ["/access", "/requests", "/request-new", "/employees", "/team", "/approvals", "/settings", "/exceptions", "/reviews", "/tasks", "/mailbox", "/audit?tab=pit"]) {
+    for (const path of ["/access", "/requests", "/request-new", "/employees", "/team", "/approvals", "/settings", "/exceptions", "/reviews", "/tasks", "/mailbox",
+      "/audit?tab=pit", "/audit?tab=evidence", "/audit?tab=reports"]) {
       window.history.pushState({}, "", path);
       calls = fakeServer({ ...events, "GET /auth/me": auditor });
       const { unmount } = render(<App />);
       if (path.startsWith("/audit")) expect(await screen.findByText(/Dış denetçi erişimi/)).toBeTruthy();
       else expect(await screen.findByText("Bu sayfaya erişiminiz yok")).toBeTruthy();
-      expect(calls.filter((c) => c.path !== "/auth/me" && c.path !== "/demo" && !c.path.startsWith("/audit/events") && c.path !== "/audit/filters")).toEqual([]);
+      expect(calls.filter((c) => c.path !== "/auth/me" && c.path !== "/demo" && !/^\/audit\/(events|filters|access|requests)/.test(c.path))).toEqual([]);
       unmount();
     }
     window.history.pushState({}, "", "/");

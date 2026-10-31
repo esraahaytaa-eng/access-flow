@@ -560,7 +560,7 @@ func TestSuspensionGapIsVisibleAndActionable(t *testing.T) {
 			t.Fatalf("grant = %v", g)
 		}
 		auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
-		testutil.RequireStatus(t, w.exceptions(auditor), http.StatusForbidden, "forbidden") // audit events only (O7 note 2026-10-31)
+		testutil.RequireStatus(t, w.exceptions(auditor), http.StatusForbidden, "forbidden") // audit evidence only (O7 notes 2026-10-31)
 		testutil.RequireStatus(t, w.exceptions(w.owner), http.StatusForbidden, "")
 		w.due()
 		tl.drain(t)

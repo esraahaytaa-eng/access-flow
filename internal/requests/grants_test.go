@@ -288,7 +288,7 @@ func TestRevokePermissionMatrix(t *testing.T) {
 		{"the direct manager", w.mgr, http.StatusOK},
 		{"a Super Admin", w.admin, http.StatusOK}, // direct revocation (D1)
 		{"InfoSec", w.is1, http.StatusNotFound},
-		{"an Auditor", auditor, http.StatusForbidden}, // audit events only (O7 note 2026-10-31)
+		{"an Auditor", auditor, http.StatusForbidden}, // audit evidence only (O7 notes 2026-10-31)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w.exec("UPDATE grants SET status = 'CANCELLED' WHERE status <> 'CANCELLED'")

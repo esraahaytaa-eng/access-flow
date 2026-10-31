@@ -171,6 +171,7 @@ export type ApprovalStep = {
   /** When the step opened; the inbox waiting time starts here. */
   openedAt: string | null;
   decidedBy: string | null;
+  decidedByName: string | null;
   decidedAt: string | null;
   reason: string | null;
   version: number;

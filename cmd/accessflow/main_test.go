@@ -238,9 +238,10 @@ func TestPrintBootstrapPassword(t *testing.T) {
 	}
 }
 
-// An Auditor is an external, read-only auditor (DECISIONS.md O7 note 2026-10-31): every
-// business route but the audit events refuses them, whatever other roles they also hold.
-func TestAuditorReachesOnlyTheAuditEvents(t *testing.T) {
+// An Auditor is an external, read-only auditor (DECISIONS.md O7 notes 2026-10-31): every
+// business route but the audit events, point-in-time access and approval evidence refuses
+// them, whatever other roles they also hold.
+func TestAuditorReachesOnlyTheAuditEvidence(t *testing.T) {
 	db := testutil.NewDB(t)
 	svc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000})
 	if err != nil {
@@ -255,7 +256,8 @@ func TestAuditorReachesOnlyTheAuditEvents(t *testing.T) {
 		testutil.RequireStatus(t, c.Login(e.Email, testutil.Password), http.StatusOK, "")
 		return c
 	}
-	allowed := map[string]bool{"GET /api/v1/audit/events": true, "GET /api/v1/audit/events/export": true, "GET /api/v1/audit/filters": true}
+	allowed := map[string]bool{"GET /api/v1/audit/events": true, "GET /api/v1/audit/events/export": true, "GET /api/v1/audit/filters": true,
+		"GET /api/v1/audit/access": true, "GET /api/v1/audit/requests": true}
 	var routes []string
 	err = chi.Walk(router.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		route = strings.TrimSuffix(strings.ReplaceAll(route, "/*/", "/"), "/")
