@@ -37,27 +37,31 @@ type Operation struct {
 	CreatedAt time.Time  `json:"createdAt"`
 }
 
-func operations(ctx context.Context, pool *pgxpool.Pool, where string, args ...any) ([]Operation, error) {
+// operations lists the first operations matching where, most urgent and oldest first, and
+// how many match in all.
+func operations(ctx context.Context, pool *pgxpool.Pool, where string, args ...any) ([]Operation, int, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT o.id, g.id, o.type, `+holder+`, coalesce(e.full_name, g.account), t.name, l.name, o.status, o.attempts, o.last_error,
 		       CASE WHEN o.status = 'FAILED' THEN o.completed_at END,
-		       o.version, o.created_at
+		       o.version, o.created_at, count(*) OVER ()
 		FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
-		WHERE `+where+` ORDER BY o.priority, o.created_at LIMIT 200`, args...) // shortcut: first 200 only; page when more fail at once
+		WHERE `+where+` ORDER BY o.priority, o.created_at, o.id LIMIT 200`, args...) // shortcut: first 200, with the total; each resolved one makes room
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Operation, error) {
+	total := 0
+	ops, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Operation, error) {
 		var o Operation
 		return o, row.Scan(&o.ID, &o.GrantID, &o.Type, &o.Employee.ID, &o.Employee.FullName, &o.Tool, &o.Level, &o.Status,
-			&o.Attempts, &o.LastError, &o.FailedAt, &o.Version, &o.CreatedAt)
+			&o.Attempts, &o.LastError, &o.FailedAt, &o.Version, &o.CreatedAt, &total)
 	})
+	return ops, total, err
 }
 
 // FailedOperations lists the operations waiting for a manual retry (O3). The caller checks
 // who may read Exceptions.
-func FailedOperations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+func FailedOperations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, int, error) {
 	return operations(ctx, pool, "o.status = 'FAILED'")
 }
 
@@ -65,7 +69,7 @@ func FailedOperations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, err
 // SUSPEND has failed at least once: from that attempt until the suspension is verified or
 // confirmed, whether it is retrying, waiting for a manual retry or reworked as a task (D7).
 // The caller checks who may read them.
-func SuspensionGaps(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+func SuspensionGaps(ctx context.Context, pool *pgxpool.Pool) ([]Operation, int, error) {
 	return operations(ctx, pool, `o.type = 'SUSPEND' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND o.last_error IS NOT NULL
 		AND e.status = 'SUSPENDED'`)
 }
@@ -86,23 +90,25 @@ type Overlap struct {
 
 // Overlaps lists the D4 overlaps: an ACTIVE grant replacing one whose open removal has
 // failed at least once, whatever the removal's reason. The caller checks who may read them.
-func Overlaps(ctx context.Context, pool *pgxpool.Pool) ([]Overlap, error) {
+func Overlaps(ctx context.Context, pool *pgxpool.Pool) ([]Overlap, int, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT e.id, e.full_name, t.name, g.id, ol.name, n.id, nl.name, o.id, o.status, o.last_error
+		SELECT e.id, e.full_name, t.name, g.id, ol.name, n.id, nl.name, o.id, o.status, o.last_error, count(*) OVER ()
 		FROM grants n JOIN grants g ON g.id = n.replaces_grant_id
 		JOIN operations o ON o.grant_id = g.id AND o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
 		JOIN employees e ON e.id = g.employee_id JOIN tools t ON t.id = g.tool_id
 		JOIN access_levels ol ON ol.id = g.access_level_id JOIN access_levels nl ON nl.id = n.access_level_id
 		WHERE n.status = 'ACTIVE' AND o.last_error IS NOT NULL
-		ORDER BY o.created_at LIMIT 200`) // shortcut: first 200 only, as FailedOperations
+		ORDER BY o.created_at, o.id LIMIT 200`) // shortcut: first 200, with the total, as FailedOperations
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Overlap, error) {
+	total := 0
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Overlap, error) {
 		var o Overlap
 		return o, row.Scan(&o.Employee.ID, &o.Employee.FullName, &o.Tool, &o.OldGrantID, &o.OldLevel, &o.NewGrantID, &o.NewLevel,
-			&o.OperationID, &o.Status, &o.LastError)
+			&o.OperationID, &o.Status, &o.LastError, &total)
 	})
+	return list, total, err
 }
 
 // Retry starts a new round of attempts for a FAILED operation with the same operation ID.
@@ -138,11 +144,13 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 			Scan(&typ, &status, &current); err != nil {
 			return err
 		}
-		if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		if p, err := CurrentActor(ctx, tx, actor); err != nil {
 			return err
+		} else if !isMember && !p.HasRole("SUPER_ADMIN") { // removed while the request waited
+			return platform.ErrForbidden
 		}
-		var employeeStatus string
-		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", employee).Scan(&employeeStatus); err != nil {
+		var employeeStatus string // an orphan account's grant has no employee
+		if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1", employee).Scan(&employeeStatus); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		switch {
@@ -180,7 +188,7 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 	if err != nil {
 		return Operation{}, err
 	}
-	ops, err := operations(ctx, s.pool, "o.id = $1", id)
+	ops, _, err := operations(ctx, s.pool, "o.id = $1", id)
 	if err != nil || len(ops) == 0 {
 		return Operation{}, err
 	}
@@ -189,13 +197,13 @@ func (s *Service) Retry(ctx context.Context, actor auth.Principal, id uuid.UUID,
 
 // StaleGrants are the open removals of grants that activated after their transfer removal
 // was requested (D5): listed until verified or confirmed. The caller checks who may read them.
-func StaleGrants(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+func StaleGrants(ctx context.Context, pool *pgxpool.Pool) ([]Operation, int, error) {
 	return operations(ctx, pool, `o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND g.stale_at IS NOT NULL`)
 }
 
 // SecurityRevocations are the open removals of terminated employees (D7, O7), the only
 // priority-0 removals: listed until verified or confirmed, even after a rehire. The caller
 // checks who may read them.
-func SecurityRevocations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, error) {
+func SecurityRevocations(ctx context.Context, pool *pgxpool.Pool) ([]Operation, int, error) {
 	return operations(ctx, pool, `o.type = 'REVOKE' AND o.status IN ('PENDING', 'IN_PROGRESS', 'FAILED') AND o.priority = 0`)
 }

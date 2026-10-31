@@ -79,12 +79,15 @@ const task = (over: Record<string, unknown> = {}) => ({
   canAct: true, version: 1, createdAt: "2026-10-28T09:00:00Z", ...over,
 });
 const member = principal({ adminGroups: [{ id: "g1", name: "IT" }] });
+/** GET /fulfillment-tasks: one page of the server's tab, with counts over the whole queue (PERF-004). */
+const taskPage = (tasks: ReturnType<typeof task>[], total = tasks.length) => ({ tasks, total, page: 1, pageSize: 100,
+  counts: { queue: tasks.filter((t) => t.status === "PENDING").length, mine: 0, others: 0, canAct: tasks.length } });
 
 describe("fulfillment tasks", () => {
   it("claims, records the vendor ticket and confirms, each with the latest version", async () => {
     let current = task();
     const calls = fakeServer({
-      "GET /fulfillment-tasks": () => ({ body: { tasks: [current] } }),
+      "GET /fulfillment-tasks": () => ({ body: taskPage([current]) }),
       "POST /fulfillment-tasks/op1/claim": () => { current = task({ status: "IN_PROGRESS", claimedBy: person("e1", "Elif Yılmaz"), version: 2 }); return { body: current }; },
       "POST /fulfillment-tasks/op1/ticket": () => { current = task({ status: "IN_PROGRESS", claimedBy: person("e1", "Elif Yılmaz"), ticketRef: "FG-1", version: 3 }); return { body: current }; },
       "POST /fulfillment-tasks/op1/confirm": () => ({ body: task({ status: "SUCCEEDED", version: 4 }) }),
@@ -103,16 +106,24 @@ describe("fulfillment tasks", () => {
   });
 
   it("explains why one's own task cannot be claimed", async () => {
-    fakeServer({ "GET /fulfillment-tasks": { tasks: [task({ canAct: false })] } });
+    fakeServer({ "GET /fulfillment-tasks": taskPage([task({ canAct: false })]) });
     renderPage(<TasksPage />, { session: member as never });
     await userEvent.click(await screen.findByText("Deniz Kara"));
     expect(screen.getByText("Bu görevi üstlenemezsiniz")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Görevi üstlen" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("pages through a long queue on the server (PERF-004)", async () => {
+    const calls = fakeServer({ "GET /fulfillment-tasks": taskPage([task()], 250) });
+    renderPage(<TasksPage />, { session: member as never });
+    expect(await screen.findByText("1–100 / 250")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Sonraki" }));
+    await waitFor(() => expect(calls.some((c) => c.path === "/fulfillment-tasks?tab=queue&page=2")).toBe(true));
+  });
+
   it("reports a failure with a reason", async () => {
     const mine = task({ method: "MANUAL", status: "IN_PROGRESS", claimedBy: person("e1", "Elif Yılmaz"), version: 5 });
-    const calls = fakeServer({ "GET /fulfillment-tasks": { tasks: [mine] }, "POST /fulfillment-tasks/op1/fail": task({ status: "FAILED" }) });
+    const calls = fakeServer({ "GET /fulfillment-tasks": taskPage([mine]), "POST /fulfillment-tasks/op1/fail": task({ status: "FAILED" }) });
     renderPage(<TasksPage />, { session: member as never });
     await userEvent.click(await screen.findByRole("tab", { name: /Üzerimdekiler/ }));
     await userEvent.click(await screen.findByText("Deniz Kara"));
@@ -123,10 +134,13 @@ describe("fulfillment tasks", () => {
   });
 });
 
+const report = { id: "e2", fullName: "Deniz Kara", department: "Ürün", jobTitle: "Analist", active: 1, expiringSoon: 0 };
+/** GET /access/team: one page of direct reports, their access counted on the server (PERF-004). */
+const teamPage = (members: typeof report[], total = members.length) => ({ members, total, page: 1, pageSize: 100 });
+
 describe("team", () => {
   it("offers only a request on the report's behalf, no starter-package shortcut", async () => {
-    const report = { id: "e2", email: "d@x.co", fullName: "Deniz Kara", department: "Ürün", jobTitle: "Analist", managerId: "e1" };
-    fakeServer({ "GET /employees": { employees: [report] }, "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] }, "GET /access/team": { grants: [] } });
+    fakeServer({ "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] }, "GET /access/team": teamPage([report]), "GET /access/team/e2": { grants: [] } });
     renderPage(<TeamPage />);
     await userEvent.click(await screen.findByText("Deniz Kara"));
     expect(screen.queryByRole("button", { name: /Başlangıç paketi/ })).toBeNull();
@@ -135,10 +149,9 @@ describe("team", () => {
   });
 
   it("shows reports' access and removes a grant with its version", async () => {
-    const report = { id: "e2", email: "d@x.co", fullName: "Deniz Kara", department: "Ürün", jobTitle: "Analist", managerId: "e1" };
     const calls = fakeServer({
-      "GET /employees": { employees: [report] }, "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] },
-      "GET /access/team": { grants: [grant({ employee: person("e2", "Deniz Kara"), version: 9 })] },
+      "GET /tools": { tools: [] }, "GET /approvals": { approvals: [] }, "GET /access/team": teamPage([report]),
+      "GET /access/team/e2": { grants: [grant({ employee: person("e2", "Deniz Kara"), version: 9 })] },
       "POST /grants/g1/revoke": grant({ status: "REVOCATION_REQUESTED" }),
     });
     renderPage(<TeamPage />);

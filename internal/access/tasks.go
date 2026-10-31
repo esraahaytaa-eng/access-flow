@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
 
@@ -71,17 +73,20 @@ type Task struct {
 	CreatedAt     time.Time  `json:"createdAt"`
 }
 
-// tasks lists the Manual and Vendor operations matching where; $1 is the actor.
-func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, args ...any) ([]Task, error) {
+// taskFrom joins an operation to what a task shows.
+const taskFrom = ` FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id
+		JOIN tools t ON t.id = g.tool_id JOIN admin_groups ag ON ag.id = t.admin_group_id
+		JOIN access_levels l ON l.id = g.access_level_id LEFT JOIN request_items i ON i.id = g.request_item_id
+		LEFT JOIN employees c ON c.id = o.claimed_by`
+
+// tasks lists a page of the Manual and Vendor operations matching where, ordered by a unique
+// key; $1 is the actor.
+func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, limit, offset int, args ...any) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT o.id, g.id, o.type, o.status, g.method, ag.id, ag.name, t.id, t.name, l.id, l.name, `+holder+`,
 		       coalesce(e.full_name, g.account), coalesce(g.account, e.email), i.request_id, i.id, o.ticket_ref, c.id, c.full_name,
-		       g.employee_id IS DISTINCT FROM $1 AND NOT `+initiates("$1")+`, o.version, o.created_at
-		FROM operations o JOIN grants g ON g.id = o.grant_id LEFT JOIN employees e ON e.id = g.employee_id
-		JOIN tools t ON t.id = g.tool_id JOIN admin_groups ag ON ag.id = t.admin_group_id
-		JOIN access_levels l ON l.id = g.access_level_id LEFT JOIN request_items i ON i.id = g.request_item_id
-		LEFT JOIN employees c ON c.id = o.claimed_by
-		WHERE g.method <> 'API' AND `+where+` ORDER BY o.priority, o.created_at, o.id LIMIT 200`, // shortcut: first 200 only; page when a group falls further behind
+		       `+canAct+`, o.version, o.created_at`+taskFrom+`
+		WHERE g.method <> 'API' AND `+where+` ORDER BY o.priority, o.created_at, o.id LIMIT `+strconv.Itoa(limit)+` OFFSET `+strconv.Itoa(offset),
 		append([]any{actor}, args...)...)
 	if err != nil {
 		return nil, err
@@ -100,12 +105,57 @@ func (s *Service) tasks(ctx context.Context, actor uuid.UUID, where string, args
 	})
 }
 
-// Tasks is the actor's Fulfillment Tasks queue: the open tasks of their admin groups,
-// by priority (A6: leavers' removals, then other removals and suspensions, then grants and
-// resumes), then oldest first. A task is listed once every older task of the same grant has
-// ended (waitsForEarlier).
-func (s *Service) Tasks(ctx context.Context, actor auth.Principal) ([]Task, error) {
-	return s.tasks(ctx, actor.EmployeeID, "o.status IN ('PENDING', 'IN_PROGRESS') AND "+member("$1")+" AND NOT "+waitsForEarlier)
+// canAct: never on the actor's own grant (F2) or a direct action they initiated (D1).
+var canAct = "g.employee_id IS DISTINCT FROM $1 AND NOT " + initiates("$1")
+
+// TaskPage is one page of the actor's queue in one tab, with every tab's count (PERF-004).
+type TaskPage struct {
+	Tasks    []Task     `json:"tasks"`
+	Total    int        `json:"total"` // in the tab, matching the search
+	Page     int        `json:"page"`
+	PageSize int        `json:"pageSize"`
+	Counts   TaskCounts `json:"counts"`
+}
+
+// TaskCounts are over the actor's whole queue, whatever the search.
+type TaskCounts struct {
+	Queue  int `json:"queue"`
+	Mine   int `json:"mine"`
+	Others int `json:"others"`
+	CanAct int `json:"canAct"`
+}
+
+// taskTabs: the queue is unclaimed; claimed tasks are the actor's or another member's. No tab: all.
+var taskTabs = map[string]string{"": "true", "queue": "o.status = 'PENDING'",
+	"mine": "o.status <> 'PENDING' AND o.claimed_by = $1", "others": "o.status <> 'PENDING' AND o.claimed_by IS DISTINCT FROM $1"}
+
+var errInvalidTab = platform.ValidationError("tab", "invalid_tab")
+
+// Tasks is one page of the actor's Fulfillment Tasks queue: the open tasks of their admin
+// groups, by priority (A6: leavers' removals, then other removals and suspensions, then
+// grants and resumes), then oldest first. A task is listed once every older task of the same
+// grant has ended (waitsForEarlier). search matches the person or account and the tool.
+func (s *Service) Tasks(ctx context.Context, actor auth.Principal, tab, search string, page, offset int) (TaskPage, error) {
+	out := TaskPage{Page: page, PageSize: platform.PageSize, Tasks: []Task{}}
+	cond, ok := taskTabs[tab]
+	if !ok {
+		return out, errInvalidTab
+	}
+	var like *string
+	if t := strings.TrimSpace(search); t != "" {
+		like = new(explorer.Like(t))
+	}
+	queue := "o.status IN ('PENDING', 'IN_PROGRESS') AND " + member("$1") + " AND NOT " + waitsForEarlier
+	matches := "($2::text IS NULL OR (coalesce(e.full_name, g.account) || ' ' || t.name) ILIKE $2)"
+	c := &out.Counts
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE `+taskTabs["queue"]+`), count(*) FILTER (WHERE `+taskTabs["mine"]+`),
+			count(*) FILTER (WHERE `+taskTabs["others"]+`), count(*) FILTER (WHERE `+canAct+`), count(*) FILTER (WHERE `+cond+` AND `+matches+`)`+taskFrom+`
+		WHERE g.method <> 'API' AND `+queue, actor.EmployeeID, like).Scan(&c.Queue, &c.Mine, &c.Others, &c.CanAct, &out.Total); err != nil {
+		return out, err
+	}
+	var err error
+	out.Tasks, err = s.tasks(ctx, actor.EmployeeID, queue+" AND "+cond+" AND "+matches, platform.PageSize, offset, like)
+	return out, err
 }
 
 // lockedTask is a task locked for an action, with what the actions decide on.
@@ -162,16 +212,27 @@ func (s *Service) taskAction(ctx context.Context, actor auth.Principal, id uuid.
 	if err != nil {
 		return Task{}, err
 	}
-	ts, err := s.tasks(ctx, actor.EmployeeID, "o.id = $2", id)
+	ts, err := s.tasks(ctx, actor.EmployeeID, "o.id = $2", 1, 0, id)
 	if err != nil || len(ts) == 0 {
 		return Task{}, err
 	}
 	return ts[0], nil
 }
 
-// stillActive re-checks the actor under the caller's locks: the session was checked before
+// CurrentActor is StillActive for an action that needs a role: after the actor's lock it
+// re-reads their open roles, so a role removed while the request waited (RemoveRole locks
+// the employee) no longer counts. The session check read the roles before any lock.
+func CurrentActor(ctx context.Context, tx pgx.Tx, actor auth.Principal) (auth.Principal, error) {
+	if err := StillActive(ctx, tx, actor.EmployeeID); err != nil {
+		return actor, err
+	}
+	err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT role FROM role_assignments WHERE employee_id = $1 AND valid_to IS NULL ORDER BY role)`,
+		actor.EmployeeID).Scan(&actor.Roles)
+	return actor, err
+}
+
+// StillActive re-checks the actor under the caller's locks: the session was checked before
 // them, and a suspension or termination committing meanwhile ends their authority (D7).
-// StillActive re-checks the actor under the caller's locks (D7).
 func StillActive(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
 	var status string
 	if err := tx.QueryRow(ctx, "SELECT status FROM employees WHERE id = $1 FOR SHARE", actor).Scan(&status); err != nil {
@@ -226,7 +287,7 @@ func (s *Service) Claim(ctx context.Context, actor auth.Principal, id uuid.UUID,
 		if t.typ == "GRANT" && t.fresh {
 			// shortcut: the tool's FOR SHARE comes after the employee's lock, the reverse of catalog
 			// UpdateTool (tool, then the new owner), as in Submit; making the beneficiary the tool's
-			// owner during this claim can deadlock, which PostgreSQL resolves by failing one (a 500).
+			// owner during this claim can deadlock; PostgreSQL aborts one and platform.InTx retries it.
 			cancelled, err := cancelIfRetired(ctx, tx, now, &actor.EmployeeID, t.grant, t.employee)
 			if err != nil || cancelled {
 				retired = cancelled

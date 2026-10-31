@@ -36,7 +36,7 @@ func person(id *uuid.UUID, name *string) *Person {
 	return &Person{*id, *name}
 }
 
-// MaxEvents bounds one event search; the response says when more matched.
+// MaxEvents bounds the override and policy reports.
 const MaxEvents = 1000
 
 type Event struct {
@@ -54,23 +54,42 @@ type Event struct {
 type EventFilter struct {
 	Actions  []string
 	Actor    *uuid.UUID
+	Tool     *uuid.UUID
 	From, To *time.Time // dates in the company timezone, both days included
 	Text     string
 }
 
-// Events searches the audit log in the actor's scope, newest first.
-func (s *Service) Events(ctx context.Context, actor auth.Principal, f EventFilter) (events []Event, truncated bool, err error) {
+// toolEvents matches the events about one tool: the tool, its levels, and the requests,
+// request items, approval steps, grants, operations and review items for it. Its eight
+// "?" all take the tool id.
+const toolEvents = `((e.entity_type = 'tool' AND e.entity_id = ?)
+	OR (e.entity_type = 'access_level' AND EXISTS (SELECT 1 FROM access_levels x WHERE x.id = e.entity_id AND x.tool_id = ?))
+	OR (e.entity_type = 'request' AND EXISTS (SELECT 1 FROM request_items x WHERE x.request_id = e.entity_id AND x.tool_id = ?))
+	OR (e.entity_type = 'request_item' AND EXISTS (SELECT 1 FROM request_items x WHERE x.id = e.entity_id AND x.tool_id = ?))
+	OR (e.entity_type = 'approval_step' AND EXISTS (SELECT 1 FROM approval_steps st JOIN request_items x ON x.id = st.item_id
+		WHERE st.id = e.entity_id AND x.tool_id = ?))
+	OR (e.entity_type = 'grant' AND EXISTS (SELECT 1 FROM grants x WHERE x.id = e.entity_id AND x.tool_id = ?))
+	OR (e.entity_type = 'operation' AND EXISTS (SELECT 1 FROM operations o JOIN grants x ON x.id = o.grant_id
+		WHERE o.id = e.entity_id AND x.tool_id = ?))
+	OR (e.entity_type = 'review_item' AND EXISTS (SELECT 1 FROM review_items ri JOIN grants x ON x.id = ri.grant_id
+		WHERE ri.id = e.entity_id AND x.tool_id = ?)))`
+
+// eventWhere is the actor's scope and f as conditions on audit_events e.
+func (s *Service) eventWhere(ctx context.Context, actor auth.Principal, f EventFilter) (Where, error) {
+	var w Where
 	scope, err := ScopeOf(ctx, s.pool, actor)
 	if err != nil {
-		return nil, false, err
+		return w, err
 	}
-	var w Where
 	scope.Restrict(&w, "e.subject_employee_id")
 	if len(f.Actions) > 0 {
 		w.Add("e.action = ANY(?)", f.Actions)
 	}
 	if f.Actor != nil {
 		w.Add("e.actor_id = ?", *f.Actor)
+	}
+	if t := f.Tool; t != nil {
+		w.Add(toolEvents, *t, *t, *t, *t, *t, *t, *t, *t)
 	}
 	if f.From != nil {
 		w.Add("e.occurred_at >= ?", *f.From)
@@ -82,26 +101,108 @@ func (s *Service) Events(ctx context.Context, actor auth.Principal, f EventFilte
 		w.Add(`(e.action ILIKE ? OR e.reason ILIKE ? OR e.details::text ILIKE ? OR a.full_name ILIKE ? OR s.full_name ILIKE ?)`,
 			Like(f.Text), Like(f.Text), Like(f.Text), Like(f.Text), Like(f.Text))
 	}
-	events, err = s.events(ctx, w, MaxEvents+1)
-	if len(events) > MaxEvents {
-		return events[:MaxEvents], true, err
+	return w, nil
+}
+
+const eventSelect = `SELECT e.id, e.occurred_at, e.actor_id, a.full_name, e.action, e.entity_type, e.entity_id,
+		e.subject_employee_id, s.full_name, e.reason, e.details`
+
+const eventFrom = ` FROM audit_events e LEFT JOIN employees a ON a.id = e.actor_id LEFT JOIN employees s ON s.id = e.subject_employee_id
+		WHERE `
+
+// newestFirst orders by a unique key, so pages are deterministic; new events only push
+// older ones to later pages, never skip them.
+const newestFirst = ` ORDER BY e.occurred_at DESC, e.id DESC`
+
+// Events is one page (platform.PageSize) of the audit log in the actor's scope, newest
+// first, with the total of every matching event.
+func (s *Service) Events(ctx context.Context, actor auth.Principal, f EventFilter, offset int) (events []Event, total int, err error) {
+	w, err := s.eventWhere(ctx, actor, f)
+	if err != nil {
+		return nil, 0, err
 	}
-	return events, false, err
+	page := newestFirst + ` LIMIT ` + strconv.Itoa(platform.PageSize) + ` OFFSET ` + strconv.Itoa(offset)
+	if f.Text != "" {
+		// A text search reads every event anyway, so it counts the matches in the same pass.
+		rows, _ := s.pool.Query(ctx, eventSelect+`, count(*) OVER ()`+eventFrom+w.SQL()+page, w.Args...)
+		events, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) { return scanEvent(row, &total) })
+		return events, total, err
+	}
+	// Otherwise the count is separate (PERF-011): in the page query it made PostgreSQL join and
+	// sort every matching event before cutting the page, instead of walking the time index.
+	// One read-only snapshot keeps the total and the page consistent.
+	err = pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*)`+eventFrom+w.SQL(), w.Args...).Scan(&total); err != nil {
+			return err
+		}
+		rows, _ := tx.Query(ctx, eventSelect+eventFrom+w.SQL()+page, w.Args...)
+		events, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) { return scanEvent(row) })
+		return err
+	})
+	return events, total, err
+}
+
+// EachEvent checks the actor's scope, then returns a function that calls fn for every event
+// matching f, newest first, streamed from one query (one consistent snapshot) for the CSV export.
+func (s *Service) EachEvent(ctx context.Context, actor auth.Principal, f EventFilter) (func(fn func(Event) error) error, error) {
+	w, err := s.eventWhere(ctx, actor, f)
+	if err != nil {
+		return nil, err
+	}
+	return func(fn func(Event) error) error {
+		rows, err := s.pool.Query(ctx, eventSelect+eventFrom+w.SQL()+newestFirst, w.Args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			e, err := scanEvent(rows)
+			if err == nil {
+				err = fn(e)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	}, nil
 }
 
 func (s *Service) events(ctx context.Context, w Where, limit int) ([]Event, error) {
-	rows, _ := s.pool.Query(ctx, `SELECT e.id, e.occurred_at, e.actor_id, a.full_name, e.action, e.entity_type, e.entity_id,
-			e.subject_employee_id, s.full_name, e.reason, e.details
-		FROM audit_events e LEFT JOIN employees a ON a.id = e.actor_id LEFT JOIN employees s ON s.id = e.subject_employee_id
-		WHERE `+w.SQL()+` ORDER BY e.occurred_at DESC, e.id DESC LIMIT `+strconv.Itoa(limit), w.Args...)
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
-		var e Event
-		var actorID, subjectID *uuid.UUID
-		var actorName, subjectName *string
-		err := row.Scan(&e.ID, &e.At, &actorID, &actorName, &e.Action, &e.Entity, &e.EntityID, &subjectID, &subjectName, &e.Reason, &e.Details)
-		e.Actor, e.Subject = person(actorID, actorName), person(subjectID, subjectName)
-		return e, err
-	})
+	rows, _ := s.pool.Query(ctx, eventSelect+eventFrom+w.SQL()+newestFirst+` LIMIT `+strconv.Itoa(limit), w.Args...)
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) { return scanEvent(row) })
+}
+
+// scanEvent reads one eventSelect row, then any extra columns into extra.
+func scanEvent(row pgx.Row, extra ...any) (Event, error) {
+	var e Event
+	var actorID, subjectID *uuid.UUID
+	var actorName, subjectName *string
+	err := row.Scan(append([]any{&e.ID, &e.At, &actorID, &actorName, &e.Action, &e.Entity, &e.EntityID, &subjectID, &subjectName, &e.Reason, &e.Details}, extra...)...)
+	e.Actor, e.Subject = person(actorID, actorName), person(subjectID, subjectName)
+	return e, err
+}
+
+type Tool struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// Filters are the choices of the event filters, without the employee directory: everyone
+// who acted in an event in the actor's scope, and every tool, retired ones included.
+func (s *Service) Filters(ctx context.Context, actor auth.Principal) (actors []Person, tools []Tool, err error) {
+	w, err := s.eventWhere(ctx, actor, EventFilter{})
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, _ := s.pool.Query(ctx, `SELECT a.id, a.full_name FROM employees a WHERE EXISTS (SELECT 1 FROM audit_events e
+		WHERE e.actor_id = a.id AND `+w.SQL()+`) ORDER BY a.full_name, a.id`, w.Args...)
+	if actors, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Person]); err != nil {
+		return nil, nil, err
+	}
+	rows, _ = s.pool.Query(ctx, "SELECT id, name FROM tools ORDER BY lower(name), id")
+	tools, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Tool])
+	return actors, tools, err
 }
 
 type Approver struct {
@@ -137,7 +238,7 @@ type AccessFilter struct {
 // Access is effective access at the instant at (O1, A9): held grants with their state at
 // that instant, and the grants removed in the 30 days before it.
 func (s *Service) Access(ctx context.Context, actor auth.Principal, at time.Time, f AccessFilter) (held, removed []Held, err error) {
-	scope, err := ScopeOf(ctx, s.pool, actor)
+	scope, err := ReportScope(ctx, s.pool, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -230,7 +331,7 @@ func (s *Service) held(ctx context.Context, w Where, at time.Time) ([]Held, erro
 
 // requireFull: the evidence reports are company-wide only (O7, D11).
 func (s *Service) requireFull(ctx context.Context, actor auth.Principal) error {
-	scope, err := ScopeOf(ctx, s.pool, actor)
+	scope, err := ReportScope(ctx, s.pool, actor)
 	if err == nil && !scope.Full {
 		err = platform.ErrForbidden
 	}
@@ -338,6 +439,8 @@ type QuarterCounts struct {
 	AlreadyRemoved int `json:"alreadyRemoved"`
 	AutoRevoked    int `json:"autoRevoked"`
 	OpenFindings   int `json:"openFindings"` // carried over to the next quarter
+	// CarriedFindings are earlier campaigns' findings still open; not part of Total.
+	CarriedFindings int `json:"carriedFindings"`
 }
 
 type ReviewRow struct {
@@ -352,6 +455,7 @@ type ReviewRow struct {
 	Late         bool       `json:"late"`
 	ClosedReason *string    `json:"closedReason"`
 	Finding      bool       `json:"finding"`
+	CarriedOver  bool       `json:"carriedOver"` // an open finding from an earlier campaign
 }
 
 type Quarter struct {
@@ -379,14 +483,20 @@ func (s *Service) LatestQuarter(ctx context.Context, actor auth.Principal) (Quar
 	}
 	q.Campaign = &c
 	rows, _ := s.pool.Query(ctx, `SELECT coalesce(e.full_name, g.account), t.name, l.name, r.full_name, i.decision, d.full_name, i.decided_at,
-			i.decision_reason, i.late, i.closed_reason, i.finding_at IS NOT NULL AND i.decision IS NULL AND i.closed_reason IS NULL
+			i.decision_reason, i.late, i.closed_reason, i.finding_at IS NOT NULL AND i.decision IS NULL AND i.closed_reason IS NULL,
+			i.campaign_id <> $1
 		FROM review_items i JOIN grants g ON g.id = i.grant_id JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
 		LEFT JOIN employees e ON e.id = g.employee_id LEFT JOIN employees r ON r.id = i.reviewer_id LEFT JOIN employees d ON d.id = i.decided_by
-		WHERE i.campaign_id = $1 ORDER BY 1, 2, 3`, c.ID)
+		WHERE i.campaign_id = $1 OR i.finding_at IS NOT NULL AND i.decision IS NULL AND i.closed_reason IS NULL
+		ORDER BY 1, 2, 3`, c.ID)
 	if q.Items, err = pgx.CollectRows(rows, pgx.RowToStructByPos[ReviewRow]); err != nil {
 		return q, err
 	}
 	for _, it := range q.Items {
+		if it.CarriedOver {
+			q.Counts.CarriedFindings++
+			continue
+		}
 		q.Counts.Total++
 		switch {
 		case it.Decision != nil && *it.Decision == "KEEP":

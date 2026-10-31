@@ -152,6 +152,20 @@ func TestOverrideNotifiesTheBypassedAssignee(t *testing.T) {
 	}
 }
 
+// A manager who is also InfoSec is told once about an override of their step, not once per role.
+func TestOverrideNotifiesEachPersonOnce(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.exec("INSERT INTO role_assignments (employee_id, role, valid_from) VALUES ($1, 'INFOSEC', now())", w.mgr.ID)
+	s := open(t, items(w.mustSubmit(w.dev.c, body(nil, item(w.awsAdmin))))[0])
+	testutil.RequireStatus(t, decide(w.admin.c, s, "override", map[string]any{"reason": "manager unreachable"}), http.StatusOK, "")
+	for _, p := range []person{w.mgr, w.is1} {
+		if n := w.count("SELECT count(*) FROM notifications WHERE recipient_id = $1 AND kind = 'SUPER_ADMIN_OVERRIDE'", p.ID); n != 1 {
+			t.Errorf("notifications to %s = %d; want 1", p.Email, n)
+		}
+	}
+}
+
 func TestOverrideCannotReverseARejection(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)

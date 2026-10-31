@@ -1,7 +1,7 @@
 import { screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { employee, item, person, step } from "../test/fixtures";
+import { employee, grant, item, person, step } from "../test/fixtures";
 import { currentPath, renderPage } from "../test/render";
 import { fakeServer, principal } from "../test/server";
 import { addDays, todayIn } from "../ui/format";
@@ -17,26 +17,44 @@ const sa = principal({ employee: { id: "sa", email: "sa@x.co", fullName: "Okan A
 const auditor = principal({ employee: { id: "au", email: "au@x.co", fullName: "Gizem Denetçi", roles: ["AUDITOR"] } }) as never;
 const dialog = (name: string) => within(screen.getByRole("dialog", { name }));
 const op = (over: Record<string, unknown> = {}) => ({ id: "op1", grantId: "g1", type: "REVOKE", employee: person("e2", "Deniz Kara"), tool: "Jira", level: "Kullanıcı", status: "FAILED", attempts: 3, lastError: "timeout", failedAt: "2026-10-28T09:00:00Z", version: 4, createdAt: "2026-10-28T08:00:00Z", ...over });
-const noExceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [], reviewFindings: [], orphanAccounts: [] };
+const noExceptions = { failedOperations: [], unroutableSteps: [], overlaps: [], suspensionGaps: [], securityRevocations: [], staleGrants: [], reviewFindings: [], reviewFindingsTotal: 0, orphanAccounts: [], totals: { failedOperations: 0, unroutableSteps: 0, overlaps: 0, suspensionGaps: 0, securityRevocations: 0, staleGrants: 0, orphanAccounts: 0 } };
 const people = [employee({ id: "o1", fullName: "Can Owner", roles: [] }), employee({ id: "is1", fullName: "Deniz Güvenlik", roles: ["INFOSEC"] }), employee({ id: "sa", fullName: "Okan Admin", roles: ["SUPER_ADMIN"] })];
 const base = { "GET /employees": { employees: people }, "GET /admin-groups": { groups: [{ id: "grp1", name: "IT", memberIds: ["o1"] }] }, "GET /approvals": { approvals: [] } };
 const jiraAdmin = { id: "t1", name: "Jira", fulfillmentMethod: "API", owner: person("o1", "Can Owner"), adminGroup: { id: "grp1", name: "IT" }, status: "ACTIVE", version: 2,
   levels: [{ id: "l1", name: "Kullanıcı", steps: ["MANAGER"], status: "ACTIVE", version: 1, requestable: true, recommended: false }] };
 
 describe("exceptions", () => {
+  it("counts every open record of a capped list and says only the first are listed", async () => {
+    fakeServer({ ...base, "GET /exceptions": { ...noExceptions, failedOperations: [op()], totals: { ...noExceptions.totals, failedOperations: 230 } } });
+    renderPage(<ExceptionsPage />, { session: sa });
+    expect(await screen.findByRole("button", { name: "Tümü (230)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "İşlem hataları (230)" })).toBeTruthy();
+    expect(screen.getByText(/Başarısız işlem: ilk 1 \/ 230/)).toBeTruthy();
+  });
+
   it("retries a failed removal with the operation version", async () => {
     const calls = fakeServer({ ...base, "GET /exceptions": { ...noExceptions, failedOperations: [op()] }, "POST /operations/op1/retry": op({ status: "PENDING" }) });
     renderPage(<ExceptionsPage />, { session: sa });
-    expect(await screen.findByText("timeout · 3 deneme")).toBeTruthy();
+    expect(await screen.findByText("Araç çağrısı başarısız oldu · 3 deneme")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Yeniden dene" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ version: 4 }));
+  });
+
+  it("explains a failed tool call in Turkish and keeps the raw error as a secondary detail (BUG-A-01)", async () => {
+    const raw = 'Post "http://mocktools:8081/api/v1/permissions": dial tcp 172.18.0.3:8081: connect: connection refused';
+    fakeServer({ ...base, "GET /exceptions": { ...noExceptions, failedOperations: [op({ attempts: 5, lastError: raw }),
+      op({ id: "op2", attempts: 0, lastError: "Hesap tedarikçide bulunamadı" })] } });
+    renderPage(<ExceptionsPage />, { session: sa });
+    expect(await screen.findByText("Araç çağrısı başarısız oldu · 5 deneme")).toBeTruthy();
+    expect(screen.getByText(raw).closest("details")).toBeTruthy();
+    expect(screen.getByText("Hesap tedarikçide bulunamadı").closest("details")).toBeNull(); // a person's reason is shown as written
   });
 
   it("offers retry to InfoSec only for tools their admin group runs", async () => {
     const infosec = (groups: unknown[]) => principal({ employee: { id: "is1", email: "is@x.co", fullName: "Deniz Güvenlik", roles: ["INFOSEC"] }, adminGroups: groups }) as never;
     fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "GET /exceptions": { ...noExceptions, failedOperations: [op()] } });
     const { unmount } = renderPage(<ExceptionsPage />, { session: infosec([]) });
-    expect(await screen.findByText("timeout · 3 deneme")).toBeTruthy();
+    expect(await screen.findByText("Araç çağrısı başarısız oldu · 3 deneme")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Yeniden dene" })).toBeNull();
     unmount();
     renderPage(<ExceptionsPage />, { session: infosec([{ id: "grp1", name: "IT" }]) });
@@ -55,6 +73,15 @@ describe("exceptions", () => {
     fakeServer({ ...base, "GET /exceptions": { ...noExceptions, unroutableSteps: [{ step: step({ type: "INFOSEC", assigneeId: null, assigneeName: null }), item: item(), unroutable: true }] } });
     renderPage(<ExceptionsPage />, { session: sa });
     expect(await screen.findByText("Uygun onaylayıcı yok")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Yeniden ata veya geçersiz kıl" })).toBeTruthy();
+  });
+
+  it("explains the way out instead of an action when the caller is a party to the request (BUG-A-03)", async () => {
+    fakeServer({ ...base, "GET /exceptions": { ...noExceptions, unroutableSteps: [{ step: step({ type: "INFOSEC", assigneeId: null, assigneeName: null }), item: item(), unroutable: true, party: "submitter" }] } });
+    renderPage(<ExceptionsPage />, { session: sa });
+    expect(await screen.findByText(/talebi siz gönderdiğiniz için/)).toBeTruthy();
+    expect(screen.getByText(/talebe taraf olmayan bir Süper Yönetici veya Bilgi Güvenliği üyesi/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Yeniden ata veya geçersiz kıl" })).toBeNull();
   });
 });
 
@@ -140,6 +167,17 @@ describe("tool administration after a failed save", () => {
 });
 
 describe("direct grant", () => {
+  it("offers direct removal only for grants not already being removed", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [] }, "GET /employees/o1/grants": { grants: [
+      grant({ id: "g1", tool: "Jira" }), grant({ id: "g2", tool: "Figma", status: "REVOCATION_FAILED" }), grant({ id: "g3", tool: "Slack", status: "REVOCATION_REQUESTED" })] } });
+    renderPage(<DirectGrantPage />, { session: sa });
+    await userEvent.click(await screen.findByRole("tab", { name: "Erişimi kaldır" }));
+    await screen.findByRole("option", { name: /Can Owner/ });
+    await userEvent.selectOptions(screen.getByLabelText(/Çalışan/), "o1");
+    expect(await screen.findByText("Jira")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Kaldır" })).toHaveLength(1);
+  });
+
   it("grants for at most 90 days counting today and opens the request", async () => {
     const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "POST /direct-grants": () => ({ status: 201, body: { id: "r5", items: [] } }) });
     renderPage(<DirectGrantPage />, { session: sa });
@@ -168,7 +206,7 @@ describe("settings", () => {
     const d = dialog("Rol ata");
     await userEvent.selectOptions(d.getByLabelText(/Kişi/), "o1");
     await userEvent.selectOptions(d.getByLabelText(/^Rol/), "AUDITOR");
-    expect(d.getByText(/salt okunurdur/)).toBeTruthy();
+    expect(d.getByText(/yalnızca denetim kayıtlarını/)).toBeTruthy();
     await userEvent.click(d.getByRole("button", { name: "Ata" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ role: "AUDITOR" }));
   });

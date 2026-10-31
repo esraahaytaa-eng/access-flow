@@ -17,7 +17,7 @@ import (
 
 // Scope is what the actor may see in the Audit Explorer (O7, approved 2026-10-28).
 type Scope struct {
-	Full      bool        // Super Admin, InfoSec, Auditor: company-wide
+	Full      bool        // Super Admin, InfoSec, Auditor (audit events only): company-wide
 	Employees []uuid.UUID // otherwise a Manager's current direct and indirect reports
 }
 
@@ -40,6 +40,15 @@ func ScopeOf(ctx context.Context, pool *pgxpool.Pool, actor auth.Principal) (Sco
 		return Scope{}, platform.ErrForbidden
 	}
 	return Scope{Employees: ids}, nil
+}
+
+// ReportScope is ScopeOf for point-in-time access, approval evidence and the reports: an
+// Auditor reads only the audit events, whatever other roles they hold (O7 note 2026-10-31).
+func ReportScope(ctx context.Context, pool *pgxpool.Pool, actor auth.Principal) (Scope, error) {
+	if actor.HasRole("AUDITOR") {
+		return Scope{}, platform.ErrForbidden
+	}
+	return ScopeOf(ctx, pool, actor)
 }
 
 // Restrict limits w to rows whose employee column col is in the scope.

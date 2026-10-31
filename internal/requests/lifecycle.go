@@ -26,7 +26,7 @@ import (
 // steps are re-routed to. An
 // approval locks its item before its audit insert takes the approver's key lock, so the
 // items come before the person.
-// shortcut: these can still deadlock with the action (PostgreSQL fails one, a 500; see README):
+// shortcut: these can still deadlock with the action (PostgreSQL aborts one, platform.InTx retries it):
 // an approval by the person on another item of a beneficiary whose item names the person; the
 // person, or someone a step is re-routed to, acting on another employee's grant or record; a
 // tool change making the person its owner during reactivation.
@@ -34,7 +34,7 @@ import (
 // lockFor takes the item and beneficiary locks of an action on employee.
 func lockFor(ctx context.Context, tx pgx.Tx, employee uuid.UUID) error {
 	// shortcut: an item submitted after this lock and decided before the person's lock can
-	// deadlock with the action, which PostgreSQL resolves by failing one (a 500), as in M8.
+	// deadlock with the action; PostgreSQL aborts one and platform.InTx retries it.
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM request_items i WHERE i.status = 'PENDING_APPROVAL' AND (i.beneficiary_id = $1
 		OR EXISTS (SELECT 1 FROM approval_steps s WHERE s.item_id = i.id AND s.status = 'PENDING' AND s.assignee_id = $1))
 		ORDER BY i.id FOR UPDATE`, employee); err != nil {

@@ -83,6 +83,7 @@ func TerminateDue(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	for _, id := range due {
 		ran := false
 		err := platform.InTx(ctx, pool, func(tx pgx.Tx, now time.Time) error {
+			ran = false // fn may run again (platform.InTx)
 			if err := people.LockLifecycle(ctx, tx); err != nil {
 				return err
 			}

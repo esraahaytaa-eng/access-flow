@@ -223,8 +223,11 @@ func TestAuditExplorerScope(t *testing.T) {
 			t.Fatalf("%v sees %v", p.Email, all)
 		}
 	}
-	testutil.RequireStatus(t, w.get(auditor.c, "/api/v1/audit/reports/privileged"), http.StatusOK, "")
-	testutil.RequireStatus(t, w.startCampaign(auditor), http.StatusForbidden, "forbidden") // read-only
+	// An Auditor reads the events only: no point-in-time, reports or actions (O7 note 2026-10-31).
+	for _, path := range []string{"/api/v1/audit/access", "/api/v1/audit/requests", "/api/v1/audit/reports/privileged"} {
+		testutil.RequireStatus(t, w.get(auditor.c, path), http.StatusForbidden, "forbidden")
+	}
+	testutil.RequireStatus(t, w.startCampaign(auditor), http.StatusForbidden, "forbidden")
 
 	// A former report drops out of the old manager's scope, history included.
 	w.exec("UPDATE employees SET manager_id = $2 WHERE id = $1", w.dev.ID, w.owner.ID)
@@ -267,11 +270,11 @@ func TestAuditEventFilters(t *testing.T) {
 func TestPrivilegedRolesAtAPastDate(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/employees/"+w.owner.ID.String()+"/roles", map[string]any{"role": "AUDITOR"}),
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/employees/"+w.dev.ID.String()+"/roles", map[string]any{"role": "AUDITOR"}),
 		http.StatusNoContent, "")
-	held := w.timeOf("SELECT valid_from FROM role_assignments WHERE employee_id = $1 AND role = 'AUDITOR'", w.owner.ID)
-	testutil.RequireStatus(t, w.admin.c.Do(http.MethodDelete, "/api/v1/employees/"+w.owner.ID.String()+"/roles/AUDITOR", nil), http.StatusNoContent, "")
-	ended := w.timeOf("SELECT valid_to FROM role_assignments WHERE employee_id = $1 AND role = 'AUDITOR'", w.owner.ID)
+	held := w.timeOf("SELECT valid_from FROM role_assignments WHERE employee_id = $1 AND role = 'AUDITOR'", w.dev.ID)
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodDelete, "/api/v1/employees/"+w.dev.ID.String()+"/roles/AUDITOR", nil), http.StatusNoContent, "")
+	ended := w.timeOf("SELECT valid_to FROM role_assignments WHERE employee_id = $1 AND role = 'AUDITOR'", w.dev.ID)
 
 	auditors := func(at time.Time) []map[string]any {
 		t.Helper()
@@ -289,7 +292,7 @@ func TestPrivilegedRolesAtAPastDate(t *testing.T) {
 		t.Fatalf("before = %v", a)
 	}
 	a := auditors(held)
-	if len(a) != 1 || a[0]["employee"].(map[string]any)["id"] != w.owner.ID.String() || a[0]["grantedBy"].(map[string]any)["id"] != w.admin.ID.String() {
+	if len(a) != 1 || a[0]["employee"].(map[string]any)["id"] != w.dev.ID.String() || a[0]["grantedBy"].(map[string]any)["id"] != w.admin.ID.String() {
 		t.Fatalf("during = %v", a)
 	}
 	if a := auditors(ended); len(a) != 0 {
@@ -308,7 +311,7 @@ func TestEvidenceReports(t *testing.T) {
 	testutil.RequireStatus(t, r, http.StatusCreated, "")
 	report := func(name string) []any {
 		t.Helper()
-		r := w.get(w.auditorOf().c, "/api/v1/audit/reports/"+name)
+		r := w.get(w.is1.c, "/api/v1/audit/reports/"+name)
 		testutil.RequireStatus(t, r, http.StatusOK, "")
 		return r.Body["rows"].([]any)
 	}
@@ -356,7 +359,41 @@ func TestApprovalEvidenceInScope(t *testing.T) {
 	if step["type"] != "MANAGER" || step["status"] != "APPROVED" || step["decidedBy"] != w.mgr.ID.String() {
 		t.Fatalf("approval chain = %v", step)
 	}
-	if r := w.get(w.auditorOf().c, "/api/v1/audit/requests?q=Jira"); len(r.Body["requests"].([]any)) != 2 {
-		t.Fatalf("auditor sees %v", r.Body)
+	if r := w.get(w.is1.c, "/api/v1/audit/requests?q=Jira"); len(r.Body["requests"].([]any)) != 2 {
+		t.Fatalf("InfoSec sees %v", r.Body)
+	}
+}
+
+// Open findings carried over from an earlier campaign stay in the latest evidence until
+// they are resolved (D8 note 2026-10-30), separately from the new campaign's own items.
+func TestQuarterEvidenceListsCarriedOverFindings(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	w.approved(w.jiraViewer)
+	tl.drain(t)
+	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
+	w.age(21)
+	w.sweep()
+	w.sweep()
+	if n := w.count("SELECT count(*) FROM review_items WHERE finding_at IS NOT NULL"); n != 1 {
+		t.Fatalf("findings = %d", n)
+	}
+	testutil.RequireStatus(t, w.startCampaign(w.admin), http.StatusCreated, "")
+
+	r := w.get(w.is1.c, "/api/v1/audit/reports/quarter")
+	testutil.RequireStatus(t, r, http.StatusOK, "")
+	counts := r.Body["counts"].(map[string]any)
+	var carried []map[string]any
+	for _, it := range r.Body["items"].([]any) {
+		if it := it.(map[string]any); it["carriedOver"] == true {
+			carried = append(carried, it)
+		}
+	}
+	if len(carried) != 1 || carried[0]["tool"] != "Jira" || carried[0]["finding"] != true || counts["carriedFindings"] != float64(1) {
+		t.Fatalf("carried = %v, counts = %v", carried, counts)
+	}
+	if counts["total"] != float64(len(r.Body["items"].([]any))-1) {
+		t.Fatalf("total = %v counts the carried finding", counts["total"])
 	}
 }

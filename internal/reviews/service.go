@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/auth"
+	"github.com/esraahaytaa-eng/access-flow/internal/explorer"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
 )
@@ -224,7 +226,7 @@ func decide(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal,
 		JOIN employees e ON e.id = g.employee_id
 		WHERE i.id = $1 FOR UPDATE OF i`, id).Scan(&grant, &employee, &reviewer, &current, &isOpen, &finding, &escalated, &infosec, &flags, &terminated)
 	if err == nil {
-		err = access.StillActive(ctx, tx, actor.EmployeeID)
+		actor, err = access.CurrentActor(ctx, tx, actor) // InfoSec or Super Admin as now committed
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return platform.ErrNotFound
@@ -236,7 +238,7 @@ func decide(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal,
 	switch {
 	case bulk && (code != "" || terminated || !isOpen || version != current || !BulkEligible(infosec, flags)):
 		return errSkip
-	case code == "not_reviewer" && !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN") && !actor.HasRole("AUDITOR"):
+	case code == "not_reviewer" && !actor.HasRole("INFOSEC") && !actor.HasRole("SUPER_ADMIN"):
 		return platform.ErrNotFound // not theirs to see
 	case code != "":
 		return platform.NewError(http.StatusForbidden, code)
@@ -281,14 +283,14 @@ func decide(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal,
 		SubjectID: &employee, Reason: reason, Details: map[string]any{"grantId": grant, "late": finding, "bulk": bulk}})
 }
 
-// BulkKeep keeps every listed item actor may keep in bulk and skips the rest (D8: items
-// requiring InfoSec approval and flagged items are decided individually).
 // Versioned names an item at the version the reviewer saw.
 type Versioned struct {
 	ID      uuid.UUID
 	Version int
 }
 
+// BulkKeep keeps every listed item actor may keep in bulk and skips the rest (D8: items
+// requiring InfoSec approval and flagged items are decided individually).
 func (s *Service) BulkKeep(ctx context.Context, actor auth.Principal, items []Versioned) (kept, skipped int, err error) {
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
 		kept, skipped = 0, 0
@@ -309,20 +311,61 @@ func (s *Service) BulkKeep(ctx context.Context, actor auth.Principal, items []Ve
 	return kept, skipped, err
 }
 
-// Page is the review page: the active campaign and the items actor may see in it, plus the
-// open findings of earlier campaigns (D8).
+// Page is one page of the review page: the active campaign and the items actor may see in
+// it, plus the open findings of earlier campaigns (D8), in one view, with every view's count
+// over all of them (PERF-004: nothing is cut off).
 type Page struct {
 	Campaign *Campaign `json:"campaign"`
 	Items    []Item    `json:"items"`
+	View     string    `json:"view"`  // mine, esc (InfoSec's pool and escalated items), all or findings
+	Total    int       `json:"total"` // items in View matching the search
+	Page     int       `json:"page"`
+	PageSize int       `json:"pageSize"`
+	Counts   Counts    `json:"counts"`
 }
+
+// Counts are over every item the actor sees, whatever the search.
+type Counts struct {
+	Mine     int `json:"mine"`
+	Esc      int `json:"esc"`
+	All      int `json:"all"`
+	Findings int `json:"findings"`
+	Done     int `json:"done"`    // decided or closed
+	Waiting  int `json:"waiting"` // the active campaign's open items
+}
+
+// PageQuery selects the view (empty: the actor's natural one), the search and the page.
+type PageQuery struct {
+	View, Search string
+	Page, Offset int
+}
+
+// The review page's views in SQL, mirroring the UI's mayDecide (D8): $1 actor, $3 the active
+// campaign is escalated, $4 actor is InfoSec, $5 actor is a Super Admin. A Super Admin only
+// revokes, which is still a decision, so it counts for esc.
+const (
+	inRemoval     = "g.status IN ('REVOCATION_REQUESTED', 'REVOCATION_FAILED', 'REVOKED', 'CANCELLED')"
+	decidableBase = open + " AND e.id <> $1 AND NOT " + inRemoval
+	viewMine      = "i.reviewer_id = $1 AND " + decidableBase
+	viewEsc       = "$4 AND i.reviewer_id IS DISTINCT FROM $1 AND " + decidableBase + " AND (i.reviewer_id IS NULL OR $3 OR i.finding_at IS NOT NULL OR $5)"
+	viewFindings  = "i.finding_at IS NOT NULL AND " + open
+	matches       = "($6::text IS NULL OR (e.full_name || ' ' || t.name) ILIKE $6)"
+)
+
+var views = map[string]string{"mine": viewMine, "esc": viewEsc, "all": "true", "findings": viewFindings}
+
+var errInvalidView = platform.ValidationError("view", "invalid_view")
 
 // sees is who sees all items: the review roles; everyone else sees their own.
 func sees(actor auth.Principal) bool {
-	return actor.HasRole("SUPER_ADMIN") || actor.HasRole("INFOSEC") || actor.HasRole("AUDITOR")
+	return actor.HasRole("SUPER_ADMIN") || actor.HasRole("INFOSEC")
 }
 
-func (s *Service) Page(ctx context.Context, actor auth.Principal) (Page, error) {
-	var page Page
+func (s *Service) Page(ctx context.Context, actor auth.Principal, q PageQuery) (Page, error) {
+	page := Page{View: q.View, Page: q.Page, PageSize: platform.PageSize, Items: []Item{}}
+	if _, ok := views[q.View]; q.View != "" && !ok {
+		return page, errInvalidView
+	}
 	c, err := s.campaign(ctx, "c.closed_at IS NULL")
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -335,13 +378,55 @@ func (s *Service) Page(ctx context.Context, actor auth.Principal) (Page, error) 
 	if !sees(actor) {
 		scope = "i.reviewer_id = $1"
 	}
-	page.Items, err = s.items(ctx, scope+" AND (c.closed_at IS NULL OR (i.finding_at IS NOT NULL AND "+open+"))", actor.EmployeeID)
+	// The open campaign's items by id, not by joining on closed_at: the tiny campaigns table is
+	// rarely analyzed, and the join made the planner choose nested loops (PERF-005).
+	var campaign *uuid.UUID
+	if page.Campaign != nil {
+		campaign = &page.Campaign.ID
+	}
+	var search *string
+	if t := strings.TrimSpace(q.Search); t != "" {
+		search = new(explorer.Like(t))
+	}
+	escalated := page.Campaign != nil && page.Campaign.EscalatedAt != nil
+	args := []any{actor.EmployeeID, campaign, escalated, actor.HasRole("INFOSEC"), actor.HasRole("SUPER_ADMIN"), search}
+	// Typed once here: not every view uses $3..$5, and an unused parameter has no type.
+	visible := scope + " AND (i.campaign_id = $2 OR (i.finding_at IS NOT NULL AND " + open + "))" +
+		" AND $3::boolean IS NOT NULL AND $4::boolean IS NOT NULL AND $5::boolean IS NOT NULL"
+	var mineT, escT, allT, findingsT int // the views' totals with the search
+	n := &page.Counts
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE `+viewMine+`), count(*) FILTER (WHERE `+viewEsc+`), count(*),
+			count(*) FILTER (WHERE `+viewFindings+`), count(*) FILTER (WHERE NOT (`+open+`)), count(*) FILTER (WHERE i.campaign_id = $2 AND `+open+`),
+			count(*) FILTER (WHERE `+viewMine+` AND `+matches+`), count(*) FILTER (WHERE `+viewEsc+` AND `+matches+`),
+			count(*) FILTER (WHERE `+matches+`), count(*) FILTER (WHERE `+viewFindings+` AND `+matches+`)
+		FROM review_items i JOIN grants g ON g.id = i.grant_id JOIN employees e ON e.id = g.employee_id JOIN tools t ON t.id = g.tool_id
+		WHERE `+visible, args...).Scan(&n.Mine, &n.Esc, &n.All, &n.Findings, &n.Done, &n.Waiting, &mineT, &escT, &allT, &findingsT); err != nil {
+		return page, err
+	}
+	if page.View == "" { // the reviewer's own items, else what this role works on
+		switch {
+		case n.Mine > 0 || !sees(actor):
+			page.View = "mine"
+		case actor.HasRole("INFOSEC"):
+			page.View = "esc"
+		default:
+			page.View = "all"
+		}
+	}
+	page.Total = map[string]int{"mine": mineT, "esc": escT, "all": allT, "findings": findingsT}[page.View]
+	page.Items, err = s.items(ctx, visible+" AND "+views[page.View]+" AND "+matches, platform.PageSize, q.Offset, args...)
 	return page, err
 }
 
-// OpenFindings are the items day 21 left unanswered and nobody has decided yet (Exceptions).
-func OpenFindings(ctx context.Context, pool *pgxpool.Pool) ([]Item, error) {
-	return (&Service{pool: pool}).items(ctx, "i.finding_at IS NOT NULL AND "+open)
+// OpenFindings are the first page of the items day 21 left unanswered and nobody has decided
+// yet, and how many there are (Exceptions); the review page's findings view lists them all.
+func OpenFindings(ctx context.Context, pool *pgxpool.Pool) ([]Item, int, error) {
+	var total int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM review_items i WHERE "+viewFindings).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	items, err := (&Service{pool: pool}).items(ctx, viewFindings, platform.PageSize, 0)
+	return items, total, err
 }
 
 func (s *Service) campaign(ctx context.Context, where string, args ...any) (Campaign, error) {
@@ -358,14 +443,15 @@ func (s *Service) campaign(ctx context.Context, where string, args ...any) (Camp
 }
 
 func (s *Service) item(ctx context.Context, id uuid.UUID) (Item, error) {
-	items, err := s.items(ctx, "i.id = $1", id)
+	items, err := s.items(ctx, "i.id = $1", 1, 0, id)
 	if err != nil || len(items) == 0 {
 		return Item{}, err
 	}
 	return items[0], nil
 }
 
-func (s *Service) items(ctx context.Context, where string, args ...any) ([]Item, error) {
+// items lists the items matching where, ordered by a unique key so pages are stable.
+func (s *Service) items(ctx context.Context, where string, limit, offset int, args ...any) ([]Item, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.id, c.id, c.started_at, g.id, e.id, e.full_name, e.job_title, e.status, t.id, t.name, l.id, l.name, g.status,
 		       to_char(g.expires_on, 'YYYY-MM-DD'), g.effective_from, i.reviewer_id, r.full_name, i.routing_note, i.requires_infosec,
@@ -375,7 +461,7 @@ func (s *Service) items(ctx context.Context, where string, args ...any) ([]Item,
 		JOIN grants g ON g.id = i.grant_id JOIN employees e ON e.id = g.employee_id
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
 		LEFT JOIN employees r ON r.id = i.reviewer_id LEFT JOIN employees d ON d.id = i.decided_by
-		WHERE `+where+` ORDER BY e.full_name, t.name, l.name, i.id LIMIT 2000`, args...) // shortcut: 2000 rows; page above that
+		WHERE `+where+` ORDER BY e.full_name, t.name, l.name, i.id LIMIT `+strconv.Itoa(limit)+` OFFSET `+strconv.Itoa(offset), args...)
 	if err != nil {
 		return nil, err
 	}

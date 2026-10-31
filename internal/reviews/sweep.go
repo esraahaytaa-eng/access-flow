@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/esraahaytaa-eng/access-flow/internal/access"
 	"github.com/esraahaytaa-eng/access-flow/internal/audit"
 	"github.com/esraahaytaa-eng/access-flow/internal/notify"
 	"github.com/esraahaytaa-eng/access-flow/internal/platform"
@@ -137,16 +136,16 @@ func remind(ctx context.Context, tx pgx.Tx, now time.Time, campaign uuid.UUID) e
 	if err != nil {
 		return err
 	}
-	for _, it := range items {
-		details := map[string]any{"campaignId": campaign, "grantId": it.Grant}
-		if it.Reviewer == nil {
-			err = notify.ToRole(ctx, tx, "INFOSEC", "REVIEW_REMINDER", "review_item", it.ID, details)
-		} else {
-			err = notify.ToEmployee(ctx, tx, *it.Reviewer, "REVIEW_REMINDER", "review_item", it.ID, details)
-		}
-		if err != nil {
-			return err
-		}
+	// One statement, not one per item, keeps the sweep's transaction short at scale (PERF-001).
+	if _, err := tx.Exec(ctx, `INSERT INTO notifications (recipient_id, kind, entity, entity_id, details)
+		SELECT r.id, 'REVIEW_REMINDER', 'review_item', i.id, jsonb_build_object('campaignId', i.campaign_id, 'grantId', i.grant_id)
+		FROM review_items i CROSS JOIN LATERAL (
+			SELECT i.reviewer_id AS id WHERE i.reviewer_id IS NOT NULL
+			UNION ALL -- a pool item: every active InfoSec member
+			SELECT e.id FROM employees e WHERE i.reviewer_id IS NULL AND e.status = 'ACTIVE'
+				AND EXISTS (SELECT 1 FROM role_assignments a WHERE a.employee_id = e.id AND a.role = 'INFOSEC' AND a.valid_to IS NULL)) r
+		WHERE i.campaign_id = $1 AND `+open, campaign); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(ctx, "UPDATE review_campaigns SET reminded_at = $2 WHERE id = $1", campaign, now); err != nil {
 		return err
@@ -179,28 +178,19 @@ func closeCampaign(ctx context.Context, tx pgx.Tx, now time.Time, campaign uuid.
 	if err != nil {
 		return 0, err
 	}
-	findings := 0
-	for _, it := range items {
-		// Removal locks first (see access.LockForRemoval); a grant already being removed is
-		// left open and closes as already removed when its removal completes.
-		if err := access.LockForRemoval(ctx, tx, it.Grant); err != nil {
-			return 0, err
-		}
-		if held, err := reviewable(ctx, tx, it.Grant); err != nil || !held {
-			if err != nil {
-				return 0, err
-			}
-			continue
-		}
-		findings++
-		if _, err := tx.Exec(ctx, "UPDATE review_items SET finding_at = $2, version = version + 1 WHERE id = $1", it.ID, now); err != nil {
-			return 0, err
-		}
-		if err := audit.Record(ctx, tx, audit.Event{Action: "REVIEW_FINDING_OPENED", Entity: "review_item", EntityID: &it.ID,
-			SubjectID: &it.Employee, Details: map[string]any{"grantId": it.Grant}}); err != nil {
-			return 0, err
-		}
+	// Set-based, so the transaction stays short at scale (PERF-001). Only held grants become
+	// findings; a grant already being removed stays open and closes as already removed when its
+	// removal completes. Nothing is removed here, so no removal locks are taken.
+	tag, err := tx.Exec(ctx, `WITH f AS (
+			UPDATE review_items i SET finding_at = $2, version = i.version + 1 FROM grants g
+			WHERE g.id = i.grant_id AND i.campaign_id = $1 AND `+open+` AND g.status IN ('ACTIVE', 'SUSPENDED')
+			RETURNING i.id, i.grant_id, g.employee_id)
+		INSERT INTO audit_events (action, entity_type, entity_id, subject_employee_id, details)
+		SELECT 'REVIEW_FINDING_OPENED', 'review_item', f.id, f.employee_id, jsonb_build_object('grantId', f.grant_id) FROM f`, campaign, now)
+	if err != nil {
+		return 0, err
 	}
+	findings := tag.RowsAffected()
 	if _, err := tx.Exec(ctx, "UPDATE review_campaigns SET closed_at = $2 WHERE id = $1", campaign, now); err != nil {
 		return 0, err
 	}

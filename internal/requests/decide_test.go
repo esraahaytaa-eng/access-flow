@@ -161,8 +161,8 @@ func TestOnlyTheAssigneeDecides(t *testing.T) {
 	if n := w.audits("STEP_APPROVED") + w.audits("STEP_REJECTED"); n != 0 {
 		t.Fatalf("unauthorized decisions were applied: %d", n)
 	}
-	if n := w.audits("APPROVAL_ATTEMPT_REJECTED"); n != 15 {
-		t.Fatalf("recorded attempts = %d; want 15", n)
+	if n := w.audits("APPROVAL_ATTEMPT_REJECTED"); n != 13 { // the Auditor's two never reach the approval (O7 note 2026-10-31)
+		t.Fatalf("recorded attempts = %d; want 13", n)
 	}
 }
 
@@ -287,5 +287,112 @@ func TestApproveSeesAWithdrawalCommittedWhileWaiting(t *testing.T) {
 	}
 	if w.audits("STEP_APPROVED") != 0 {
 		t.Fatal("a withdrawn item was approved")
+	}
+}
+
+// Regression (ENG-005): an override or reassignment re-checks, under the item's lock, that
+// the Super Admin was not suspended after their session was checked (D7).
+func TestOverrideAndReassignSeeASuspensionCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	levels := []uuid.UUID{w.jiraViewer, w.github}
+	for name, call := range map[string]func(uuid.UUID) error{
+		"override": func(step uuid.UUID) error {
+			_, err := w.svc.Override(context.Background(), w.admin.principal("SUPER_ADMIN"), step, 2, "urgent")
+			return err
+		},
+		"reassign": func(step uuid.UUID) error {
+			_, err := w.svc.Reassign(context.Background(), w.admin.principal("SUPER_ADMIN"), step, 2, w.is2.ID, "on leave")
+			return err
+		},
+	} {
+		level := levels[0]
+		levels = levels[1:]
+		it := items(w.mustSubmit(w.dev.c, body(nil, item(level))))[0]
+		step := uuid.MustParse(open(t, it)["id"].(string))
+		w.exec("UPDATE employees SET status = 'ACTIVE' WHERE id = $1", w.admin.ID)
+		err := testutil.WhileLocked(t, w.db.App, func(ctx context.Context, tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SELECT 1 FROM request_items WHERE id = $1 FOR UPDATE", it["id"]); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, "UPDATE employees SET status = 'SUSPENDED' WHERE id = $1", w.admin.ID)
+			return err
+		}, func() error { return call(step) })
+		if !errors.Is(err, platform.ErrUnauthorized) {
+			t.Fatalf("%s = %v; want unauthorized", name, err)
+		}
+	}
+}
+
+// Regression (review P2-3): a decision that needs a role re-reads it after the actor's lock,
+// so a role removed while the request waited (RemoveRole locks the employee) is seen; the
+// session check before it read the role still held.
+func TestCriticalActionsSeeARoleRemovalCommittedWhileWaiting(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		role string
+		act  func(w *world) (actor person, call func() testutil.Response)
+	}{
+		{"InfoSec approves a pool step", "INFOSEC", func(w *world) (person, func() testutil.Response) {
+			loner := w.person(testutil.EmployeeSpec{}) // no manager: the Manager step is in the InfoSec pool
+			s := open(w.t, items(w.mustSubmit(loner.c, body(nil, item(w.jiraViewer))))[0])
+			return w.is1, func() testutil.Response { return decide(w.is1.c, s, "approve", nil) }
+		}},
+		{"Super Admin overrides", "SUPER_ADMIN", func(w *world) (person, func() testutil.Response) {
+			s := open(w.t, items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0])
+			return w.admin, func() testutil.Response { return decide(w.admin.c, s, "override", map[string]any{"reason": "urgent"}) }
+		}},
+		{"Super Admin reassigns", "SUPER_ADMIN", func(w *world) (person, func() testutil.Response) {
+			s := open(w.t, items(w.mustSubmit(w.dev.c, body(nil, item(w.jiraViewer))))[0])
+			return w.admin, func() testutil.Response {
+				return decide(w.admin.c, s, "reassign", map[string]any{"assigneeId": w.skip.ID, "reason": "cover"})
+			}
+		}},
+		{"InfoSec decides a pool review item", "INFOSEC", func(w *world) (person, func() testutil.Response) {
+			w.reported(w.owner.ID, w.jiraViewer, w.owner.Email) // the owner's own access: the InfoSec pool
+			testutil.RequireStatus(w.t, w.startCampaign(w.admin), http.StatusCreated, "")
+			it := w.reviewItem(w.is1, w.owner.ID, w.jiraViewer)
+			return w.is1, func() testutil.Response { return decideReview(w.is1, it, "REVOKE", "not needed") }
+		}},
+		{"InfoSec dismisses an orphan", "INFOSEC", func(w *world) (person, func() testutil.Response) {
+			tl := w.startTools()
+			tl.legacy(w.t, w.jira, w.jiraViewer, "ghost@example.com", "ACTIVE")
+			testutil.RequireStatus(w.t, w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{}), http.StatusCreated, "")
+			o := w.orphans()[0]
+			return w.is1, func() testutil.Response {
+				return w.is1.c.Do(http.MethodPost, "/api/v1/orphans/"+o["id"].(string)+"/dismiss", map[string]any{"reason": "test", "version": o["version"]})
+			}
+		}},
+		{"Super Admin retries a failed operation", "SUPER_ADMIN", func(w *world) (person, func() testutil.Response) {
+			tl := w.startTools()
+			w.failed(tl)
+			op := w.failedOp(w.admin)
+			return w.admin, func() testutil.Response {
+				return w.admin.c.Do(http.MethodPost, "/api/v1/operations/"+op["id"].(string)+"/retry", map[string]any{"version": op["version"]})
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorld(t)
+			actor, call := tc.act(w)
+			var r testutil.Response
+			err := testutil.WhileLocked(t, w.db.App, func(ctx context.Context, tx pgx.Tx) error {
+				if _, err := tx.Exec(ctx, "SELECT 1 FROM employees WHERE id = $1 FOR UPDATE", actor.ID); err != nil {
+					return err
+				}
+				_, err := tx.Exec(ctx, "UPDATE role_assignments SET valid_to = now() WHERE employee_id = $1 AND role = $2 AND valid_to IS NULL",
+					actor.ID, tc.role)
+				return err
+			}, func() error { r = call(); return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Status != http.StatusForbidden && r.Status != http.StatusNotFound {
+				t.Fatalf("status = %d %v; want the action refused", r.Status, r.Body)
+			}
+		})
 	}
 }

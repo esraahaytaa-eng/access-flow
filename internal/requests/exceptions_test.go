@@ -53,7 +53,8 @@ func TestExceptionsListFailedOperationsAndUnroutableSteps(t *testing.T) {
 	w.exec("UPDATE role_assignments SET valid_to = now() WHERE employee_id = $1", w.is1.ID)
 	auditor := w.person(testutil.EmployeeSpec{Roles: []string{"AUDITOR"}})
 
-	for _, p := range []person{w.is2, w.admin, auditor} {
+	testutil.RequireStatus(t, w.exceptions(auditor), http.StatusForbidden, "forbidden") // audit events only (O7 note 2026-10-31)
+	for _, p := range []person{w.is2, w.admin} {
 		op := w.failedOp(p)
 		if op["type"] != "GRANT" || op["tool"] != "Jira" || op["level"] != "Viewer" || op["attempts"] != float64(1) ||
 			op["lastError"] == "" || op["failedAt"] == nil || op["employee"].(map[string]any)["id"] != w.dev.ID.String() {
@@ -167,4 +168,26 @@ func TestRetryIsIdempotent(t *testing.T) {
 	// A cancelled operation is not retried.
 	w.mustRevoke(w.dev.c, w.myGrant(w.dev.c, w.jiraViewer))
 	testutil.RequireStatus(t, retry(w.admin, op), http.StatusConflict, "operation_not_failed")
+}
+
+// BUG-A-03: a step nobody independent may decide stays blocked (no self-approval), but the
+// Exceptions entry says why the caller cannot resolve it, so the UI offers the way out
+// instead of an action the server refuses.
+func TestUnroutableStepSaysWhenTheCallerIsAParty(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.mustSubmit(w.admin.c, body(nil, item(w.awsAdmin))) // the only Super Admin's own request
+	w.exec("UPDATE role_assignments SET valid_to = now() WHERE role = 'INFOSEC'")
+	steps := w.exceptions(w.admin).Body["unroutableSteps"].([]any)
+	if len(steps) != 1 || steps[0].(map[string]any)["party"] != "beneficiary" {
+		t.Fatalf("unroutable steps = %v", steps)
+	}
+	step := steps[0].(map[string]any)["step"].(map[string]any)
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/approvals/"+step["id"].(string)+"/override",
+		map[string]any{"version": step["version"], "reason": "self"}), http.StatusForbidden, "separation_of_duties")
+
+	other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}}) // an independent Super Admin may act
+	if p, ok := w.exceptions(other).Body["unroutableSteps"].([]any)[0].(map[string]any)["party"]; ok {
+		t.Fatalf("an independent Super Admin is marked as a party: %v", p)
+	}
 }

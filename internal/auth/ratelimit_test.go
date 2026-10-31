@@ -66,7 +66,9 @@ func TestAttemptLimiterIsBounded(t *testing.T) {
 func TestLoginIsRateLimitedPerAddress(t *testing.T) {
 	env := newEnv(t)
 	emp := env.employee()
-	svc, err := NewService(env.db.App, Options{Secret: testSecret, BootstrapFile: filepath.Join(t.TempDir(), "b.txt")})
+	// A small limit: 60 hashed attempts can outlast the one-minute window on a loaded machine.
+	const limit = 5
+	svc, err := NewService(env.db.App, Options{Secret: testSecret, BootstrapFile: filepath.Join(t.TempDir(), "b.txt"), LoginRateLimit: limit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +85,7 @@ func TestLoginIsRateLimitedPerAddress(t *testing.T) {
 		routes.ServeHTTP(w, r)
 		return w
 	}
-	for i := range 60 { // the default: 60 attempts per address per minute
+	for i := range limit {
 		// An unknown email, so the account lockout stays out of the way. A spoofed
 		// X-Forwarded-For must not give each attempt a fresh budget.
 		if w := login("192.0.2.1:1000", fmt.Sprintf("198.51.100.%d", i), "nobody@x.com", "wrong password!"); w.Code != http.StatusUnauthorized {
@@ -92,7 +94,7 @@ func TestLoginIsRateLimitedPerAddress(t *testing.T) {
 	}
 	w := login("192.0.2.1:1001", "", emp.Email, emp.Password)
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "" || !strings.Contains(w.Body.String(), "too_many_attempts") {
-		t.Fatalf("61st attempt: %d %q Retry-After=%q; want 429 too_many_attempts with Retry-After, even with the right password",
+		t.Fatalf("attempt over the limit: %d %q Retry-After=%q; want 429 too_many_attempts with Retry-After, even with the right password",
 			w.Code, w.Body.String(), w.Header().Get("Retry-After"))
 	}
 	// Activation links share the budget: guessing tokens is no way around it.

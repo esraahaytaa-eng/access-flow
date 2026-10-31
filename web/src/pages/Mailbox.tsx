@@ -18,7 +18,7 @@ export function Mailbox() {
   const emails = query.data ?? [];
   return (
     <div className="stack">
-      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez; bu kutu yalnızca yerel demo içindir. Yönetici onayı gerektiren talep bildirimlerini Bilgi Güvenliği, Süper Yönetici ve Denetçi görür. Etkinleştirme bağlantılarını yalnızca Süper Yönetici, her görüntüleme denetim kaydına yazılarak görebilir. Süper Yönetici rolü kabul bağlantısını yalnızca alıcısı görür.</Callout>
+      <Callout tone="info" title="Simülasyon e-posta kutusu">Gerçek e-posta gönderilmez; bu kutu yalnızca yerel demo içindir. Yönetici onayı gerektiren talep bildirimlerini Bilgi Güvenliği, Süper Yönetici ve Denetçi görür. Etkinleştirme bağlantılarını yalnızca Süper Yönetici, her görüntüleme denetim kaydına yazılarak görebilir. Kimse kendi bağlantısını görüntüleyemez; Süper Yönetici veya Bilgi Güvenliği hesabının bağlantısını, sıfırlamayı yapmayan başka bir Süper Yönetici görür ve diğer Süper Yöneticiler bilgilendirilir. Süper Yönetici rolü kabul bağlantısını yalnızca alıcısı görür.</Callout>
       {query.isPending ? <TableSkeleton /> : emails.length === 0 ? <div className="card"><EmptyState icon="mail" title="E-posta yok" /></div> : (
         <div className="card">
           {emails.map((m) => (

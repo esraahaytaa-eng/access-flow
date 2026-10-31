@@ -10,7 +10,8 @@ export function fakeServer(routes: Record<string, Handler | unknown>) {
     const path = url.replace("/api/v1", "");
     const body = init.body instanceof Blob ? { file: (init.body as File).name ?? "blob" } : init.body ? JSON.parse(init.body as string) : undefined;
     calls.push({ method, path, body });
-    const route = routes[`${method} ${path}`];
+    // A paged list's query string is optional in a route; calls keep the full path to assert on.
+    const route = routes[`${method} ${path}`] ?? routes[`${method} ${path.split("?")[0]}`];
     const out = typeof route === "function" ? (route as Handler)(body) : route === undefined ? { status: 404, body: { error: "not_found" } } : { body: route };
     const status = out.status ?? 200;
     return new Response(status === 204 ? null : JSON.stringify(out.body ?? {}), { status });

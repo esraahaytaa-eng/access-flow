@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import { api } from "./api/client";
 import { useAdminHealth, useDemo, useNotifications } from "./api/queries";
@@ -16,7 +16,7 @@ type NavItem = { to: string; label: string; icon: IconName; match?: string[]; co
 
 function navGroups(flags: RoleFlags, counts: ReturnType<typeof useNavCounts>) {
   const groups: { label: string | null; items: (NavItem | false)[] }[] = [
-    { label: null, items: [
+    { label: null, items: flags.auditor ? [] : [
       { to: "/", label: "Ana sayfa", icon: "home" },
       { to: "/catalog", label: "Araç kataloğu", icon: "grid", match: ["/catalog", "/request-new"] },
       { to: "/requests", label: "Taleplerim", icon: "list" },
@@ -85,11 +85,14 @@ function notificationText(n: Notification, timeZone: string): string {
     case "SUPER_ADMIN_OVERRIDE": return "Bir onay adımı Süper Yönetici tarafından geçersiz kılındı.";
     case "APPROVAL_ASSIGNED": return `Size bir onay adımı atandı${d.reason ? `: ${d.reason}` : "."}`;
     case "GRANTS_RETAINED_ON_TRANSFER": return `${d.employee} ekibinize transfer edildi; ${(d.grants as unknown[] | undefined)?.length ?? 0} erişimi korundu.`;
-    case "REVIEW_STARTED": return `Erişim denetimi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
+    case "REVIEW_STARTED": return d.toolOwnerChanged
+      ? `${d.tool} aracının sahipliği size geçti; incelemeniz gereken ${d.items} denetim kalemi size yönlendirildi.`
+      : `Erişim denetimi başladı; incelemeniz gereken ${d.items ?? ""} kalem olabilir.`;
     case "REVIEW_REMINDER": return "Yanıt bekleyen bir inceleme kaleminiz var (gün 7 hatırlatması).";
     case "REVIEW_ESCALATED": return "Yanıtlanmamış inceleme kalemleri Bilgi Güvenliğine eskale edildi.";
     case "SUPER_ADMIN_NOMINATED": return `${d.nominee} Süper Yönetici olarak önerildi; yetkilendirmeniz bekleniyor.`;
-    case "SUPER_ADMIN_ROLE_OFFERED": return "İK sizi yeni Süper Yönetici olarak belirledi. Kabul bağlantısı e-posta kutunuzda; 24 saat geçerlidir.";
+    case "SUPER_ADMIN_ROLE_OFFERED": return "İK'nın sizi yeni Süper Yönetici olarak belirlemesi yetkilendirildi. Kabul bağlantısı e-posta kutunuzda; 24 saat geçerlidir.";
+    case "PRIVILEGED_ACTIVATION_LINK_VIEWED": return `${d.viewer} ayrıcalıklı hesap ${d.name} için etkinleştirme bağlantısını görüntüledi.`;
     case "SUPER_ADMIN_ROLE_ACCEPTED": return `${d.nominee} Süper Yönetici rolünü kabul etti; rol etkin.`;
     case "ADMIN_RECOVERY_REQUIRED": return "Aktif Süper Yönetici kalmadı; sistem kurtarma modunda.";
   }
@@ -105,7 +108,7 @@ function NotificationsMenu() {
   const [open, setOpen] = useState(false);
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const list = useNotifications().data ?? [];
+  const list = useNotifications(!useSession().auditor).data ?? [];
   const unread = list.filter((n) => !n.readAt);
   const [run] = useAction();
   const markRead = async (ns: Notification[]) => {
@@ -141,8 +144,9 @@ function NotificationsMenu() {
 }
 
 export function useRoleLabels() {
-  const { me, adminGroups } = useSession();
+  const { me, adminGroups, auditor } = useSession();
   const flags = useRoleFlags();
+  if (auditor) return [roleLabel.AUDITOR];
   const labels = [flags.manager && "Yönetici", flags.owner && "Araç sahibi", ...me.roles.map((r) => roleLabel[r]), adminGroups.length > 0 && "Yönetim grubu üyesi"].filter(Boolean) as string[];
   return labels.length ? labels : ["Çalışan"];
 }
@@ -150,12 +154,16 @@ export function useRoleLabels() {
 function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
   const [mfa, setMfa] = useState(false);
+  const toggle = useRef<HTMLButtonElement>(null);
+  // The menu item that opens the modal disappears with the menu, so the modal returns focus to the toggle.
+  const openMfa = () => { setOpen(false); toggle.current?.focus(); setMfa(true); };
+  const closeMfa = () => setMfa(false);
   const { me } = useSession();
   const navigate = useNavigate();
   const labels = useRoleLabels();
   return (
     <div style={{ position: "relative" }}>
-      <button type="button" className="btn btn-ghost" style={{ height: 40, paddingLeft: 6 }} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
+      <button type="button" ref={toggle} className="btn btn-ghost" style={{ height: 40, paddingLeft: 6 }} onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
         <Avatar person={me} />
         <span style={{ textAlign: "left", lineHeight: 1.2 }} className="hide-sm">
           <span style={{ display: "block", fontWeight: 600 }}>{me.fullName}</span>
@@ -171,13 +179,13 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
         <div style={{ padding: 6 }}>
           <button type="button" className="menu-item" onClick={() => { setOpen(false); navigate("/password"); }}><Icon name="lock" />Parola değiştir</button>
           {/* Planned, not implemented: nothing is enabled or stored (M18; see README). */}
-          <button type="button" className="menu-item muted" onClick={() => { setOpen(false); setMfa(true); }}>
+          <button type="button" className="menu-item muted" onClick={openMfa}>
             <Icon name="key" /><span style={{ flex: 1 }}>Google Authenticator ile iki adımlı doğrulama</span><Badge tone="outline">Planlanıyor</Badge>
           </button>
           <button type="button" className="menu-item" onClick={() => { setOpen(false); onSignOut(); }}><Icon name="logout" />Çıkış yap</button>
         </div>
       </Popover>
-      <Modal open={mfa} onClose={() => setMfa(false)} title="İki adımlı doğrulama" footer={<Button onClick={() => setMfa(false)}>Kapat</Button>}>
+      <Modal open={mfa} onClose={closeMfa} title="İki adımlı doğrulama" footer={<Button onClick={closeMfa}>Kapat</Button>}>
         <p>Bu özellik geliştirme aşamasındadır.</p>
       </Modal>
     </div>
@@ -188,6 +196,7 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
   const [navOpen, setNavOpen] = useState(false);
   const navigate = useNavigate();
   const demo = useDemo().data;
+  const { auditor } = useSession();
   return (
     <div className="shell">
       <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
@@ -197,8 +206,8 @@ export function Shell({ children, onSignOut }: { children: ReactNode; onSignOut:
           <Button variant="ghost" icon="menu" className="menu-btn" aria-label="Menüyü aç" onClick={() => setNavOpen(true)} />
           {demo && <Badge tone="amber" dot title="Yerel demo: belgelenmiş demo hesapları ve örnek veriler">Demo Environment</Badge>}
           <div className="spacer" />
-          <Button variant="primary" size="sm" icon="plus" className="topbar-request" aria-label="Erişim talep et" onClick={() => navigate("/request-new")}><span className="hide-xs">Erişim talep et</span></Button>
-          <NotificationsMenu />
+          {!auditor && <Button variant="primary" size="sm" icon="plus" className="topbar-request" aria-label="Erişim talep et" onClick={() => navigate("/request-new")}><span className="hide-xs">Erişim talep et</span></Button>}
+          {!auditor && <NotificationsMenu />}
           <UserMenu onSignOut={onSignOut} />
         </header>
         <main className="content"><RecoveryBanner />{children}</main>
@@ -224,15 +233,15 @@ const Blocked = ({ icon, title, desc }: { icon: IconName; title: string; desc: s
 export const NoAccess = () => <Blocked icon="lock" title="Bu sayfaya erişiminiz yok" desc="Bu alan yalnızca ilgili role sahip kişilere açıktır." />;
 export const NotFound = () => <Blocked icon="search" title="Sayfa bulunamadı" desc="Aradığınız sayfa taşınmış veya hiç var olmamış olabilir." />;
 
-/** No active Super Admin (D2): HR, InfoSec and auditors are told; an HR Manager appoints a successor, who accepts the role signed in as themself. */
+/** No active Super Admin (D2): HR, InfoSec and auditors are told; an HR Manager proposes a successor, InfoSec authorizes, the nominee accepts signed in as themself. */
 export function RecoveryBanner() {
-  const { hasRole } = useSession();
-  const health = useAdminHealth(hasRole("HR_MANAGER", "INFOSEC", "AUDITOR")).data;
+  const { hasRole, auditor } = useSession();
+  const health = useAdminHealth(!auditor && hasRole("HR_MANAGER", "INFOSEC")).data;
   if (!health?.recoveryRequired) return null;
   return (
     <div style={{ marginBottom: 18 }}>
       <Callout tone="danger" title="Aktif Süper Yönetici yok: kurtarma modu">
-        Erişim iş akışları çalışmaya devam eder. Bir İK Yöneticisi yeni Süper Yöneticiyi belirler; rol, aday kendi hesabıyla kabul edince etkinleşir.
+        Erişim iş akışları çalışmaya devam eder. Bir İK Yöneticisi yeni Süper Yöneticiyi önerir, bağımsız bir Bilgi Güvenliği üyesi yetkilendirir; rol, aday kendi hesabıyla kabul edince etkinleşir.
         {hasRole("HR_MANAGER") && <SuccessionPanel />}
       </Callout>
     </div>

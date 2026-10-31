@@ -321,3 +321,75 @@ func TestToolReadVerifiesReportedAccess(t *testing.T) {
 		t.Fatalf("second report = %v", r.Body)
 	}
 }
+
+// Regression (ENG-001): a failed removal of an orphan account has no employee; retrying it
+// used to fail with 500.
+func TestFailedOrphanRemovalCanBeRetried(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	gh := w.toolOf(w.github)
+	tl.legacy(t, gh, w.github, "ghost@example.com", "ACTIVE")
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{}), http.StatusCreated, "")
+	o := w.orphans()[0]
+	tl.faults.RespondNext(http.StatusConflict, `{"error":"level_suspended"}`)
+	testutil.RequireStatus(t, w.is1.c.Do(http.MethodPost, "/api/v1/orphans/"+o["id"].(string)+"/revoke",
+		map[string]any{"reason": "nobody owns it", "version": o["version"]}), http.StatusOK, "")
+	tl.drain(t)
+	testutil.RequireStatus(t, retry(w.admin, w.failedOp(w.admin)), http.StatusOK, "")
+	tl.drain(t)
+	if tl.permission(t, gh, w.github, "ghost@example.com") != "" {
+		t.Fatal("orphan account not revoked after the retry")
+	}
+}
+
+// Regression (review P2-1): a tool read whose transaction PostgreSQL aborts as a serialization
+// failure runs again (platform.InTx); the retry reports and stores the same counts and writes
+// each grant and event once.
+func TestToolReadRetriedAfterSerializationFailureCountsOnce(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	w.reported(w.dev.ID, w.jiraViewer, w.dev.Email)
+	tl.legacy(t, w.jira, w.jiraViewer, w.dev.Email, "ACTIVE")
+	tl.legacy(t, w.jira, w.jiraViewer, w.owner.Email, "ACTIVE")
+	// The first report insert fails as 40001; a sequence is not rolled back, so it fails once.
+	for _, stmt := range []string{
+		"CREATE SEQUENCE fail_once",
+		`CREATE FUNCTION fail_once() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$
+		BEGIN
+			IF NEW.source = 'MOCK' AND nextval('fail_once') = 1 THEN
+				RAISE EXCEPTION 'injected serialization failure' USING ERRCODE = '40001';
+			END IF;
+			RETURN NEW;
+		END $$`,
+		"CREATE TRIGGER fail_once BEFORE INSERT ON imports FOR EACH ROW EXECUTE FUNCTION fail_once()",
+	} {
+		if _, err := w.db.Owner.Exec(context.Background(), stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	r := w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{})
+	testutil.RequireStatus(t, r, http.StatusCreated, "")
+	var runs int
+	if err := w.db.Owner.QueryRow(context.Background(), "SELECT last_value FROM fail_once").Scan(&runs); err != nil || runs != 2 {
+		t.Fatalf("report inserts = %d (%v); want 2: the import ran once", runs, err)
+	}
+	want := map[string]float64{"imported": 1, "skipped": 1, "verified": 1, "orphans": 0, "terminated": 0, "unverified": 0}
+	var stored map[string]any
+	if err := w.db.App.QueryRow(context.Background(), "SELECT report FROM imports WHERE source = 'MOCK'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range want {
+		if r.Body[k] != v || stored[k] != v {
+			t.Errorf("%s: response %v, stored %v; want %v", k, r.Body[k], stored[k], v)
+		}
+	}
+	if n := w.count("SELECT count(*) FROM grants WHERE import_id IS NOT NULL"); n != 2 {
+		t.Fatalf("imported grants = %d; want 2", n)
+	}
+	if w.audits("GRANT_IMPORTED") != 1 || w.audits("GRANT_VERIFIED_BY_TOOL") != 1 || w.audits("ACCESS_IMPORTED") != 1 {
+		t.Fatal("events written more than once")
+	}
+}

@@ -31,6 +31,7 @@ var (
 	errNeedsAcceptance    = platform.NewError(http.StatusConflict, "nomination_needs_acceptance")
 	errInvalidRoleLink    = platform.NewError(http.StatusBadRequest, "invalid_role_link")
 	errSuperAdminsActive  = platform.NewError(http.StatusConflict, "super_admins_active") // succession is over
+	errNotAuthorized      = platform.NewError(http.StatusConflict, "nomination_not_authorized")
 	// ErrLastSuperAdmin: the last active Super Admin's employment ends only once a successor
 	// has accepted the role (D2 note 2026-10-30).
 	ErrLastSuperAdmin = platform.NewError(http.StatusConflict, "last_super_admin")
@@ -38,15 +39,16 @@ var (
 
 // checkNominator (D2): a Super Admin proposes someone else for the two-person promotion. An
 // HR Manager who is not a Super Admin starts a succession while at most one Super Admin is
-// active (the last one is leaving, or none is left): HR and the nominee, who accepts through a
-// link, are the two people (note 2026-10-30). Nobody nominates themself.
-func checkNominator(actor auth.Principal, nominee uuid.UUID, active int) (succession bool, err error) {
+// not terminated (standing: a suspended one still counts, so HR cannot suspend their way into
+// a succession, F-1); an independent authorizer and the nominee's acceptance follow (notes
+// 2026-10-30 and 2026-10-31). Nobody nominates themself.
+func checkNominator(actor auth.Principal, nominee uuid.UUID, standing int) (succession bool, err error) {
 	switch {
 	case actor.EmployeeID == nominee:
 		return false, errSelfChange
 	case actor.HasRole("SUPER_ADMIN"):
 		return false, nil
-	case actor.HasRole("HR_MANAGER") && active <= 1:
+	case actor.HasRole("HR_MANAGER") && standing <= 1:
 		return true, nil
 	}
 	return false, platform.ErrForbidden
@@ -69,6 +71,19 @@ func checkAuthorizer(actor auth.Principal, nominee, proposer uuid.UUID, recovery
 	return platform.ErrForbidden
 }
 
+// checkSuccessionAuthorizer (D2 note 2026-10-31, R-2): HR's succession nomination is
+// authorized by an InfoSec member or an active Super Admin who is neither HR's proposer nor
+// the nominee. Only active employees have a session, so the authorizer is active.
+func checkSuccessionAuthorizer(actor auth.Principal, nominee, proposer uuid.UUID) error {
+	switch {
+	case actor.EmployeeID == nominee || actor.EmployeeID == proposer:
+		return errSeparation
+	case actor.HasRole("SUPER_ADMIN") || actor.HasRole("INFOSEC"):
+		return nil
+	}
+	return platform.ErrForbidden
+}
+
 type Person struct {
 	ID       uuid.UUID `json:"id"`
 	FullName string    `json:"fullName"`
@@ -79,7 +94,9 @@ type Nomination struct {
 	Nominee      Person     `json:"nominee"`
 	ProposedBy   Person     `json:"proposedBy"`
 	Recovery     bool       `json:"recovery"`
-	Succession   bool       `json:"succession"` // by HR, accepted by the nominee through a link
+	Succession   bool       `json:"succession"`   // by HR, authorized, then accepted by the nominee through a link
+	AuthorizedBy *uuid.UUID `json:"authorizedBy"` // a succession's authorizer; the link is sent only then
+	AuthorizedAt *time.Time `json:"authorizedAt"`
 	Status       string     `json:"status"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	ExpiresAt    time.Time  `json:"expiresAt"`
@@ -91,14 +108,14 @@ type Nomination struct {
 }
 
 const nominationColumns = `n.id, ne.id, ne.full_name, pe.id, pe.full_name, n.recovery, n.succession, n.status, n.created_at, n.expires_at,
-	n.decided_by, n.decided_at, n.reason, n.version`
+	n.decided_by, n.decided_at, n.reason, n.version, n.authorized_by, n.authorized_at`
 
 const nominationFrom = ` FROM super_admin_nominations n JOIN employees ne ON ne.id = n.nominee_id JOIN employees pe ON pe.id = n.proposed_by`
 
 func scanNomination(row pgx.Row) (Nomination, error) {
 	var n Nomination
 	err := row.Scan(&n.ID, &n.Nominee.ID, &n.Nominee.FullName, &n.ProposedBy.ID, &n.ProposedBy.FullName, &n.Recovery, &n.Succession, &n.Status,
-		&n.CreatedAt, &n.ExpiresAt, &n.DecidedBy, &n.DecidedAt, &n.Reason, &n.Version)
+		&n.CreatedAt, &n.ExpiresAt, &n.DecidedBy, &n.DecidedAt, &n.Reason, &n.Version, &n.AuthorizedBy, &n.AuthorizedAt)
 	return n, err
 }
 
@@ -111,6 +128,15 @@ func activeSuperAdmins(ctx context.Context, q querier, except ...uuid.UUID) (int
 	var n int
 	err := q.QueryRow(ctx, `SELECT count(*) FROM role_assignments r JOIN employees e ON e.id = r.employee_id
 		WHERE r.role = 'SUPER_ADMIN' AND r.valid_to IS NULL AND e.status = 'ACTIVE' AND NOT (e.id = ANY($1))`, append([]uuid.UUID{}, except...)).Scan(&n)
+	return n, err
+}
+
+// standingSuperAdmins counts Super Admins who are not terminated, active or suspended: HR's
+// succession is open only while at most one stands (F-1).
+func standingSuperAdmins(ctx context.Context, q querier) (int, error) {
+	var n int
+	err := q.QueryRow(ctx, `SELECT count(*) FROM role_assignments r JOIN employees e ON e.id = r.employee_id
+		WHERE r.role = 'SUPER_ADMIN' AND r.valid_to IS NULL AND e.status <> 'TERMINATED'`).Scan(&n)
 	return n, err
 }
 
@@ -129,7 +155,11 @@ func (s *Service) Nominate(ctx context.Context, actor auth.Principal, nominee uu
 			return err
 		}
 		recovery := active == 0
-		succession, err := checkNominator(actor, nominee, active)
+		standing, err := standingSuperAdmins(ctx, tx)
+		if err != nil {
+			return err
+		}
+		succession, err := checkNominator(actor, nominee, standing)
 		if err != nil {
 			return err
 		}
@@ -142,6 +172,8 @@ func (s *Service) Nominate(ctx context.Context, actor auth.Principal, nominee uu
 			return errNotActive
 		case slices.Contains(target.Roles, "SUPER_ADMIN"):
 			return errAlreadySuperAdmin
+		case slices.Contains(target.Roles, "AUDITOR"): // an Auditor holds no duty (O7 note 2026-10-31)
+			return &platform.Error{Status: http.StatusConflict, Code: "employee_is_auditor", Field: "nomineeId"}
 		}
 		// No job closes nominations (O8): an expired one, or a recovery one outlived by
 		// recovery, is closed here so it no longer blocks a new one; a new succession also
@@ -187,9 +219,12 @@ func (s *Service) Nominate(ctx context.Context, actor auth.Principal, nominee uu
 			EntityID: &id, SubjectID: &nominee, Details: map[string]any{"recovery": recovery, "succession": succession}}); err != nil {
 			return err
 		}
-		if succession {
-			if err := s.sendRoleLink(ctx, tx, now, actor, id, nominee, false); err != nil {
-				return err
+		if succession { // no link yet: InfoSec or an active Super Admin authorizes first (R-2)
+			for _, role := range []string{"INFOSEC", "SUPER_ADMIN"} {
+				if err := notify.ToRole(ctx, tx, role, "SUPER_ADMIN_NOMINATED", "super_admin_nomination", id,
+					map[string]any{"nominee": target.FullName}, actor.EmployeeID, nominee); err != nil {
+					return err
+				}
 			}
 			n, err = scanNomination(tx.QueryRow(ctx, "SELECT "+nominationColumns+nominationFrom+" WHERE n.id = $1", id))
 			return err
@@ -237,14 +272,21 @@ func (s *Service) Decide(ctx context.Context, actor auth.Principal, id uuid.UUID
 		switch {
 		case cur.Status != "PENDING":
 			return errNominationClosed
-		case cur.Succession:
+		case cur.Succession && cur.AuthorizedAt != nil:
 			return errNeedsAcceptance // the nominee accepts through their link
 		case !cur.ExpiresAt.After(now):
 			return errNominationExpired
 		case cur.Version != version:
 			return errVersionConflict
-		case cur.Recovery && active > 0:
+		case cur.Recovery && !cur.Succession && active > 0:
 			return errRecoveryEnded // a Super Admin is back: they nominate the usual way
+		}
+		if cur.Succession {
+			if err := s.decideSuccession(ctx, tx, now, actor, cur, authorize, reason); err != nil {
+				return err
+			}
+			n, err = scanNomination(tx.QueryRow(ctx, "SELECT "+nominationColumns+nominationFrom+" WHERE n.id = $1", id))
+			return err
 		}
 		if err := checkAuthorizer(actor, cur.Nominee.ID, cur.ProposedBy.ID, cur.Recovery, others > 0); err != nil {
 			return err
@@ -285,9 +327,50 @@ func (s *Service) Decide(ctx context.Context, actor auth.Principal, id uuid.UUID
 	return n, err
 }
 
+// decideSuccession authorizes HR's succession nomination, which sends the nominee their
+// 24-hour link, or declines it (R-2). The caller holds LifecycleLockKey and the nomination.
+func (s *Service) decideSuccession(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Principal, cur Nomination, authorize bool, reason *string) error {
+	if err := checkSuccessionAuthorizer(actor, cur.Nominee.ID, cur.ProposedBy.ID); err != nil {
+		return err
+	}
+	details := map[string]any{"proposedBy": cur.ProposedBy.ID, "recovery": cur.Recovery, "succession": true}
+	if !authorize {
+		if _, err := tx.Exec(ctx, `UPDATE super_admin_nominations SET status = 'DECLINED', decided_by = $2, decided_at = $3, reason = $4,
+			version = version + 1 WHERE id = $1`, cur.ID, actor.EmployeeID, now, reason); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "SUPER_ADMIN_NOMINATION_DECLINED", Entity: "super_admin_nomination",
+			EntityID: &cur.ID, SubjectID: &cur.Nominee.ID, Reason: deref(reason), Details: details})
+	}
+	if standing, err := standingSuperAdmins(ctx, tx); err != nil {
+		return err
+	} else if standing > 1 {
+		return errSuperAdminsActive
+	}
+	nominee, err := LockEmployee(ctx, tx, cur.Nominee.ID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case nominee.Status != "ACTIVE":
+		return errNotActive
+	case slices.Contains(nominee.Roles, "SUPER_ADMIN"):
+		return errAlreadySuperAdmin
+	}
+	if _, err := tx.Exec(ctx, "UPDATE super_admin_nominations SET authorized_by = $2, authorized_at = $3, version = version + 1 WHERE id = $1",
+		cur.ID, actor.EmployeeID, now); err != nil {
+		return err
+	}
+	if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "SUPER_ADMIN_NOMINATION_AUTHORIZED", Entity: "super_admin_nomination",
+		EntityID: &cur.ID, SubjectID: &cur.Nominee.ID, Reason: deref(reason), Details: details}); err != nil {
+		return err
+	}
+	return s.sendRoleLink(ctx, tx, now, actor, cur.ID, cur.Nominee.ID, false)
+}
+
 // seesSuccession: who sees nominations and the Super Admin health (D2).
 func seesSuccession(p auth.Principal) bool {
-	return hasAny(p, "SUPER_ADMIN", "INFOSEC", "HR_MANAGER", "AUDITOR")
+	return hasAny(p, "SUPER_ADMIN", "INFOSEC", "HR_MANAGER")
 }
 
 // Nominations lists the open, unexpired nominations, each saying whether the caller may
@@ -315,7 +398,8 @@ func (s *Service) Nominations(ctx context.Context, actor auth.Principal) ([]Nomi
 			if !n.ExpiresAt.After(time.Now()) {
 				n.Status = "EXPIRED"
 			}
-			continue // accepted by the nominee, never authorized
+			n.CanAuthorize = n.AuthorizedAt == nil && n.Status == "PENDING" && checkSuccessionAuthorizer(actor, n.Nominee.ID, n.ProposedBy.ID) == nil
+			continue
 		}
 		others, cerr := activeSuperAdmins(ctx, s.pool, n.ProposedBy.ID, n.Nominee.ID)
 		if cerr != nil {
@@ -358,6 +442,9 @@ func AfterLeaving(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUI
 		return err
 	}
 	for _, c := range list {
+		if _, err := tx.Exec(ctx, "UPDATE email_outbox SET sealed_token = NULL WHERE nomination_id = $1", c.ID); err != nil {
+			return err
+		}
 		if err := audit.Record(ctx, tx, audit.Event{ActorID: actor, Action: "SUPER_ADMIN_NOMINATION_CANCELLED", Entity: "super_admin_nomination",
 			EntityID: &c.ID, SubjectID: &c.Nominee, Details: map[string]any{"left": e.ID}}); err != nil {
 			return err
@@ -438,12 +525,14 @@ func (s *Service) ReissueRoleLink(ctx context.Context, actor auth.Principal, id 
 			return errSelfChange
 		case !cur.Succession || cur.Status != "PENDING":
 			return errNominationClosed
+		case cur.AuthorizedAt == nil:
+			return errNotAuthorized // no link exists before authorization (R-2)
 		case cur.Version != version:
 			return errVersionConflict
 		}
-		if active, err := activeSuperAdmins(ctx, tx); err != nil {
+		if standing, err := standingSuperAdmins(ctx, tx); err != nil {
 			return err
-		} else if active > 1 {
+		} else if standing > 1 {
 			return errSuperAdminsActive
 		}
 		if nominee, err := LockEmployee(ctx, tx, cur.Nominee.ID); err != nil {
@@ -487,7 +576,7 @@ func (s *Service) AcceptRole(ctx context.Context, actor auth.Principal, token st
 		if err != nil {
 			return err
 		}
-		active, err := activeSuperAdmins(ctx, tx)
+		standing, err := standingSuperAdmins(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -504,7 +593,9 @@ func (s *Service) AcceptRole(ctx context.Context, actor auth.Principal, token st
 			reason = "expired"
 		case actor.EmployeeID != cur.Nominee.ID:
 			reason = "other_account"
-		case active > 1:
+		case cur.AuthorizedAt == nil: // a link sent before the independent authorization rule (R-2)
+			reason = "not_authorized"
+		case standing > 1:
 			reason = "super_admins_active"
 		case !proposerHR: // HR's half of the two-person rule no longer stands
 			reason = "proposer_not_hr"
@@ -543,11 +634,18 @@ func (s *Service) AcceptRole(ctx context.Context, actor auth.Principal, token st
 			return err
 		}
 		if err := audit.Record(ctx, tx, audit.Event{ActorID: &nominee.ID, Action: "SUPER_ADMIN_ROLE_ACCEPTED", Entity: "super_admin_nomination",
-			EntityID: &cur.ID, SubjectID: &nominee.ID, Details: map[string]any{"proposedBy": cur.ProposedBy.ID, "recovery": cur.Recovery}}); err != nil {
+			EntityID: &cur.ID, SubjectID: &nominee.ID, Details: map[string]any{"proposedBy": cur.ProposedBy.ID, "authorizedBy": cur.AuthorizedBy,
+				"recovery": cur.Recovery}}); err != nil {
 			return err
 		}
-		return notify.ToEmployee(ctx, tx, cur.ProposedBy.ID, "SUPER_ADMIN_ROLE_ACCEPTED", "super_admin_nomination", cur.ID,
-			map[string]any{"nominee": nominee.FullName})
+		details := map[string]any{"nominee": nominee.FullName}
+		for _, role := range []string{"SUPER_ADMIN", "INFOSEC"} { // every privileged user learns of the new Super Admin
+			if err := notify.ToRole(ctx, tx, role, "SUPER_ADMIN_ROLE_ACCEPTED", "super_admin_nomination", cur.ID, details,
+				nominee.ID, cur.ProposedBy.ID); err != nil {
+				return err
+			}
+		}
+		return notify.ToEmployee(ctx, tx, cur.ProposedBy.ID, "SUPER_ADMIN_ROLE_ACCEPTED", "super_admin_nomination", cur.ID, details)
 	})
 	if err == nil && failed {
 		err = outcome

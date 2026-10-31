@@ -142,6 +142,13 @@ func TestDirectGrantNotifications(t *testing.T) {
 	if notes(w.owner) != 1 || notes(w.mgr) != 2 {
 		t.Fatalf("owner %d, manager %d", notes(w.owner), notes(w.mgr))
 	}
+
+	// Someone who is bypassed in two ways, here InfoSec and the manager, is told once (BUG-A-02).
+	report := w.person(testutil.EmployeeSpec{ManagerID: w.is1.ID})
+	testutil.RequireStatus(t, directGrant(w.admin, directBody(report.ID, w.jiraViewer, in(30))), http.StatusCreated, "")
+	if notes(w.is1) != 3 || notes(w.is2) != 3 {
+		t.Fatalf("InfoSec manager %d, other InfoSec %d; want 3 each", notes(w.is1), notes(w.is2))
+	}
 }
 
 func TestDirectRevoke(t *testing.T) {

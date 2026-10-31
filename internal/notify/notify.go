@@ -27,8 +27,8 @@ type Notification struct {
 	ReadAt    *time.Time     `json:"readAt"`
 }
 
-// ToRole notifies every ACTIVE employee who currently holds role, inside tx.
-func ToRole(ctx context.Context, tx pgx.Tx, role, kind, entity string, entityID uuid.UUID, details map[string]any) error {
+// ToRole notifies every ACTIVE employee who currently holds role, except those in except, inside tx.
+func ToRole(ctx context.Context, tx pgx.Tx, role, kind, entity string, entityID uuid.UUID, details map[string]any, except ...uuid.UUID) error {
 	if details == nil {
 		details = map[string]any{}
 	}
@@ -36,8 +36,9 @@ func ToRole(ctx context.Context, tx pgx.Tx, role, kind, entity string, entityID 
 		INSERT INTO notifications (recipient_id, kind, entity, entity_id, details)
 		SELECT e.id, $2, $3, $4, $5 FROM employees e
 		WHERE e.status = 'ACTIVE'
-		  AND EXISTS (SELECT 1 FROM role_assignments r WHERE r.employee_id = e.id AND r.role = $1 AND r.valid_to IS NULL)`,
-		role, kind, entity, entityID, details)
+		  AND EXISTS (SELECT 1 FROM role_assignments r WHERE r.employee_id = e.id AND r.role = $1 AND r.valid_to IS NULL)
+		  AND NOT (e.id = ANY($6))`,
+		role, kind, entity, entityID, details, append([]uuid.UUID{}, except...))
 	return err
 }
 

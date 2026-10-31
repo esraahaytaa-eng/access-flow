@@ -4,20 +4,15 @@ A reproducible manual check of the main flows in a real browser, on a clean star
 
 ## Setup
 
-```bash
-docker compose up
-```
-
-Open http://localhost:8080. The demo accounts and passwords are in the README ("Demo accounts"). Sign out (user menu → Çıkış yap) between roles.
-
-The checklist expects the demo data as seeded on a fresh database. Your existing local data is never deleted for QA. If the app log says `demo seed: the database holds data from an interrupted start or an earlier version`, run the checklist in a separate, throwaway Compose project instead; it has its own volumes and leaves yours untouched:
+Run the checklist on a fresh, throwaway Compose project, so it starts from the demo seed and never touches your own data. It has its own volumes (`accessflow-qa_*`); `ACCESSFLOW_PORT` keeps it off port 8080, so a running main project can stay up:
 
 ```bash
-docker compose down                        # stop the main project (keeps its volumes)
-docker compose -p accessflow-qa up         # fresh volumes named accessflow-qa_*
-# after QA, remove only the throwaway project's volumes:
+ACCESSFLOW_PORT=8090 docker compose -p accessflow-qa up --build
+# after QA, remove only the throwaway project and its volumes:
 docker compose -p accessflow-qa down -v
 ```
+
+Open http://localhost:8090 and read every `localhost:8080` below as `localhost:8090`. The demo accounts and passwords are in the README ("Demo accounts"). Sign out (user menu → Çıkış yap) between roles. Run the sections in order: later ones expect the data the earlier ones left.
 
 ## 1. Sign-in page
 
@@ -48,33 +43,48 @@ docker compose -p accessflow-qa down -v
 
 - [ ] Onay kutusu: Elif Çelik's GitHub request waits at the Tool Owner step.
 - [ ] Karşılama görevleri: the open Manual tasks of IT Operations. Claim one and confirm it: the grant becomes active, labelled self-reported.
-- [ ] Erişim incelemeleri: the running campaign; Deniz Kara's Jira item is already kept.
+- [ ] Erişim Kontrolü: the running campaign "Erişim Denetimi — <year> <n>. Çeyrek"; Deniz Kara's Jira item is already kept. The list is paged (100 a page) with the exact total.
 
 ## 6. InfoSec — selin.aydin
 
 - [ ] Onay kutusu: Zeynep Yıldız's Jira / Admin waits at the InfoSec step.
-- [ ] İstisnalar: one failed operation (Mert Acar's GitHub task), two orphan accounts (eski.stajyer on Jira, ajans@partner-reklam.com on Salesforce). Revoke one orphan with a reason.
+- [ ] Denetim kayıtları: Geçmiş erişim sorgusu for today, Onay kanıtı, and the leavers, overrides, policy, privileged and quarter reports open (InfoSec and Super Admin; not the Auditor).
+- [ ] İstisnalar: one failed operation (Mert Acar's GitHub task), two orphan accounts (eski.stajyer on Jira, ajans@partner-reklam.com on Salesforce). Revoke one orphan with a reason. No "Bazı listelerde ilk kayıtlar gösteriliyor" notice: every list is shown in full.
 
 ## 7. HR Manager — ayse.demir
 
 - [ ] Çalışanlar: Oya Sezer suspended, Levent Uysal terminated (removal pending), Tuna Erdem with a scheduled termination.
 - [ ] Transfer an employee to another manager: the transfer screen pre-selects their access for removal.
+- [ ] Succession path (do not send): the Super Admin's employee page (admin) → İşten çıkış says "Önce yeni Süper Yönetici atanmalı". "Yeni Süper Yönetici ata" → pick an employee: the dialog says the role link goes out only after an InfoSec member or an active Super Admin authorizes it. Close with "Vazgeç"; nothing is created.
 - [ ] Çalışanlar → Departmanlar ve unvanlar: eight departments and 18 positions in English. Add "Legal", then retire it: it shows "(kullanımdan kaldırıldı)" and is no longer offered in Yeni çalışan. Adding "legal" again is refused with the defined spelling.
 - [ ] Yeni çalışan: Departman and Unvan are pickers with the catalog names only.
 - [ ] Karşılama görevleri (Vendor Desk): Ece Polat's Payroll Portal task shows the vendor ticket TDR-2026-0142, "Tedarikçi bekleniyor".
 
-## 8. Auditor — gizem.arslan
+## 8. Auditor — gizem.arslan (external auditor: audit events only, O7 note 2026-10-31)
 
-- [ ] Denetim kayıtları: events since startup, filters by action and person; CSV export downloads the loaded rows.
-- [ ] Point-in-time access for today, and the leavers, overrides, policy, privileged and quarter reports open.
-- [ ] No action buttons (read-only).
+- [ ] After sign-in the app opens on Denetim kayıtları. The sidebar has that one item; there is no "Erişim talep et" button, no notification bell and no tabs (no Geçmiş erişim sorgusu, Onay kanıtı or Kanıt raporları). The notice reads "Dış denetçi erişimi: …".
+- [ ] Filters: event type, Yapan (people who appear in the log), Araç (e.g. Jira: only events about Jira's requests, approvals, grants and tasks), date range and text. The footer shows the exact total; Sonraki pages through every matching event, 100 a page.
+- [ ] CSV indir with a filter: one file with every matching event (header plus one row per event; compare the row count with the total), not only the shown page.
+- [ ] Type each address in the address bar: http://localhost:8090/access, /requests, /request-new, /employees, /team, /approvals, /reviews, /tasks, /exceptions, /settings, /mailbox. Each shows "Bu sayfaya erişiminiz yok"; DevTools → Network shows no call to those APIs. http://localhost:8090/ opens Denetim kayıtları.
+- [ ] Direct API calls are refused. Sign in with curl and try a few endpoints (expect `200` for the first two lines, `403` for the rest):
+
+```bash
+B=http://localhost:8090/api/v1; J=$(mktemp)
+curl -s -c $J -o /dev/null -H 'Content-Type: application/json' -d '{"email":"gizem.arslan@accessflow.local","password":"Demo-Auditor-2026"}' $B/auth/login
+CSRF=$(awk '/accessflow_csrf/ {print $7}' $J)
+for p in audit/events audit/filters access requests employees exceptions reviews audit/access audit/reports/privileged email-outbox; do
+  echo "$(curl -s -b $J -o /dev/null -w '%{http_code}' $B/$p) GET /$p"; done
+curl -s -b $J -o /dev/null -w '%{http_code} POST /requests\n' -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' -d '{}' $B/requests
+```
 
 ## 9. Super Admin — admin
 
 - [ ] Araç yönetimi: six tools, with API, Manual and Vendor methods.
 - [ ] Doğrudan erişim: a duration outside 2–90 days shows "2 ile 90 gün arasında bir süre girin."
-- [ ] Yönetim ayarları: roles and admin groups; nominating a second Super Admin needs a different InfoSec member to authorize it.
-- [ ] İçe aktarma → Excel şablonunu indir: the file opens in Excel and in LibreOffice Calc with three sheets (Employees, Tools, Existing Access), a grey example row in each and dropdowns for Department, Job Position, Fulfillment Method, Admin Group and Approval Steps.
+- [ ] Yönetim ayarları → roles: assigning Denetçi to can.ozturk (a tool owner) is refused, naming the tool ownership to hand over first; assigning another role to gizem.arslan (the Auditor) is refused.
+- [ ] Yönetim ayarları: roles and admin groups. Nominating a second Super Admin (routine promotion) waits for an InfoSec member (selin.aydin) to authorize it; the nominator cannot authorize their own nomination.
+- [ ] E-posta kutusu, after the Super Admin sends selin.aydin a new activation link (the employee page → "Etkinleştirme bağlantısı gönder"): "Bağlantıyı göster" on that e-mail refuses with "…sıfırlamayı yapmayan başka bir Süper Yönetici görüntülemelidir" (a privileged account's link is revealed only by a Super Admin who did not issue it). The new link ends that account's password, so do this after section 6.
+- [ ] Yönetim ayarları → İçe aktarma → Excel şablonunu indir: the file opens in Excel and in LibreOffice Calc with three sheets (Employees, Tools, Existing Access), a grey example row in each and dropdowns for Department, Job Position, Fulfillment Method, Admin Group and Approval Steps.
 - [ ] Önizle the untouched template: three "Örnek satır" problems and "Excel’i içe aktar" stays disabled.
 - [ ] Replace the example rows with one new employee (catalog department and position, manager burak.sahin@accessflow.local), one new tool with two levels (owner can.ozturk@accessflow.local, admin group IT Operations) and one access row for the new employee on that tool. Önizle shows no problem, the tool owner and the counts; Excel’i içe aktar creates them all. InfoSec (selin.aydin) gets one notification for the new approval policies.
 - [ ] Import the same file again: nothing new is created; the access row counts as already imported.
@@ -104,7 +114,7 @@ Use a private window (or a second browser) for the employee side, so the Super A
 - [ ] HR Manager: Levent Uysal (terminated) → Yeniden işe al → a new activation e-mail appears for him (reason "Yeniden işe alım").
 
 **Who may see the links**
-- [ ] HR Manager, InfoSec, Auditor, Manager and Employee: no Yönetim ayarları menu, and http://localhost:8080/settings does not open it.
+- [ ] HR Manager, InfoSec, Manager and Employee: no Yönetim ayarları menu (the Auditor sees only Denetim kayıtları, section 8), and http://localhost:8080/settings does not open it.
 - [ ] Super Admin: opening an activation e-mail shows "Bağlantıyı göster"; the revealed link is `http://localhost:8080/sifre-belirle#…`. Denetim kayıtları shows "Etkinleştirme bağlantısı görüntülendi" without the link.
 
 **Opening the link, setting the password, signing in**

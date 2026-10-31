@@ -25,7 +25,8 @@ func (w *world) employeeGrants(p person, id uuid.UUID) testutil.Response {
 	return w.get(p.c, "/api/v1/employees/"+id.String()+"/grants")
 }
 
-// HR reviews the grants a transfer decides on: open ones, not those being or already removed (D5).
+// HR sees the grants not yet removed: open ones, and those still being removed so a
+// leaver's unfinished removals stay visible (D5, D7). Removed ones are not listed.
 func TestEmployeeGrants(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -39,9 +40,16 @@ func TestEmployeeGrants(t *testing.T) {
 
 	r := w.employeeGrants(hr, w.dev.ID)
 	testutil.RequireStatus(t, r, http.StatusOK, "")
-	if gs := r.Body["grants"].([]any); len(gs) != 1 || gs[0].(map[string]any)["accessLevelId"] != w.jiraViewer.String() ||
-		gs[0].(map[string]any)["retainedOnTransfer"] != nil {
-		t.Fatalf("grants = %v; want only the ACTIVE Jira grant", gs)
+	statuses := map[string]string{}
+	for _, g := range r.Body["grants"].([]any) {
+		g := g.(map[string]any)
+		statuses[g["accessLevelId"].(string)] = g["status"].(string)
+		if g["retainedOnTransfer"] != nil {
+			t.Fatalf("retained before any transfer: %v", g)
+		}
+	}
+	if len(statuses) != 2 || statuses[w.jiraViewer.String()] != "ACTIVE" || statuses[slack.String()] != "REVOCATION_REQUESTED" {
+		t.Fatalf("grants = %v; want the ACTIVE Jira grant and the Slack grant being removed", statuses)
 	}
 	tl.drain(t) // the Slack grant is now REVOKED
 	if gs := w.employeeGrants(hr, w.dev.ID).Body["grants"].([]any); len(gs) != 1 {
@@ -154,9 +162,14 @@ func TestTransferKeeps(t *testing.T) {
 	if w.grantStatus(figma) != "REVOCATION_REQUESTED" {
 		t.Fatalf("figma = %s", w.grantStatus(figma))
 	}
-	gs := w.employeeGrants(hr, w.dev.ID).Body["grants"].([]any)
-	if len(gs) != 1 || gs[0].(map[string]any)["retainedOnTransfer"].(map[string]any)["justification"] != "shared on-call rota" {
-		t.Fatalf("grants = %v", gs)
+	var kept map[string]any // the Figma grant being removed is listed too
+	for _, g := range w.employeeGrants(hr, w.dev.ID).Body["grants"].([]any) {
+		if g.(map[string]any)["id"] == jira["id"] {
+			kept = g.(map[string]any)
+		}
+	}
+	if kept == nil || kept["retainedOnTransfer"].(map[string]any)["justification"] != "shared on-call rota" {
+		t.Fatalf("kept grant = %v", kept)
 	}
 	if n := w.count(`SELECT count(*) FROM audit_events WHERE action = 'EMPLOYEE_TRANSFERRED'
 		AND details->'kept'->0->>'justification' = 'shared on-call rota' AND details->'kept'->0->>'grantId' = $1`, jira["id"]); n != 1 {

@@ -3,7 +3,7 @@
   "info": {
     "title": "AccessFlow API",
     "version": "1.0.0",
-    "description": "The JSON API of AccessFlow, used by its web UI. **Read-only documentation**: requests cannot be sent from this page.\n\n- **Sessions:** `POST /auth/login` sets the `accessflow_session` cookie (HttpOnly) and the `accessflow_csrf` cookie. Every signed-in `POST`, `PUT` and `DELETE` must send the `X-CSRF-Token` header with the value of the `accessflow_csrf` cookie. Cross-site unsafe requests, sign-in included, are rejected with `403 cross_origin_request`.\n- **Errors** are JSON `{\"error\": \"<code>\"}`, plus `field` for a validation error and `expected` when a value differs from a defined one only in case. Every signed-in operation can return `401 authentication_required`; an unknown `/api` path is `404 not_found`, a wrong method `405 method_not_allowed`, an unexpected failure `500 internal_error`.\n- **Request bodies** are one JSON value of at most 64 KiB (the workbook upload excepted); a malformed body or an unknown key is `400 invalid_json`.\n- **Concurrency:** records that can change carry a `version`; a stale one is `409 version_conflict`.\n- **Rules:** the business rules behind each endpoint are in `docs/api.md` and `DECISIONS.md`. Every permission is enforced by the server.\n\nMock email delivery and the demo accounts are for local demonstration only."
+    "description": "The JSON API of AccessFlow, used by its web UI. **Read-only documentation**: requests cannot be sent from this page.\n\n- **Sessions:** `POST /auth/login` sets the `accessflow_session` cookie (HttpOnly) and the `accessflow_csrf` cookie. Every signed-in `POST`, `PUT` and `DELETE` must send the `X-CSRF-Token` header with the value of the `accessflow_csrf` cookie. Cross-site unsafe requests, sign-in included, are rejected with `403 cross_origin_request`.\n- **Errors** are JSON `{\"error\": \"<code>\"}`, plus `field` for a validation error and `expected` when a value differs from a defined one only in case. Every signed-in operation can return `401 authentication_required`; an unknown `/api` path is `404 not_found`, a wrong method `405 method_not_allowed`, an unexpected failure `500 internal_error`.\n- **Request bodies** are one JSON value of at most 64 KiB (the workbook upload excepted); a malformed body or an unknown key is `400 invalid_json`.\n- **Concurrency:** records that can change carry a `version`; a stale one is `409 version_conflict`.\n- **Auditor:** an account holding `AUDITOR` is an external auditor and reaches only `GET /audit/events`, `GET /audit/events/export` and `GET /audit/filters` (plus `/auth`), whatever other roles it holds; every other operation answers `403 forbidden` (DECISIONS.md O7 note 2026-10-31).\n- **Rules:** the business rules behind each endpoint are in `docs/api.md` and `DECISIONS.md`. Every permission is enforced by the server.\n\nMock email delivery and the demo accounts are for local demonstration only."
   },
   "servers": [
     {
@@ -550,7 +550,7 @@
         ],
         "operationId": "listEmployees",
         "summary": "Employee directory",
-        "description": "Any signed-in employee. The directory roles (Super Admin, HR Manager, InfoSec, Auditor) get every employee in the full `Employee` form; everyone else gets only **active** employees in the reduced `EmployeeDirectoryEntry` form. Sorted by name; no pagination.",
+        "description": "Any signed-in employee. The directory roles (Super Admin, HR Manager, InfoSec) get every employee in the full `Employee` form; everyone else gets only **active** employees in the reduced `EmployeeDirectoryEntry` form. Sorted by name; no pagination.",
         "responses": {
           "200": {
             "description": "The directory.",
@@ -711,7 +711,7 @@
             }
           },
           "409": {
-            "description": "`email_taken`: another employee already has this email.",
+            "description": "`email_taken`: another employee already has this email; `employee_is_auditor` (field `managerId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1177,7 +1177,7 @@
             }
           },
           "409": {
-            "description": "`employee_status` (not `TERMINATED`), `version_conflict`, `has_direct_reports` (transfer the non-terminated reports first), `owns_tools` (a Super Admin reassigns the tools first).",
+            "description": "`employee_status` (not `TERMINATED`), `version_conflict`, `has_direct_reports` (transfer the non-terminated reports first), `owns_tools` (a Super Admin reassigns the tools first); `employee_is_auditor` (field `managerId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1291,6 +1291,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "`auditor_has_duties` (AUDITOR requested; `field` names the open duty to resolve first: `roles`, `adminGroups`, `toolOwnership`, `directReports`, `pendingApprovals`, `pendingReviews` or `superAdminNomination`); `employee_is_auditor` (field `role`): an Auditor holds no operational duty (O7 note 2026-10-31)."
           }
         }
       }
@@ -1869,7 +1872,7 @@
             }
           },
           "409": {
-            "description": "`employee_status` (the employee is not ACTIVE), `version_conflict`.",
+            "description": "`employee_status` (the employee is not ACTIVE), `version_conflict`; `employee_is_auditor` (field `managerId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2125,7 +2128,7 @@
         ],
         "operationId": "listAdminGroups",
         "summary": "List admin groups",
-        "description": "Any signed-in employee. Sorted by name; `memberIds` is included only for the directory roles (Super Admin, HR Manager, InfoSec, Auditor).",
+        "description": "Any signed-in employee. Sorted by name; `memberIds` is included only for the directory roles (Super Admin, HR Manager, InfoSec).",
         "responses": {
           "200": {
             "description": "The groups.",
@@ -2344,6 +2347,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "`employee_is_auditor` (field `employeeId`): an Auditor holds no operational duty (O7 note 2026-10-31)."
           }
         }
       }
@@ -2428,7 +2434,7 @@
         ],
         "operationId": "getSuperAdminHealth",
         "summary": "Super Admin health check",
-        "description": "Super Admin, InfoSec, HR Manager and Auditor. Counts active Super Admins and InfoSec members; `recoveryRequired` when none is active, `warning` when fewer than two.",
+        "description": "Super Admin, InfoSec and HR Manager. Counts active Super Admins and InfoSec members; `recoveryRequired` when none is active, `warning` when fewer than two.",
         "responses": {
           "200": {
             "description": "The health check.",
@@ -2470,7 +2476,7 @@
         ],
         "operationId": "listSuperAdminNominations",
         "summary": "Open Super Admin nominations",
-        "description": "Super Admin, InfoSec, HR Manager and Auditor see the open, unexpired nominations (oldest first), each with `canAuthorize` for the caller; everyone else gets an empty list (not 403). A recovery nomination is hidden once a Super Admin is active again.",
+        "description": "Super Admin, InfoSec and HR Manager see the open, unexpired nominations (oldest first), each with `canAuthorize` for the caller; everyone else gets an empty list (not 403). A recovery nomination is hidden once a Super Admin is active again.",
         "responses": {
           "200": {
             "description": "The nominations.",
@@ -2521,7 +2527,7 @@
         ],
         "operationId": "nominateSuperAdmin",
         "summary": "Nominate a Super Admin",
-        "description": "Never yourself. A Super Admin nominates an active employee for a two-person promotion; it expires after 7 days and the authorizers (other Super Admins, else InfoSec) are notified. An HR Manager who is not a Super Admin starts a succession while at most one Super Admin is active (D2 note 2026-10-30): `succession: true`, and the nominee gets a single-use 24-hour role-acceptance link in their own Mock Email Outbox (audited as `SUPER_ADMIN_ROLE_LINK_ISSUED`, without the token).",
+        "description": "Never yourself. A Super Admin nominates an active employee for a two-person promotion; it expires after 7 days and the authorizers (other Super Admins, else InfoSec) are notified. An HR Manager who is not a Super Admin starts a succession while at most one Super Admin has not left (active or suspended; D2 notes 2026-10-30 and 2026-10-31): `succession: true`. No link is sent yet: InfoSec members and Super Admins other than the proposer and nominee are notified, and one of them must authorize it (`POST …/authorize`). Only then does the nominee get a single-use 24-hour role-acceptance link in their own Mock Email Outbox (audited as `SUPER_ADMIN_ROLE_LINK_ISSUED`, without the token).",
         "security": [
           {
             "session": [],
@@ -2579,7 +2585,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not a Super Admin, or an HR Manager while two or more Super Admins are active), `self_change_forbidden`; `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
+            "description": "`forbidden` (not a Super Admin, or an HR Manager while two or more Super Admins have not left), `self_change_forbidden`; `csrf_failed` (missing or wrong `X-CSRF-Token`), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2599,7 +2605,7 @@
             }
           },
           "409": {
-            "description": "`already_super_admin`, `nomination_pending` (an open nomination for this employee exists).",
+            "description": "`already_super_admin`, `nomination_pending` (an open nomination for this employee exists); `employee_is_auditor` (field `nomineeId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2618,7 +2624,7 @@
         ],
         "operationId": "authorizeSuperAdminNomination",
         "summary": "Authorize a nomination",
-        "description": "Never the nominee or the proposer. A Super Admin other than those two decides when one is active; otherwise, and always for a recovery nomination, an InfoSec member decides. Authorizing adds the Super Admin role; the nominee's other roles and groups stay.",
+        "description": "Never the nominee or the proposer. A Super Admin other than those two decides when one is active; otherwise, and always for a recovery nomination, an InfoSec member decides. Authorizing adds the Super Admin role; the nominee's other roles and groups stay. For a succession (D2 note 2026-10-31, R-2), any InfoSec member or Super Admin other than the proposer and nominee decides; authorizing records `authorizedBy`/`authorizedAt` (`SUPER_ADMIN_NOMINATION_AUTHORIZED`) and sends the nominee the 24-hour link, but the role is added only when the nominee accepts.",
         "security": [
           {
             "session": [],
@@ -2716,7 +2722,7 @@
             }
           },
           "409": {
-            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again), `already_super_admin`. `nomination_needs_acceptance`: a succession nomination is accepted by its nominee.",
+            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again), `already_super_admin`. `nomination_needs_acceptance`: the succession is already authorized and waits for its nominee. `super_admins_active` (succession, two or more Super Admins have not left).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2735,7 +2741,7 @@
         ],
         "operationId": "declineSuperAdminNomination",
         "summary": "Decline a nomination",
-        "description": "Never the nominee or the proposer. A Super Admin other than those two decides when one is active; otherwise, and always for a recovery nomination, an InfoSec member decides. ",
+        "description": "Never the nominee or the proposer. A Super Admin other than those two decides when one is active; otherwise, and always for a recovery nomination, an InfoSec member decides.  For a succession (D2 note 2026-10-31, R-2), any InfoSec member or Super Admin other than the proposer and nominee decides; authorizing records `authorizedBy`/`authorizedAt` (`SUPER_ADMIN_NOMINATION_AUTHORIZED`) and sends the nominee the 24-hour link, but the role is added only when the nominee accepts.",
         "security": [
           {
             "session": [],
@@ -2833,7 +2839,7 @@
             }
           },
           "409": {
-            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again). `nomination_needs_acceptance`: a succession nomination is accepted by its nominee.",
+            "description": "`nomination_closed`, `nomination_expired`, `version_conflict`, `recovery_ended` (a Super Admin is active again). `nomination_needs_acceptance`: the succession is already authorized and waits for its nominee. `super_admins_active` (succession, two or more Super Admins have not left).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2852,7 +2858,7 @@
         ],
         "operationId": "listCatalog",
         "summary": "List the tool catalog",
-        "description": "Any signed-in employee. Everyone sees the requestable tools and levels (tools without a requestable level are left out), each level's approval steps and `recommended` from their starter package. Super Admin, InfoSec and Auditor also see retired tools and levels, with `status` and `version`. Sorted by name.",
+        "description": "Any signed-in employee. Everyone sees the requestable tools and levels (tools without a requestable level are left out), each level's approval steps and `recommended` from their starter package. Super Admin and InfoSec also see retired tools and levels, with `status` and `version`. Sorted by name.",
         "responses": {
           "200": {
             "description": "The catalog.",
@@ -2991,7 +2997,7 @@
             }
           },
           "409": {
-            "description": "`tool_name_taken`: names are unique ignoring case.",
+            "description": "`tool_name_taken`: names are unique ignoring case; `employee_is_auditor` (field `ownerId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3010,7 +3016,7 @@
         ],
         "operationId": "updateTool",
         "summary": "Update a tool",
-        "description": "Super Admin only. Every field is required; an unchanged edit returns the tool without a new version. A new owner must be ACTIVE. Audited as `TOOL_UPDATED`.",
+        "description": "Super Admin only. Every field is required; an unchanged edit returns the tool without a new version. A new owner must be ACTIVE. Audited as `TOOL_UPDATED`. A new owner takes over the tool's undecided review items in the same transaction (the new owner's own access goes to InfoSec; decided items keep their reviewer), each audited as `REVIEW_ITEM_REROUTED`.",
         "parameters": [
           {
             "name": "id",
@@ -3115,7 +3121,7 @@
             }
           },
           "409": {
-            "description": "`tool_retired`, `version_conflict`, `tool_name_taken`.",
+            "description": "`tool_retired`, `version_conflict`, `tool_name_taken`; `employee_is_auditor` (field `ownerId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4485,7 +4491,7 @@
             }
           },
           "409": {
-            "description": "`item_not_pending`, `step_not_open`, `step_already_decided`, `version_conflict`.",
+            "description": "`item_not_pending`, `step_not_open`, `step_already_decided`, `version_conflict`; `employee_is_auditor` (field `assigneeId`): an Auditor holds no operational duty (O7 note 2026-10-31).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4656,26 +4662,71 @@
           "Access"
         ],
         "operationId": "listTeamAccess",
-        "summary": "List my team's access (Team Access)",
-        "description": "The grants of the signed-in employee's direct reports, open and past, newest first (at most 200). Empty for someone without reports.",
+        "summary": "List my team (Team Access)",
+        "description": "The signed-in employee's direct reports who have not left, by name, 100 per page. Empty for someone without reports. Each report's grants come from `GET /access/team/{id}`.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Case-insensitive search on name or job title."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "1-based page of 100 rows (PERF-004). `invalid_page` otherwise."
+          }
+        ],
         "responses": {
           "200": {
-            "description": "The team's grants.",
+            "description": "One page of the team.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "grants": {
+                    "total": {
+                      "type": "integer",
+                      "description": "Rows matching the filter and search, over all pages."
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer",
+                      "const": 100
+                    },
+                    "members": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/Grant"
+                        "$ref": "#/components/schemas/TeamMember"
                       }
                     }
                   },
                   "required": [
-                    "grants"
+                    "members",
+                    "total",
+                    "page",
+                    "pageSize"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_page`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -5097,24 +5148,63 @@
         ],
         "operationId": "listFulfillmentTasks",
         "summary": "List my fulfillment tasks",
-        "description": "The open (`PENDING`, `IN_PROGRESS`) Manual and Vendor tasks of the admin groups the signed-in employee belongs to: leavers' removals first, then other removals and suspensions, then grants and resumes, each oldest first (at most 200). A task appears once every older operation of the same grant has ended. Empty for a non-member.",
+        "description": "The open (`PENDING`, `IN_PROGRESS`) Manual and Vendor tasks of the admin groups the signed-in employee belongs to: leavers' removals first, then other removals and suspensions, then grants and resumes, each oldest first, 100 per page. A task appears once every older operation of the same grant has ended. Empty for a non-member.",
         "responses": {
           "200": {
-            "description": "The queue.",
+            "description": "One page of the queue.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "total": {
+                      "type": "integer",
+                      "description": "Rows matching the filter and search, over all pages."
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer",
+                      "const": 100
+                    },
                     "tasks": {
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/Task"
                       }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "description": "Over the caller's whole queue, whatever the search.",
+                      "required": [
+                        "queue",
+                        "mine",
+                        "others",
+                        "canAct"
+                      ],
+                      "properties": {
+                        "queue": {
+                          "type": "integer"
+                        },
+                        "mine": {
+                          "type": "integer"
+                        },
+                        "others": {
+                          "type": "integer"
+                        },
+                        "canAct": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   },
                   "required": [
-                    "tasks"
+                    "tasks",
+                    "counts",
+                    "total",
+                    "page",
+                    "pageSize"
                   ]
                 }
               }
@@ -5139,8 +5229,52 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "`invalid_tab`, `invalid_page`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "tab",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queue",
+                "mine",
+                "others"
+              ]
+            },
+            "description": "`queue`: unclaimed; `mine`: claimed by the caller; `others`: claimed by another member. Omitted: all. `invalid_tab` otherwise."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Case-insensitive search on employee (or orphan account) and tool."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "1-based page of 100 rows (PERF-004). `invalid_page` otherwise."
+          }
+        ]
       }
     },
     "/fulfillment-tasks/{id}/claim": {
@@ -5598,7 +5732,7 @@
         ],
         "operationId": "listExceptions",
         "summary": "Exceptions dashboard",
-        "description": "InfoSec, Super Admin and Auditor (read-only for Auditors, O7): everything that needs a person — failed operations, unroutable approval steps, level-change overlaps, suspension gaps, security revocations of leavers, stale grants after a transfer, open access-review findings and orphan accounts.",
+        "description": "InfoSec and Super Admin: everything that needs a person — failed operations, unroutable approval steps, level-change overlaps, suspension gaps, security revocations of leavers, stale grants after a transfer, open access-review findings and orphan accounts.",
         "responses": {
           "200": {
             "description": "Every exception list (each may be empty).",
@@ -5621,7 +5755,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not InfoSec, Super Admin or Auditor), `password_change_required`.",
+            "description": "`forbidden` (not InfoSec or Super Admin), `password_change_required`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6107,7 +6241,7 @@
             }
           },
           "403": {
-            "description": "`separation_of_duties`: own access; `super_admin_keep_forbidden`; `not_reviewer` (for Super Admin, InfoSec or Auditor callers); `csrf_failed`: missing or wrong `X-CSRF-Token`; `password_change_required`: the session still uses a temporary password.",
+            "description": "`separation_of_duties`: own access; `super_admin_keep_forbidden`; `not_reviewer` (for Super Admin or InfoSec callers); `csrf_failed`: missing or wrong `X-CSRF-Token`; `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6146,7 +6280,7 @@
         ],
         "operationId": "getReviewPage",
         "summary": "Active review campaign and its items",
-        "description": "Any signed-in employee. Super Admin, InfoSec and Auditor see every item; everyone else sees only the items they review. Includes the open findings (day 21 left unanswered, undecided) of earlier campaigns.",
+        "description": "Any signed-in employee. Super Admin and InfoSec see every item; everyone else sees only the items they review. 100 items per page, ordered by employee, tool, level. The open findings (day 21 left unanswered, undecided) of earlier campaigns are the `findings` view.",
         "responses": {
           "200": {
             "description": "The review page.",
@@ -6177,8 +6311,53 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "`invalid_view`, `invalid_page`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "esc",
+                "all",
+                "findings"
+              ]
+            },
+            "description": "`mine`: the caller's own items; `esc`: InfoSec's pool and escalated items; `all`: every visible item of the active campaign; `findings`: open findings. Omitted: the server picks `mine`, else `esc`, else `all`. `invalid_view` otherwise."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Case-insensitive search on employee and tool, over the whole view."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "1-based page of 100 rows (PERF-004). `invalid_page` otherwise."
+          }
+        ]
       }
     },
     "/reviews/campaigns": {
@@ -6267,7 +6446,7 @@
         ],
         "operationId": "listImports",
         "summary": "List import reports",
-        "description": "Super Admin, InfoSec or Auditor. The newest 100 baseline import reports, newest first.",
+        "description": "Super Admin or InfoSec. The newest 100 baseline import reports, newest first.",
         "responses": {
           "200": {
             "description": "The reports.",
@@ -6724,7 +6903,7 @@
         ],
         "operationId": "getPointInTimeAccess",
         "summary": "Effective access at a point in time",
-        "description": "Point in time (O1): the grants held at the instant, each with its state then, evidence, approvers and who confirmed or removed it, plus grants removed in the 30 days before. Scope as for audit events: company-wide for Super Admin, InfoSec and Auditor; a manager's current reports otherwise.",
+        "description": "Point in time (O1): the grants held at the instant, each with its state then, evidence, approvers and who confirmed or removed it, plus grants removed in the 30 days before. Scope as for audit events: company-wide for Super Admin and InfoSec; a manager's current reports otherwise.",
         "parameters": [
           {
             "name": "at",
@@ -6799,7 +6978,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`: not Super Admin, InfoSec, Auditor or a manager with reports; `password_change_required`: the session still uses a temporary password.",
+            "description": "`forbidden`: not Super Admin, InfoSec or a manager with reports; `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6818,7 +6997,7 @@
         ],
         "operationId": "searchAuditEvents",
         "summary": "Search the audit log",
-        "description": "Super Admin, InfoSec and Auditor see every event; a manager sees only events about their current direct and indirect reports; anyone else gets 403. Newest first, at most 1000 (`truncated` when more matched).",
+        "description": "Super Admin, InfoSec and Auditor see every event; a manager sees only events about their current direct and indirect reports; anyone else gets 403. Newest first, 100 per page, with the total of every matching event; `GET /audit/events/export` downloads all of them.",
         "parameters": [
           {
             "name": "action",
@@ -6838,6 +7017,139 @@
               "format": "uuid"
             },
             "description": "Employee id of the actor."
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Tool id: events about the tool, its levels, and the requests, request items, approval steps, grants, operations and review items for it."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "First day included (company timezone)."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Last day included (company timezone)."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Case-insensitive text search over action, reason, details, actor and subject names."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "1-based page of 100 events. `invalid_page` otherwise."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_id` (`actor`, `tool`); `invalid_date` (`from`, `to`); `invalid_page`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session (also when the signed-in employee is no longer active).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not Super Admin, InfoSec, Auditor or a manager with reports; `password_change_required`: the session still uses a temporary password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/events/export": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "operationId": "exportAuditEvents",
+        "summary": "Export the audit log as CSV",
+        "description": "Every event matching the filters (the same scope and filters as `GET /audit/events`, without `page`), newest first, streamed as one CSV file (UTF-8 with a byte order mark): occurred_at in the company timezone, actor id and name (`System` for none), action code, entity type and id, subject id and name, reason and the details as JSON. A cell a user wrote that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with `'`. If the server fails while streaming, the connection is aborted, so a cut-off file is never taken for a complete one.",
+        "parameters": [
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated list of exact action names."
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Employee id of the actor."
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Tool id: events about the tool, its levels, and the requests, request items, approval steps, grants, operations and review items for it."
           },
           {
             "name": "from",
@@ -6871,21 +7183,94 @@
         ],
         "responses": {
           "200": {
-            "description": "Matching events.",
+            "description": "The CSV file (`Content-Disposition: attachment`).",
             "content": {
-              "application/json": {
+              "text/csv": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuditEventList"
+                  "type": "string"
                 }
               }
             }
           },
           "400": {
-            "description": "`invalid_id` (`actor`); `invalid_date` (`from`, `to`).",
+            "description": "`invalid_id` (`actor`, `tool`); `invalid_date` (`from`, `to`).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session (also when the signed-in employee is no longer active).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not Super Admin, InfoSec, Auditor or a manager with reports; `password_change_required`: the session still uses a temporary password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit/filters": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "operationId": "auditFilters",
+        "summary": "Choices for the audit event filters",
+        "description": "For the same callers as `GET /audit/events`: everyone who acted in an event in the caller's scope (`actors`, by name) and every tool, retired ones included (`tools`), so the filters need no employee directory.",
+        "responses": {
+          "200": {
+            "description": "The filter choices.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "actors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditPerson"
+                      }
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "actors",
+                    "tools"
+                  ]
                 }
               }
             }
@@ -6920,7 +7305,7 @@
         ],
         "operationId": "getLeaversReport",
         "summary": "Access held by terminated employees",
-        "description": "Every grant a terminated employee held (activated or imported), its current status and whether its removal is proven.\n\nCompany-wide only: Super Admin, InfoSec or Auditor. Read-only.",
+        "description": "Every grant a terminated employee held (activated or imported), its current status and whether its removal is proven.\n\nCompany-wide only: Super Admin or InfoSec. Read-only.",
         "responses": {
           "200": {
             "description": "The report.",
@@ -6943,7 +7328,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`: not Super Admin, InfoSec or Auditor (managers get no reports); `password_change_required`: the session still uses a temporary password.",
+            "description": "`forbidden`: not Super Admin or InfoSec (managers get no reports); `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6962,7 +7347,7 @@
         ],
         "operationId": "getOverridesReport",
         "summary": "Super Admin overrides and direct grants",
-        "description": "Audit events of every Super Admin action that skipped approvals: `SUPER_ADMIN_OVERRIDE`, `DIRECT_GRANT_CREATED` and direct removals (`GRANT_REVOCATION_REQUESTED` with `details.by = DIRECT`) (D1). Newest first, at most 1000.\n\nCompany-wide only: Super Admin, InfoSec or Auditor. Read-only.",
+        "description": "Audit events of every Super Admin action that skipped approvals: `SUPER_ADMIN_OVERRIDE`, `DIRECT_GRANT_CREATED` and direct removals (`GRANT_REVOCATION_REQUESTED` with `details.by = DIRECT`) (D1). Newest first, at most 1000.\n\nCompany-wide only: Super Admin or InfoSec. Read-only.",
         "responses": {
           "200": {
             "description": "The report.",
@@ -6985,7 +7370,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`: not Super Admin, InfoSec or Auditor (managers get no reports); `password_change_required`: the session still uses a temporary password.",
+            "description": "`forbidden`: not Super Admin or InfoSec (managers get no reports); `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7004,7 +7389,7 @@
         ],
         "operationId": "getPolicyChangesReport",
         "summary": "Approval-policy changes",
-        "description": "Audit events of changes to access levels' approval steps (`ACCESS_LEVEL_UPDATED` with `details.steps`) (F2). Newest first, at most 1000.\n\nCompany-wide only: Super Admin, InfoSec or Auditor. Read-only.",
+        "description": "Audit events of changes to access levels' approval steps (`ACCESS_LEVEL_UPDATED` with `details.steps`) (F2). Newest first, at most 1000.\n\nCompany-wide only: Super Admin or InfoSec. Read-only.",
         "responses": {
           "200": {
             "description": "The report.",
@@ -7027,7 +7412,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`: not Super Admin, InfoSec or Auditor (managers get no reports); `password_change_required`: the session still uses a temporary password.",
+            "description": "`forbidden`: not Super Admin or InfoSec (managers get no reports); `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7046,7 +7431,7 @@
         ],
         "operationId": "getPrivilegedAccessReport",
         "summary": "Privileged role holders at a point in time",
-        "description": "Who held each AccessFlow role (Super Admin, InfoSec, HR Manager, Auditor) and each admin group membership at the instant (`at`, else end of `date`, else now), with since when and who granted it (D11).\n\nCompany-wide only: Super Admin, InfoSec or Auditor. Read-only.",
+        "description": "Who held each AccessFlow role (Super Admin, InfoSec, HR Manager, Auditor) and each admin group membership at the instant (`at`, else end of `date`, else now), with since when and who granted it (D11).\n\nCompany-wide only: Super Admin or InfoSec. Read-only.",
         "responses": {
           "200": {
             "description": "The report.",
@@ -7069,7 +7454,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`: not Super Admin, InfoSec or Auditor (managers get no reports); `password_change_required`: the session still uses a temporary password.",
+            "description": "`forbidden`: not Super Admin or InfoSec (managers get no reports); `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7120,7 +7505,7 @@
         ],
         "operationId": "getQuarterReport",
         "summary": "Latest review campaign evidence",
-        "description": "The quarterly evidence package for the latest campaign (D8, D1, D11): the campaign, its decision counts, every item, and the number of policy changes and overrides since it started. `campaign` is `null` (and the rest zero/empty) when no campaign was ever started.\n\nCompany-wide only: Super Admin, InfoSec or Auditor. Read-only.",
+        "description": "The quarterly evidence package for the latest campaign (D8, D1, D11): the campaign, its decision counts, every item, and the number of policy changes and overrides since it started. `campaign` is `null` (and the rest zero/empty) when no campaign was ever started.\n\nCompany-wide only: Super Admin or InfoSec. Read-only.",
         "responses": {
           "200": {
             "description": "The report.",
@@ -7143,7 +7528,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`: not Super Admin, InfoSec or Auditor (managers get no reports); `password_change_required`: the session still uses a temporary password.",
+            "description": "`forbidden`: not Super Admin or InfoSec (managers get no reports); `password_change_required`: the session still uses a temporary password.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7162,7 +7547,7 @@
         ],
         "operationId": "listAuditedRequests",
         "summary": "Audit Explorer: requests with approval chains",
-        "description": "Super Admin, InfoSec and Auditor see every request; a manager sees the requests of their direct and indirect reports; anyone else gets `403`. Newest 100 requests whose beneficiary is in scope, each with its items, approval steps and fulfillment (CASE §5 approval evidence).",
+        "description": "Super Admin and InfoSec see every request; a manager sees the requests of their direct and indirect reports; anyone else gets `403`. Newest 100 requests whose beneficiary is in scope, each with its items, approval steps and fulfillment (CASE §5 approval evidence).",
         "parameters": [
           {
             "name": "q",
@@ -7330,7 +7715,7 @@
         ],
         "operationId": "listEmailOutbox",
         "summary": "Mock Email Outbox",
-        "description": "Any signed-in user: the newest 100 simulated emails they may see. `ACCESS_REQUEST` emails (O2) to InfoSec, Super Admin and Auditor; `ACTIVATION` emails (M18) only to Super Admins; `ROLE_ACCEPTANCE` emails (D2 succession) only to their recipient. No email ever contains a link or token; it is revealed separately (`…/activation-link`, `…/role-link`).",
+        "description": "Any signed-in user: the newest 100 simulated emails they may see. `ACCESS_REQUEST` emails (O2) to InfoSec and Super Admin; `ACTIVATION` emails (M18) only to Super Admins; `ROLE_ACCEPTANCE` emails (D2 succession) only to their recipient. No email ever contains a link or token; it is revealed separately (`…/activation-link`, `…/role-link`).",
         "responses": {
           "200": {
             "description": "The emails.",
@@ -7372,7 +7757,7 @@
         ],
         "operationId": "revealActivationLink",
         "summary": "Reveal an activation link from the Mock Email Outbox",
-        "description": "Super Admin. Decrypts the token of an activation email while the link can still be used, and audits the view (`ACTIVATION_LINK_VIEWED`). The response carries a credential and is sent with `Cache-Control: no-store`.",
+        "description": "Super Admin. Decrypts the token of an activation email while the link can still be used, and audits the view (`ACTIVATION_LINK_VIEWED`, with `privileged`). Never for one's own account. For a Super Admin or InfoSec account (F4 note 2026-10-31, R-1), only a Super Admin who did not issue the link may view it, and the other active Super Admins are notified (`PRIVILEGED_ACTIVATION_LINK_VIEWED`). The response carries a credential and is sent with `Cache-Control: no-store`.",
         "parameters": [
           {
             "name": "id",
@@ -7418,7 +7803,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (not a Super Admin); `password_change_required` (the session still uses a temporary password).",
+            "description": "`forbidden` (not a Super Admin), `independent_super_admin_required` (own account, or a privileged account whose link the caller issued); `password_change_required` (the session still uses a temporary password).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7542,7 +7927,7 @@
         ],
         "operationId": "reissueRoleLink",
         "summary": "Reissue a succession nominee's role-acceptance link",
-        "description": "An HR Manager other than the nominee. Sends a new 24-hour link for an open succession nomination, expired or not; the previous link stops working. Audited as `SUPER_ADMIN_ROLE_LINK_ISSUED` (`reissued: true`).",
+        "description": "An HR Manager other than the nominee. Sends a new 24-hour link for an open, authorized succession nomination, expired or not; the previous link stops working. Audited as `SUPER_ADMIN_ROLE_LINK_ISSUED` (`reissued: true`).",
         "security": [
           {
             "session": [],
@@ -7631,7 +8016,7 @@
             }
           },
           "409": {
-            "description": "`nomination_closed` (not an open succession nomination), `version_conflict`, `super_admins_active` (two or more Super Admins are active).",
+            "description": "`nomination_closed` (not an open succession nomination), `nomination_not_authorized` (not yet authorized: no link exists), `version_conflict`, `super_admins_active` (two or more Super Admins have not left).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7650,7 +8035,7 @@
         ],
         "operationId": "acceptSuperAdminRole",
         "summary": "Accept the Super Admin role through a role-acceptance link",
-        "description": "The succession nominee, signed in as themself (D2 note 2026-10-30). Grants Super Admin (granted by the HR proposer), leaves the password unchanged and ends the nominee's sessions so they sign in again. Audited as `ROLE_ASSIGNED` and `SUPER_ADMIN_ROLE_ACCEPTED`; a refused attempt with a known link as `SUPER_ADMIN_ROLE_ACCEPT_FAILED` (reason only). Serialized with every person-level action, so a link is used once.",
+        "description": "The succession nominee, signed in as themself, after an independent authorization (D2 notes 2026-10-30 and 2026-10-31). Grants Super Admin (granted by the HR proposer), leaves the password unchanged and ends the nominee's sessions so they sign in again. Audited as `ROLE_ASSIGNED` and `SUPER_ADMIN_ROLE_ACCEPTED` (with `authorizedBy`); Super Admins, InfoSec and the proposer are notified. A refused attempt with a known link is audited as `SUPER_ADMIN_ROLE_ACCEPT_FAILED` (reason only, e.g. `not_authorized`). Serialized with every person-level action, so a link is used once.",
         "security": [
           {
             "session": [],
@@ -7726,7 +8111,81 @@
             }
           },
           "409": {
-            "description": "`already_super_admin`, `super_admins_active` (two or more Super Admins are active).",
+            "description": "`already_super_admin`, `super_admins_active` (two or more Super Admins have not left).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/access/team/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Access"
+        ],
+        "operationId": "getTeamMemberAccess",
+        "summary": "One direct report's access",
+        "description": "The grants of one of the signed-in employee's direct reports, open and past, newest first (at most 200). Anyone else answers `not_found`.",
+        "responses": {
+          "200": {
+            "description": "The report's grants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "grants": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Grant"
+                      }
+                    }
+                  },
+                  "required": [
+                    "grants"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session, or the signed-in employee is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_change_required` (temporary password).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not a direct report of the caller.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8113,7 +8572,7 @@
           "version",
           "createdAt"
         ],
-        "description": "The full view of an employee (people.Employee, internal/people/service.go). Returned by the employee endpoints and, in `GET /employees`, to the directory roles (Super Admin, HR Manager, InfoSec, Auditor). Other signed-in employees get the reduced `EmployeeDirectoryEntry` form from `GET /employees`."
+        "description": "The full view of an employee (people.Employee, internal/people/service.go). Returned by the employee endpoints and, in `GET /employees`, to the directory roles (Super Admin, HR Manager, InfoSec). Other signed-in employees get the reduced `EmployeeDirectoryEntry` form from `GET /employees`."
       },
       "EmployeeDirectoryEntry": {
         "type": "object",
@@ -8230,7 +8689,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Current members' employee IDs. Present only in `GET /admin-groups` for the directory roles (Super Admin, HR Manager, InfoSec, Auditor); omitted otherwise and in the create response."
+            "description": "Current members' employee IDs. Present only in `GET /admin-groups` for the directory roles (Super Admin, HR Manager, InfoSec); omitted otherwise and in the create response."
           }
         },
         "required": [
@@ -8322,7 +8781,22 @@
           },
           "succession": {
             "type": "boolean",
-            "description": "HR's succession of the last Super Admin (D2 note 2026-10-30): the nominee accepts through a 24-hour link instead of being authorized."
+            "description": "HR's succession of the last Super Admin (D2 notes 2026-10-30 and 2026-10-31): an InfoSec member or another Super Admin authorizes it, then the nominee accepts through a 24-hour link."
+          },
+          "authorizedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A succession's independent authorizer (R-2); the link exists only once set."
+          },
+          "authorizedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         },
         "required": [
@@ -8338,7 +8812,9 @@
           "decidedAt",
           "reason",
           "version",
-          "canAuthorize"
+          "canAuthorize",
+          "authorizedBy",
+          "authorizedAt"
         ],
         "description": "A Super Admin nomination (people.Nomination)."
       },
@@ -8986,6 +9462,15 @@
           "unroutable": {
             "type": "boolean",
             "description": "True for an InfoSec-pool step that no active, non-excluded InfoSec member may decide; only an override or a reassignment resolves it (F2)."
+          },
+          "party": {
+            "type": "string",
+            "enum": [
+              "submitter",
+              "beneficiary",
+              "approver"
+            ],
+            "description": "Only on an unroutable step in `GET /exceptions`: the caller is a party to the request, so they may neither reassign nor override it (separation of duties); another InfoSec member or Super Admin must."
           }
         }
       },
@@ -9557,7 +10042,7 @@
       },
       "Exceptions": {
         "type": "object",
-        "description": "What needs a person (O3, F2, D4, D5, D7, D8). Each list is capped (operations and overlaps at 200, unroutable steps at 200). Read-only for Auditors.",
+        "description": "What needs a person (O3, F2, D4, D5, D7, D8, D10). Each list holds its first rows (operations, unroutable steps and overlaps 200, orphans 500, review findings 100) and `totals` / `reviewFindingsTotal` count them all.",
         "required": [
           "failedOperations",
           "unroutableSteps",
@@ -9566,7 +10051,9 @@
           "securityRevocations",
           "staleGrants",
           "reviewFindings",
-          "orphanAccounts"
+          "orphanAccounts",
+          "reviewFindingsTotal",
+          "totals"
         ],
         "properties": {
           "failedOperations": {
@@ -9621,6 +10108,46 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ExceptionOrphanAccount"
+            }
+          },
+          "reviewFindingsTotal": {
+            "type": "integer",
+            "description": "All open review findings; `reviewFindings` lists the first 100, the rest are in `GET /reviews?view=findings`."
+          },
+          "totals": {
+            "type": "object",
+            "description": "Every open record of each capped list. The lists hold the first rows (most urgent and oldest first; orphans by tool and account): 200 each, 500 orphans; each resolved record makes room for the next.",
+            "required": [
+              "failedOperations",
+              "unroutableSteps",
+              "overlaps",
+              "suspensionGaps",
+              "securityRevocations",
+              "staleGrants",
+              "orphanAccounts"
+            ],
+            "properties": {
+              "failedOperations": {
+                "type": "integer"
+              },
+              "unroutableSteps": {
+                "type": "integer"
+              },
+              "overlaps": {
+                "type": "integer"
+              },
+              "suspensionGaps": {
+                "type": "integer"
+              },
+              "securityRevocations": {
+                "type": "integer"
+              },
+              "staleGrants": {
+                "type": "integer"
+              },
+              "orphanAccounts": {
+                "type": "integer"
+              }
             }
           }
         }
@@ -9863,11 +10390,11 @@
               "ACTIVE",
               "RETIRED"
             ],
-            "description": "Only for Super Admin, InfoSec and Auditor (omitted otherwise)."
+            "description": "Only for Super Admin and InfoSec (omitted otherwise)."
           },
           "version": {
             "type": "integer",
-            "description": "Only for Super Admin, InfoSec and Auditor (omitted otherwise)."
+            "description": "Only for Super Admin and InfoSec (omitted otherwise)."
           },
           "levels": {
             "type": "array",
@@ -9905,11 +10432,11 @@
               "ACTIVE",
               "RETIRED"
             ],
-            "description": "Only for Super Admin, InfoSec and Auditor (omitted otherwise)."
+            "description": "Only for Super Admin and InfoSec (omitted otherwise)."
           },
           "version": {
             "type": "integer",
-            "description": "Only for Super Admin, InfoSec and Auditor (omitted otherwise)."
+            "description": "Only for Super Admin and InfoSec (omitted otherwise)."
           },
           "requestable": {
             "type": "boolean",
@@ -10943,6 +11470,15 @@
       },
       "ReviewPage": {
         "type": "object",
+        "required": [
+          "campaign",
+          "items",
+          "view",
+          "total",
+          "page",
+          "pageSize",
+          "counts"
+        ],
         "properties": {
           "campaign": {
             "oneOf": [
@@ -10960,13 +11496,64 @@
             "items": {
               "$ref": "#/components/schemas/ReviewItem"
             },
-            "description": "At most 2000 items, ordered by employee, tool, level."
+            "description": "One page of the view."
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "mine",
+              "esc",
+              "all",
+              "findings"
+            ],
+            "description": "The view served."
+          },
+          "total": {
+            "type": "integer",
+            "description": "Items in the view matching the search."
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer",
+            "const": 100
+          },
+          "counts": {
+            "type": "object",
+            "description": "Over every item the caller sees, whatever the search.",
+            "required": [
+              "mine",
+              "esc",
+              "all",
+              "findings",
+              "done",
+              "waiting"
+            ],
+            "properties": {
+              "mine": {
+                "type": "integer"
+              },
+              "esc": {
+                "type": "integer"
+              },
+              "all": {
+                "type": "integer"
+              },
+              "findings": {
+                "type": "integer"
+              },
+              "done": {
+                "type": "integer",
+                "description": "Decided or closed."
+              },
+              "waiting": {
+                "type": "integer",
+                "description": "The active campaign's open items."
+              }
+            }
           }
-        },
-        "required": [
-          "campaign",
-          "items"
-        ]
+        }
       },
       "ReviewDecisionInput": {
         "type": "object",
@@ -11135,16 +11722,25 @@
             "items": {
               "$ref": "#/components/schemas/AuditEvent"
             },
-            "description": "Newest first, at most 1000."
+            "description": "One page, newest first."
           },
-          "truncated": {
-            "type": "boolean",
-            "description": "`true` when more than 1000 events matched."
+          "total": {
+            "type": "integer",
+            "description": "Events matching the filters, over all pages."
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer",
+            "const": 100
           }
         },
         "required": [
           "events",
-          "truncated"
+          "total",
+          "page",
+          "pageSize"
         ]
       },
       "PointInTimeApprover": {
@@ -11583,6 +12179,10 @@
           },
           "openFindings": {
             "type": "integer"
+          },
+          "carriedFindings": {
+            "type": "integer",
+            "description": "Open findings from earlier campaigns, listed in items with carriedOver; not part of total."
           }
         },
         "required": [
@@ -11592,7 +12192,8 @@
           "unanswered",
           "alreadyRemoved",
           "autoRevoked",
-          "openFindings"
+          "openFindings",
+          "carriedFindings"
         ]
       },
       "ReportQuarterItem": {
@@ -11662,6 +12263,10 @@
           "finding": {
             "type": "boolean",
             "description": "An open finding: undecided and not closed after day 21."
+          },
+          "carriedOver": {
+            "type": "boolean",
+            "description": "An open finding from an earlier campaign, shown until it is resolved."
           }
         },
         "required": [
@@ -11675,7 +12280,8 @@
           "reason",
           "late",
           "closedReason",
-          "finding"
+          "finding",
+          "carriedOver"
         ]
       },
       "ReportQuarter": {
@@ -11737,7 +12343,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Machine code, e.g. `invalid_workbook`, `missing_sheet`, `invalid_header`, `too_many_rows`, `macros_not_allowed`, `formula_not_allowed`, `sample_row`, `field_required`, `invalid_email`, `unknown_manager`, `manager_cycle`, `unknown_owner`, `unknown_tool`, `unknown_level`, `duplicate_employee`, `api_account_mismatch`, `held_by_other`."
+            "description": "Machine code, e.g. `invalid_workbook`, `missing_sheet`, `invalid_header`, `too_many_rows`, `too_many_columns`, `macros_not_allowed`, `formula_not_allowed`, `sample_row`, `field_required`, `invalid_email`, `unknown_manager`, `manager_cycle`, `unknown_owner`, `unknown_tool`, `unknown_level`, `duplicate_employee`, `api_account_mismatch`, `held_by_other`."
           },
           "expected": {
             "type": "string",
@@ -11986,6 +12592,47 @@
           "plan",
           "report"
         ]
+      },
+      "TeamMember": {
+        "type": "object",
+        "description": "A direct report who has not left, with their access counted on the server.",
+        "required": [
+          "id",
+          "fullName",
+          "jobTitle",
+          "department",
+          "active",
+          "expiringSoon"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "jobTitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "department": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "integer",
+            "description": "`ACTIVE` grants."
+          },
+          "expiringSoon": {
+            "type": "integer",
+            "description": "Open grants expiring within 14 days in the company time zone (or already past)."
+          }
+        }
       }
     }
   }

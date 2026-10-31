@@ -19,7 +19,7 @@ function PasswordForm({ onChanged }: { onChanged: (p: Principal) => void }) {
     e.preventDefault();
     const next: Errors = {
       currentPassword: form.currentPassword ? undefined : "Mevcut parolanızı girin.",
-      newPassword: form.newPassword.length < 12 || form.newPassword.length > 128 ? "Parola 12–128 karakter olmalı." : undefined,
+      newPassword: [...form.newPassword].length < 12 || [...form.newPassword].length > 128 ? "Parola 12–128 karakter olmalı." : undefined,
       repeat: form.repeat !== form.newPassword ? "Parolalar eşleşmiyor." : undefined,
     };
     setErrors(next);

@@ -111,7 +111,6 @@ func TestExtensionRules(t *testing.T) {
 		{"the same date", w.dev, g, changeBody(w.jiraViewer, until(in(10))), 400, "not_an_extension"},
 		{"a date in the past", w.dev, g, changeBody(w.jiraViewer, until(in(-1))), 400, "expiry_not_in_future"},
 		{"someone else's grant", w.is1, g, changeBody(w.jiraViewer, until(in(40))), 404, ""},
-		{"the skip-level manager", w.skip, g, changeBody(w.jiraViewer, until(in(40))), 404, ""},
 		{"no justification", w.dev, g, map[string]any{"submissionId": uuid.New(), "accessLevelId": w.jiraViewer,
 			"justification": " ", "duration": until(in(40))}, 400, "justification_required"},
 		{"not active yet", w.dev, provisioning, changeBody(w.github, untilRevoked), 409, "grant_not_active"},
@@ -294,5 +293,26 @@ func TestApprovedExtensionCannotBeWithdrawn(t *testing.T) {
 	testutil.RequireStatus(t, withdraw(w.dev.c, it, "changed my mind"), http.StatusConflict, "fulfillment_started")
 	if got := w.myGrant(w.dev.c, w.jiraViewer); got["expiresOn"] != in(40) {
 		t.Fatalf("grant = %v", got)
+	}
+}
+
+// ENG-006: extensions and level changes on behalf follow the same rule as new requests (D3
+// note 2026-10-30): the management chain, an HR Manager or a Super Admin; anyone else gets
+// 404. Only the direct manager's submission approves the Manager step.
+func TestChangeOnBehalfFollowsTheManagementChain(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	g := w.temporary(tl, in(10))
+	hr := w.hr()
+	for _, p := range []person{w.owner, w.is1} { // no line to dev, no HR or Super Admin role
+		testutil.RequireStatus(t, change(p.c, g, changeBody(w.jiraViewer, until(in(40)))), http.StatusNotFound, "not_found")
+	}
+	for _, p := range []person{w.skip, hr, w.admin} {
+		it := items(w.mustChange(p.c, g, changeBody(w.jiraViewer, until(in(40)))))[0]
+		if s := steps(it)[0]; s["type"] != "MANAGER" || s["status"] != "PENDING" || s["assigneeId"] != w.mgr.ID.String() {
+			t.Fatalf("%v: the Manager step = %v", p.ID, s)
+		}
+		w.exec("UPDATE request_items SET status = 'WITHDRAWN' WHERE id = $1", it["id"])
 	}
 }

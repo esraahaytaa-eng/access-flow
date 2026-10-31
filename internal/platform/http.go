@@ -217,3 +217,21 @@ func Serve(ctx context.Context, srv *http.Server) error {
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
 }
+
+// PageSize is how many rows a paged list returns at a time (PERF-004).
+const PageSize = 100
+
+// maxPage bounds the OFFSET a client can ask for.
+const maxPage = 100_000
+
+// PageParam reads the 1-based "page" query parameter (default 1) and returns it with its
+// row offset. Paged lists order by a unique key, so pages are deterministic.
+func PageParam(r *http.Request) (page, offset int, err error) {
+	page = 1
+	if v := r.URL.Query().Get("page"); v != "" {
+		if _, err := fmt.Sscan(v, &page); err != nil || page < 1 || page > maxPage || fmt.Sprint(page) != v {
+			return 0, 0, ValidationError("page", "invalid_page")
+		}
+	}
+	return page, (page - 1) * PageSize, nil
+}

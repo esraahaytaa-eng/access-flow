@@ -30,7 +30,7 @@ func TestCatalogHidesRetired(t *testing.T) {
 	env := newEnv(t)
 	_, admin := env.user("SUPER_ADMIN")
 	_, employee := env.user()
-	_, auditor := env.user("AUDITOR")
+	_, infosec := env.user("INFOSEC")
 
 	jira := env.newTool(admin, "Jira", "API")
 	env.newLevel(admin, jira, "Viewer", false, false)
@@ -53,10 +53,10 @@ func TestCatalogHidesRetired(t *testing.T) {
 		t.Fatalf("employee sees %d tools; want 1 (tools without a requestable level are hidden)", n)
 	}
 
-	full := levelsOf(t, auditor.Do("GET", "/api/v1/tools", nil))
+	full := levelsOf(t, infosec.Do("GET", "/api/v1/tools", nil))
 	for name, want := range map[string]bool{"Jira/Viewer": true, "Jira/Legacy": false, "Gone/User": false, "Empty/User": false} {
 		if full[name] == nil || full[name]["requestable"] != want {
-			t.Errorf("auditor %s = %v; want requestable %v", name, full[name], want)
+			t.Errorf("InfoSec %s = %v; want requestable %v", name, full[name], want)
 		}
 	}
 }

@@ -57,6 +57,7 @@ func ExpireDue(ctx context.Context, pool *pgxpool.Pool, loc *time.Location) (int
 func expire(ctx context.Context, pool *pgxpool.Pool, loc *time.Location, id uuid.UUID) (bool, error) {
 	expired := false
 	err := platform.InTx(ctx, pool, func(tx pgx.Tx, now time.Time) error {
+		expired = false // fn may run again (platform.InTx)
 		employee, err := lockForRemoval(ctx, tx, id)
 		if err != nil {
 			return err
@@ -81,7 +82,7 @@ func lockForRemoval(ctx context.Context, tx pgx.Tx, grant uuid.UUID) (uuid.UUID,
 		return employee, err
 	}
 	// shortcut: a change submitted after this lock and approved before the employee's lock
-	// deadlocks with this removal, which PostgreSQL resolves by failing one (a 500); it needs
+	// deadlocks with this removal; PostgreSQL aborts one and platform.InTx retries it. It needs
 	// a submission and its final approval inside this one transaction.
 	if _, err := tx.Exec(ctx, "SELECT 1 FROM request_items WHERE grant_id = $1 AND status = 'PENDING_APPROVAL' FOR UPDATE", grant); err != nil {
 		return employee, err

@@ -83,6 +83,15 @@ describe("employee detail", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ effectiveAt: "2099-11-15T15:00:00.000Z", reason: "İstifa", version: 5 }));
   });
 
+  it("offers immediate termination while one is scheduled, and explains a scheduled one still waiting (BUG-B-04)", async () => {
+    const target = employee({ roles: ["SUPER_ADMIN"], termination: { at: "2026-10-01T15:00:00Z", reason: "İstifa", scheduledBy: "hr" } });
+    fakeServer({ ...dir(), "GET /employees": { employees: [manager, manager2, target] }, "GET /employees/e2/grants": { grants: [] }, "GET /super-admin-nominations": { nominations: [] } });
+    detail({});
+    expect(await screen.findByRole("button", { name: "Planlı çıkışı iptal et" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "İşten çıkış" })).toBeTruthy();
+    expect(screen.getByText(/Planlanan zaman geçti/).textContent).toContain("yeni Süper Yönetici rolü kabul edene kadar");
+  });
+
   it("blocks the last Super Admin's termination until a successor accepts, and lets HR appoint one (D2 succession)", async () => {
     const target = employee({ roles: ["SUPER_ADMIN"] });
     const calls = fakeServer({ ...dir(), "GET /employees": { employees: [manager, manager2, target] }, "GET /employees/e2/grants": { grants: [] },
@@ -98,15 +107,15 @@ describe("employee detail", () => {
     const pick = dialog("Yeni Süper Yönetici ata");
     expect(within(pick.getByLabelText(/Aday/)).queryByText(/Ayşe İK/)).toBeNull(); // never oneself
     await userEvent.selectOptions(pick.getByLabelText(/Aday/), "m1");
-    await userEvent.click(pick.getByRole("button", { name: "Kabul bağlantısı gönder" }));
+    await userEvent.click(pick.getByRole("button", { name: "Yetkilendirmeye gönder" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ nomineeId: "m1" }));
     expect(calls.some((c) => c.path.endsWith("/terminate"))).toBe(false);
   });
 
-  it("shows HR the successor's status and reissues an expired link", async () => {
+  it("shows HR the authorized successor's status and reissues an expired link", async () => {
     const target = employee({ roles: ["SUPER_ADMIN"], status: "SUSPENDED" });
     const n = { id: "n1", nominee: { id: "m1", fullName: "Burak Manager" }, proposedBy: { id: "hr", fullName: "Ayşe İK" }, recovery: true, succession: true,
-      status: "EXPIRED", createdAt: "2026-10-28T09:00:00Z", expiresAt: "2026-10-29T09:00:00Z", version: 2, canAuthorize: false };
+      status: "EXPIRED", createdAt: "2026-10-28T09:00:00Z", expiresAt: "2026-10-29T09:00:00Z", version: 2, canAuthorize: false, authorizedAt: "2026-10-28T10:00:00Z" };
     const calls = fakeServer({ ...dir(), "GET /employees": { employees: [manager, manager2, target] }, "GET /employees/e2/grants": { grants: [] },
       "GET /super-admin-nominations": { nominations: [n] }, "POST /super-admin-nominations/n1/reissue": { ...n, status: "PENDING", version: 3 } });
     detail({});

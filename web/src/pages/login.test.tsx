@@ -74,4 +74,17 @@ describe("sign-in page", () => {
     expect(await screen.findByRole("heading", { name: "Parolanızı değiştirin" })).toBeTruthy();
     expect(await screen.findByText("Demo Environment")).toBeTruthy();
   });
+
+  it("counts the new password in characters, as the server does (ENG-008)", async () => {
+    const calls = fakeServer({ "GET /auth/me": principal({ mustChangePassword: true }), "GET /demo": demo, "POST /auth/password": principal() });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Parolanızı değiştirin" });
+    const emoji = "🔑".repeat(70); // 70 characters, 140 UTF-16 units
+    await userEvent.type(screen.getByLabelText(/^Mevcut parola/), "Demo-Employee-2026");
+    await userEvent.type(screen.getByLabelText(/^Yeni parola$/), emoji);
+    await userEvent.type(screen.getByLabelText(/^Yeni parola \(tekrar\)/), emoji);
+    await userEvent.click(screen.getByRole("button", { name: /Parolayı değiştir/ }));
+    expect(screen.queryByText("Parola 12–128 karakter olmalı.")).toBeNull();
+    expect(calls.some((c) => c.path === "/auth/password")).toBe(true);
+  });
 });

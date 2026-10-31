@@ -75,7 +75,7 @@ func setup(t *testing.T) env {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	return env{db, Services{Pool: db.App, Auth: authSvc, People: people.NewService(db.App, authSvc), Catalog: catalog.NewService(db.App),
-		Requests: requests.NewService(db.App, loc), Access: access.NewService(db.App, tools), Reviews: reviews.NewService(db.App),
+		Requests: requests.NewService(db.App, loc), Access: access.NewService(db.App, tools, loc), Reviews: reviews.NewService(db.App),
 		Tools: tools, Location: loc}, srv}
 }
 

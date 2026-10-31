@@ -69,6 +69,13 @@ func TestRouter(t *testing.T) {
 			if got := strings.TrimSpace(rec.Body.String()); got != tc.wantBody {
 				t.Errorf("body = %q; want %q", got, tc.wantBody)
 			}
+			// Regression (security F-4): no framing, no MIME sniffing, no referrer.
+			for h, want := range map[string]string{"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'",
+				"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"} {
+				if got := rec.Header().Get(h); got != want {
+					t.Errorf("%s = %q; want %q", h, got, want)
+				}
+			}
 		})
 	}
 }
@@ -84,6 +91,28 @@ func TestRouterListsTheDemoAccounts(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(body), "pass") {
 		t.Fatalf("the demo listing mentions passwords: %s", body)
+	}
+}
+
+// R-7: the API documentation is served only in the local demo setup; elsewhere it is not found.
+func TestSwaggerIsServedOnlyInDemoMode(t *testing.T) {
+	dist := fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")},
+		"swagger/index.html": {Data: []byte("<html>swagger</html>")}, "swagger/openapi.json": {Data: []byte("{}")}}
+	for _, demoMode := range []bool{false, true} {
+		var accounts []demo.Account
+		if demoMode {
+			accounts = demo.Accounts
+		}
+		router := testRouter(t, dist, accounts...)
+		for _, path := range []string{"/swagger", "/swagger/", "/swagger/index.html", "/swagger/openapi.json"} {
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			body := rec.Body.String()
+			served := rec.Code < 400 && !strings.Contains(body, "app")
+			if served != demoMode || (!demoMode && rec.Code != http.StatusNotFound) {
+				t.Errorf("demo=%v %s: %d %q", demoMode, path, rec.Code, body)
+			}
+		}
 	}
 }
 
@@ -206,5 +235,61 @@ func TestPrintBootstrapPassword(t *testing.T) {
 	var out bytes.Buffer
 	if err := printBootstrapPassword(file, &out); err != nil || out.String() != "password: abc\n" {
 		t.Fatalf("got %q, %v; want the file contents", out.String(), err)
+	}
+}
+
+// An Auditor is an external, read-only auditor (DECISIONS.md O7 note 2026-10-31): every
+// business route but the audit events refuses them, whatever other roles they also hold.
+func TestAuditorReachesOnlyTheAuditEvents(t *testing.T) {
+	db := testutil.NewDB(t)
+	svc, err := auth.NewService(db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", LoginRateLimit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), fstest.MapFS{}, demo.Accounts)
+	srv := httptest.NewServer(router)
+	t.Cleanup(srv.Close)
+	signIn := func(roles ...string) *testutil.Client {
+		e := testutil.CreateEmployee(t, db, testutil.EmployeeSpec{Roles: roles, Password: true})
+		c := testutil.NewClient(t, srv)
+		testutil.RequireStatus(t, c.Login(e.Email, testutil.Password), http.StatusOK, "")
+		return c
+	}
+	allowed := map[string]bool{"GET /api/v1/audit/events": true, "GET /api/v1/audit/events/export": true, "GET /api/v1/audit/filters": true}
+	var routes []string
+	err = chi.Walk(router.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		route = strings.TrimSuffix(strings.ReplaceAll(route, "/*/", "/"), "/")
+		if strings.HasPrefix(route, "/api/v1/") && !strings.HasPrefix(route, "/api/v1/auth/") && route != "/api/v1/health" && route != "/api/v1/demo" {
+			routes = append(routes, method+" "+route)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) < 60 {
+		t.Fatalf("walked only %d routes", len(routes))
+	}
+	param := regexp.MustCompile(`\{[^}]+\}`)
+	for _, c := range []*testutil.Client{signIn("AUDITOR"), signIn("AUDITOR", "SUPER_ADMIN", "INFOSEC", "HR_MANAGER")} {
+		for _, rt := range routes {
+			method, path, _ := strings.Cut(rt, " ")
+			r := c.Do(method, param.ReplaceAllString(path, "00000000-0000-4000-8000-000000000001"), map[string]any{})
+			if allowed[rt] {
+				if r.Status != http.StatusOK {
+					t.Errorf("%s: %d %s; want 200", rt, r.Status, r.Raw)
+				}
+			} else if r.Status != http.StatusForbidden || r.Body["error"] != "forbidden" {
+				t.Errorf("%s: %d %s; want 403 forbidden", rt, r.Status, r.Raw)
+			}
+		}
+		testutil.RequireStatus(t, c.Do(http.MethodGet, "/api/v1/auth/me", nil), http.StatusOK, "")
+		testutil.RequireStatus(t, c.Do(http.MethodPost, "/api/v1/auth/logout", nil), http.StatusNoContent, "")
+		testutil.RequireStatus(t, c.Do(http.MethodGet, "/api/v1/audit/events", nil), http.StatusUnauthorized, "authentication_required")
+	}
+	// Other roles keep their routes.
+	admin := signIn("SUPER_ADMIN")
+	for _, p := range []string{"/api/v1/exceptions", "/api/v1/employees", "/api/v1/audit/reports/privileged", "/api/v1/audit/access"} {
+		testutil.RequireStatus(t, admin.Do(http.MethodGet, p, nil), http.StatusOK, "")
 	}
 }

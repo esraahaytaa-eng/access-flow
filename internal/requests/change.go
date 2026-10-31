@@ -30,8 +30,9 @@ type ChangeInput struct {
 }
 
 // Change requests an extension or a level change of an ACTIVE grant that is not yet due, by
-// its employee or their current direct manager on their behalf (D3); anyone else gets 404,
-// as with revoke. The item is approved under the requested level's current steps and the
+// its employee or, on their behalf, whoever may submit a new request for them (checkOnBehalf:
+// the management chain, an HR Manager or a Super Admin; ENG-006); anyone else gets 404, as
+// with revoke. The item is approved under the requested level's current steps and the
 // grant stays as it is until final approval. The bool is false when the submission ID was
 // already used by this submitter (A9).
 func (s *Service) Change(ctx context.Context, actor auth.Principal, grantID uuid.UUID, in ChangeInput) (Request, bool, error) {
@@ -43,7 +44,8 @@ func (s *Service) Change(ctx context.Context, actor auth.Principal, grantID uuid
 	created := false
 	kind := "LEVEL_CHANGE"
 	err = platform.InTx(ctx, s.pool, func(tx pgx.Tx, now time.Time) error {
-		var employee, heldLevel uuid.UUID // neither ever changes
+		created, kind = false, "LEVEL_CHANGE" // fn may run again (platform.InTx)
+		var employee, heldLevel uuid.UUID     // neither ever changes
 		// An orphan account has no employee to change it for.
 		err := tx.QueryRow(ctx, "SELECT employee_id, access_level_id FROM grants WHERE id = $1 AND employee_id IS NOT NULL",
 			grantID).Scan(&employee, &heldLevel)
@@ -72,8 +74,10 @@ func (s *Service) Change(ctx context.Context, actor auth.Principal, grantID uuid
 			Scan(&status, &manager, &tool, &expires, &live, &changing); err != nil {
 			return err
 		}
-		if actor.EmployeeID != employee && (manager == nil || *manager != actor.EmployeeID) {
+		if err := checkOnBehalf(ctx, tx, actor, employee); errors.Is(err, errBeneficiaryNotAllowed) {
 			return platform.ErrNotFound // nobody else may see it
+		} else if err != nil {
+			return err
 		}
 		if prev, err := existing(ctx, tx, actor, in.SubmissionID, kind); err != nil || prev != nil {
 			if prev != nil {

@@ -63,7 +63,7 @@ func run(args []string) error {
 	}
 	slog.Info("migrations applied")
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pool, err := platform.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func run(args []string) error {
 		// The seed needs the runner for its API operations, so it runs beside it; the
 		// server starts at once and the demo data appears within seconds.
 		services := demo.Services{Pool: pool, Auth: svc, People: people.NewService(pool, svc), Catalog: catalog.NewService(pool),
-			Requests: requests.NewService(pool, loc), Access: access.NewService(pool, tools), Reviews: reviews.NewService(pool),
+			Requests: requests.NewService(pool, loc), Access: access.NewService(pool, tools, loc), Reviews: reviews.NewService(pool),
 			Tools: tools, Location: loc}
 		wg.Go(func() {
 			if err := demo.Seed(ctx, services, cfg.BootstrapAdminEmail, demoPasswords); err != nil && ctx.Err() == nil {
@@ -167,9 +167,19 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 	peopleSvc := people.NewService(pool, svc)
 	catalogSvc := catalog.NewService(pool)
 	requestsSvc := requests.NewService(pool, loc)
-	accessSvc := access.NewService(pool, tools)
+	accessSvc := access.NewService(pool, tools, loc)
 
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler { // no framing (clickjacking), no MIME sniffing, no referrer
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Route("/api", func(r chi.Router) {
 		r.Use(crossOrigin.Handler)
 		// Set before the routes below, so the /v1 subrouter inherits the JSON answers.
@@ -201,6 +211,10 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 			})
 		})
 	})
+	if demoAccounts == nil { // R-7: the API documentation is for the local demo setup only
+		r.Handle("/swagger", http.NotFoundHandler())
+		r.Handle("/swagger/*", http.NotFoundHandler())
+	}
 	r.Handle("/*", webui.Handler(dist))
 	return r
 }

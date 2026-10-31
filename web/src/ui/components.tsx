@@ -17,10 +17,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
   type ReactNode,
+  type RefObject,
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { createPortal } from "react-dom";
 import { ApiError } from "../api/client";
 import { icons, type IconName } from "./icons";
 import type { Badge as BadgeValue, Tone } from "./status";
@@ -283,6 +285,22 @@ export function SearchBox({ value, onChange, placeholder = "Ara…", label = "Ar
   );
 }
 
+/** Pages through a server-paged list (PERF-004): "101–200 / 2.345" with previous and next. Hidden while everything fits on one page. */
+export function Pager({ page, pageSize, total, onChange }: { page: number; pageSize: number; total: number; onChange: (page: number) => void }) {
+  if (total <= pageSize && page === 1) return null;
+  const last = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const n = (x: number) => x.toLocaleString("tr-TR");
+  return (
+    <nav className="row" aria-label="Sayfalar" style={{ justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+      <span className="muted small">{n(from)}–{n(Math.min(page * pageSize, total))} / {n(total)}</span>
+      <Button size="sm" disabled={page <= 1} onClick={() => onChange(page - 1)}>Önceki</Button>
+      <span className="small">Sayfa {page} / {last}</span>
+      <Button size="sm" disabled={page >= last} onClick={() => onChange(page + 1)}>Sonraki</Button>
+    </nav>
+  );
+}
+
 export function Tabs<T extends string>({ value, onChange, tabs }: {
   value: T; onChange: (v: T) => void; tabs: { value: T; label: string; count?: number }[];
 }) {
@@ -314,6 +332,30 @@ export function KeyValueList({ items }: { items: ([ReactNode, ReactNode] | false
   );
 }
 
+// Open modals and drawers. While any is open the app behind them (#root) is inert and the page
+// does not scroll; each one is rendered into document.body, outside every stacking context.
+let layers = 0;
+
+function useLayer(open: boolean, panel: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!open) return;
+    const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root = document.getElementById("root");
+    if (layers++ === 0) {
+      root?.setAttribute("inert", "");
+      document.body.style.overflow = "hidden";
+    }
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus();
+    return () => {
+      if (--layers === 0) {
+        root?.removeAttribute("inert");
+        document.body.style.overflow = "";
+      }
+      back?.focus(); // back to what opened it, e.g. the menu button
+    };
+  }, [open, panel]);
+}
+
 function useEscape(onEscape: () => void, active: boolean) {
   useEffect(() => {
     if (!active) return;
@@ -326,13 +368,15 @@ function useEscape(onEscape: () => void, active: boolean) {
 export function Modal({ open, onClose, title, desc, children, footer, wide }: {
   open: boolean; onClose: () => void; title: string; desc?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean;
 }) {
+  const panel = useRef<HTMLDivElement>(null);
   useEscape(onClose, open);
+  useLayer(open, panel);
   if (!open) return null;
-  return (
+  return createPortal(
     <>
       <div className="overlay" onClick={onClose} />
       <div className="modal-wrap" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+        <div ref={panel} tabIndex={-1} className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
           <div className="modal-head">
             <div><div className="modal-title">{title}</div>{desc && <div className="modal-desc">{desc}</div>}</div>
             <Button variant="ghost" size="sm" icon="x" aria-label="Kapat" onClick={onClose} />
@@ -341,19 +385,22 @@ export function Modal({ open, onClose, title, desc, children, footer, wide }: {
           {footer && <div className="modal-foot">{footer}</div>}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
 export function Drawer({ open, onClose, title, sub, children, footer }: {
   open: boolean; onClose: () => void; title: string; sub?: ReactNode; children: ReactNode; footer?: ReactNode;
 }) {
+  const panel = useRef<HTMLElement>(null);
   useEscape(onClose, open);
+  useLayer(open, panel);
   if (!open) return null;
-  return (
+  return createPortal(
     <>
       <div className="overlay" onClick={onClose} />
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label={title}>
+      <aside ref={panel} tabIndex={-1} className="drawer" role="dialog" aria-modal="true" aria-label={title}>
         <div className="drawer-head">
           <div style={{ minWidth: 0 }}><div className="modal-title">{title}</div>{sub && <div className="modal-desc">{sub}</div>}</div>
           <Button variant="ghost" size="sm" icon="x" aria-label="Kapat" onClick={onClose} />
@@ -361,7 +408,8 @@ export function Drawer({ open, onClose, title, sub, children, footer }: {
         <div className="drawer-body">{children}</div>
         {footer && <div className="drawer-foot">{footer}</div>}
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }
 

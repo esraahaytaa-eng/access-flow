@@ -10,7 +10,8 @@ import (
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
 
-// Every M3 endpoint for every role (approved 2026-10-28). The Auditor is strictly read-only;
+// Every M3 endpoint for every role (approved 2026-10-28). The Auditor reaches none of them
+// (audit events only, O7 note 2026-10-31);
 // HR Managers and Super Admins administer employees; resets of InfoSec or Super Admin
 // accounts need a Super Admin; roles and groups are Super Admin only.
 func TestPermissionMatrix(t *testing.T) {
@@ -45,7 +46,7 @@ func TestPermissionMatrix(t *testing.T) {
 	}{
 		{"list employees", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodGet, "/api/v1/employees", nil)
-		}, []int{ok, ok, ok, ok, ok}},
+		}, []int{ok, ok, ok, deny, ok}},
 		{"create employee", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/employees", map[string]any{"email": uuid.NewString() + "@example.com", "fullName": "X"})
 		}, []int{deny, created, deny, deny, created}},
@@ -72,7 +73,7 @@ func TestPermissionMatrix(t *testing.T) {
 		}, []int{deny, deny, deny, deny, none}},
 		{"list admin groups", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodGet, "/api/v1/admin-groups", nil)
-		}, []int{ok, ok, ok, ok, ok}},
+		}, []int{ok, ok, ok, deny, ok}},
 		{"create an admin group", func(c *testutil.Client) testutil.Response {
 			return c.Do(http.MethodPost, "/api/v1/admin-groups", map[string]string{"name": "g-" + uuid.NewString()})
 		}, []int{deny, deny, deny, deny, created}},

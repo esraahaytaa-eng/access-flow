@@ -1,6 +1,6 @@
 // Package requests holds access requests and their approvals: routing with visible
 // fallback, separation of duties, decisions, withdrawal, reassignment and override (F2,
-// D1, D3, D6, D9, O5). Fulfillment of approved items starts in M6.
+// D1, D3, D6, D9, O5).
 package requests
 
 import (

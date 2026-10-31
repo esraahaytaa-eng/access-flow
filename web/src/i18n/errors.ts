@@ -14,6 +14,7 @@ export const errorMessages: Record<string, string> = {
   admin_group_not_found: "Yönetim grubu bulunamadı.",
   already_assigned: "Adım zaten bu kişiye atanmış.",
   already_super_admin: "Bu kişi zaten Süper Yönetici.",
+  auditor_has_duties: "Bu kişi operasyonel bir görev taşıdığı için Denetçi yapılamaz; önce görevi devredin veya kapatın.",
   assignee_not_active: "Seçilen kişi aktif değil.",
   assignee_not_found: "Seçilen kişi bulunamadı.",
   assignee_not_infosec: "Bilgi güvenliği adımı yalnızca bir Bilgi Güvenliği üyesine atanabilir.",
@@ -31,6 +32,7 @@ export const errorMessages: Record<string, string> = {
   duration_too_long: "Doğrudan erişim en fazla 90 gün sürebilir.",
   effective_at_not_future: "Tarih ve saat gelecekte olmalıdır.",
   email_taken: "Bu e-posta adresi zaten kullanılıyor.",
+  employee_is_auditor: "Bu kişi Denetçi; Denetçiye rol, grup üyeliği, araç sahipliği, ekip, onay adımı veya Süper Yönetici önerisi verilemez.",
   employee_not_active: "Çalışan aktif değil.",
   employee_status: "Çalışanın mevcut durumu bu işleme uygun değil.",
   employee_terminated: "Ayrılmış bir çalışan düzenlenemez.",
@@ -52,8 +54,13 @@ export const errorMessages: Record<string, string> = {
   invalid_current_password: "Mevcut parola hatalı.",
   invalid_date: "Geçersiz tarih.",
   invalid_decision: "Geçersiz karar; “Erişim devam etsin” veya “Erişimi kaldır” seçin.",
+  invalid_page: "Geçersiz sayfa numarası.",
+  invalid_tab: "Geçersiz sekme.",
+  invalid_view: "Geçersiz görünüm.",
   last_super_admin: "Bu çalışan sistemin son Süper Yöneticisidir. İşten çıkış işlemini tamamlamak için önce yeni bir Süper Yönetici atanmalıdır.",
-  nomination_needs_acceptance: "Bu atamayı aday kendi hesabıyla kabul eder; yetkilendirme gerekmez.",
+  nomination_needs_acceptance: "Bu atama yetkilendirildi; artık aday kendi hesabıyla kabul eder.",
+  nomination_not_authorized: "Bu atama henüz yetkilendirilmedi; kabul bağlantısı yetkilendirmeden sonra gönderilir.",
+  independent_super_admin_required: "Bu ayrıcalıklı hesabın bağlantısını, sıfırlamayı yapmayan başka bir Süper Yönetici görüntülemelidir.",
   invalid_role_link: "Bağlantı geçersiz, kullanılmış, süresi dolmuş ya da bu hesaba ait değil. Gerekirse İK’dan yeni bağlantı isteyin.",
   super_admins_active: "Yeni Süper Yönetici zaten etkin; bu atama artık gerekmiyor.",
   role_link_unavailable: "Bu bağlantı artık kullanılamaz. Gerekirse İK’dan yeni bağlantı isteyin.",
@@ -136,9 +143,22 @@ export const errorMessages: Record<string, string> = {
   version_conflict: "Bu kayıt siz bakarken başka biri tarafından değiştirildi. Güncel hali yüklendi; kontrol edip yeniden deneyin.",
 };
 
+// The duty that keeps an account from becoming an Auditor, named in the error's field (O7 note 2026-10-31).
+const auditorDuties: Record<string, string> = {
+  roles: "Önce diğer rollerini kaldırın.",
+  adminGroups: "Önce yönetim grubu üyeliklerini kaldırın.",
+  toolOwnership: "Önce araç sahipliğini başka birine devredin.",
+  directReports: "Önce ekibindeki çalışanları başka bir yöneticiye transfer edin.",
+  pendingApprovals: "Önce bekleyen onay adımlarını karara bağlayın veya yeniden atayın.",
+  pendingReviews: "Önce açık erişim gözden geçirmelerini tamamlayın.",
+  superAdminNomination: "Önce bekleyen Süper Yönetici önerisini sonuçlandırın.",
+};
+
 export function errorMessage(err: unknown): string {
   if (!(err instanceof ApiError)) return errorMessages.internal_error;
   const text = errorMessages[err.code] ?? errorMessages.internal_error;
+  const duty = err.code === "auditor_has_duties" && err.field ? auditorDuties[err.field] : undefined;
+  if (duty) return `${text} ${duty}`;
   // The server names the configured value when the input differs only in spelling (M17).
   return typeof err.body?.expected === "string" ? `${text} Tanımlı değer: “${err.body.expected}”.` : text;
 }

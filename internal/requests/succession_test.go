@@ -3,12 +3,14 @@ package requests
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/esraahaytaa-eng/access-flow/internal/auth"
 	"github.com/esraahaytaa-eng/access-flow/internal/people"
 	"github.com/esraahaytaa-eng/access-flow/internal/testutil"
 )
@@ -144,6 +146,15 @@ func acceptRole(by person, token string) testutil.Response {
 	return by.c.Do(http.MethodPost, "/api/v1/super-admin-nominations/accept", map[string]any{"token": token})
 }
 
+// authorizeSuccession: an independent InfoSec member or active Super Admin authorizes HR's
+// succession nomination, which sends the nominee their link (R-2).
+func (w *world) authorizeSuccession(by person, n map[string]any) map[string]any {
+	w.t.Helper()
+	r := decideNomination(by, n, "authorize")
+	testutil.RequireStatus(w.t, r, http.StatusOK, "")
+	return r.Body
+}
+
 func reissueRoleLink(by person, n map[string]any) testutil.Response {
 	return by.c.Do(http.MethodPost, "/api/v1/super-admin-nominations/"+n["id"].(string)+"/reissue", map[string]any{"version": n["version"]})
 }
@@ -178,11 +189,26 @@ func TestHRSuccessionOfTheLastSuperAdmin(t *testing.T) {
 	testutil.RequireStatus(t, nominate(hr, hr.ID), http.StatusForbidden, "self_change_forbidden")
 	testutil.RequireStatus(t, nominate(w.is1, w.dev.ID), http.StatusForbidden, "forbidden")
 	n := w.mustNominate(hr, w.dev.ID)
-	if n["succession"] != true || n["status"] != "PENDING" ||
-		w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND expires_at = created_at + interval '24 hours'", n["id"]) != 1 {
+	if n["succession"] != true || n["status"] != "PENDING" || n["authorizedAt"] != nil ||
+		w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND expires_at = created_at + interval '7 days'", n["id"]) != 1 {
 		t.Fatalf("succession nomination = %v", n)
 	}
-	testutil.RequireStatus(t, decideNomination(w.is1, n, "authorize"), http.StatusConflict, "nomination_needs_acceptance")
+	// R-2: no link until an independent InfoSec member or active Super Admin authorizes;
+	// the authorizers are told. HR and the nominee cannot authorize.
+	if w.count("SELECT count(*) FROM email_outbox WHERE kind = 'ROLE_ACCEPTANCE'") != 0 ||
+		w.count("SELECT count(*) FROM notifications WHERE kind = 'SUPER_ADMIN_NOMINATED' AND recipient_id = $1 AND entity_id = $2", w.is1.ID, n["id"]) != 1 {
+		t.Fatal("a link went out before authorization, or InfoSec was not told")
+	}
+	testutil.RequireStatus(t, reissueRoleLink(hr, n), http.StatusConflict, "nomination_not_authorized")
+	testutil.RequireStatus(t, decideNomination(hr, n, "authorize"), http.StatusForbidden, "separation_of_duties")
+	testutil.RequireStatus(t, decideNomination(w.dev, n, "authorize"), http.StatusForbidden, "separation_of_duties")
+	testutil.RequireStatus(t, decideNomination(w.mgr, n, "authorize"), http.StatusForbidden, "forbidden")
+	n = w.authorizeSuccession(w.is1, n)
+	if n["status"] != "PENDING" || n["authorizedAt"] == nil || w.superAdmins() != 0 || w.audits("SUPER_ADMIN_NOMINATION_AUTHORIZED") != 1 ||
+		w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND expires_at = authorized_at + interval '24 hours'", n["id"]) != 1 {
+		t.Fatalf("authorized succession = %v", n)
+	}
+	testutil.RequireStatus(t, decideNomination(w.is2, n, "authorize"), http.StatusConflict, "nomination_needs_acceptance")
 
 	// The link is in the nominee's own outbox only; HR and InfoSec see the status, never the link.
 	token := w.roleLink(w.dev)
@@ -216,6 +242,11 @@ func TestHRSuccessionOfTheLastSuperAdmin(t *testing.T) {
 		w.audits("SUPER_ADMIN_ROLE_ACCEPTED") != 1 || w.audits("SUPER_ADMIN_ROLE_ACCEPT_FAILED") != 1 {
 		t.Fatal("acceptance not recorded")
 	}
+	for _, p := range []person{hr, w.is1, w.is2} {
+		if w.count("SELECT count(*) FROM notifications WHERE kind = 'SUPER_ADMIN_ROLE_ACCEPTED' AND recipient_id = $1", p.ID) != 1 {
+			t.Fatalf("%v is not told the role was accepted", p.ID)
+		}
+	}
 	testutil.RequireStatus(t, w.get(w.dev.c, "/api/v1/auth/me"), http.StatusUnauthorized, "") // a privileged role: sign in again
 	again := testutil.NewClient(t, w.srv)
 	testutil.RequireStatus(t, again.Login(w.dev.Email, testutil.Password), http.StatusOK, "")
@@ -237,7 +268,7 @@ func TestRoleLinkExpiresAndIsReplacedOnReissue(t *testing.T) {
 	w := newWorld(t)
 	hr := w.hr()
 	w.mustLifecycle(hr, w.admin.ID, "suspend")
-	n := w.mustNominate(hr, w.dev.ID)
+	n := w.authorizeSuccession(w.is1, w.mustNominate(hr, w.dev.ID))
 	first := w.roleLink(w.dev)
 	testutil.RequireStatus(t, reissueRoleLink(w.dev, n), http.StatusForbidden, "forbidden")
 	testutil.RequireStatus(t, reissueRoleLink(w.is1, n), http.StatusForbidden, "forbidden")
@@ -272,7 +303,7 @@ func TestConcurrentRoleAcceptance(t *testing.T) {
 	w := newWorld(t)
 	hr := w.hr()
 	w.mustLifecycle(hr, w.admin.ID, "suspend")
-	w.mustNominate(hr, w.dev.ID)
+	w.authorizeSuccession(w.is1, w.mustNominate(hr, w.dev.ID))
 	token := w.roleLink(w.dev)
 	other := testutil.NewClient(t, w.srv)
 	testutil.RequireStatus(t, other.Login(w.dev.Email, testutil.Password), http.StatusOK, "")
@@ -387,7 +418,7 @@ func TestSuccessionOnlyWhileTheLastSuperAdminLeaves(t *testing.T) {
 	other := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
 	testutil.RequireStatus(t, nominate(hr, w.dev.ID), http.StatusForbidden, "forbidden") // two active
 	w.mustLifecycle(hr, other.ID, "terminate")
-	n := w.mustNominate(hr, w.dev.ID)
+	n := w.authorizeSuccession(w.is1, w.mustNominate(hr, w.dev.ID))
 	testutil.RequireStatus(t, nominate(hr, w.owner.ID), http.StatusConflict, "nomination_pending") // one succession at a time
 	token := w.roleLink(w.dev)
 
@@ -411,12 +442,121 @@ func TestSuspendedProposersNominationsClose(t *testing.T) {
 	if w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND status = 'CANCELLED'", promotion["id"]) != 1 {
 		t.Fatal("the suspended Super Admin's promotion is still open")
 	}
-	w.mustNominate(hr, w.dev.ID)
+	w.authorizeSuccession(w.is1, w.mustNominate(hr, w.dev.ID))
 	token := w.roleLink(w.dev)
 	w.exec("UPDATE role_assignments SET valid_to = now() WHERE employee_id = $1 AND role = 'HR_MANAGER'", hr.ID)
 	testutil.RequireStatus(t, acceptRole(w.dev, token), http.StatusBadRequest, "invalid_role_link")
 	w.mustLifecycle(hr2, hr.ID, "suspend")
 	if w.superAdmins() != 0 || w.count("SELECT count(*) FROM super_admin_nominations WHERE status = 'PENDING'") != 0 {
 		t.Fatal("the suspended HR proposer's succession is still open")
+	}
+}
+
+// A nomination cancelled because its nominee left drops the link's encrypted copy in the
+// same transaction, not at the next sweep (BUG-B-07).
+func TestCancelledNominationClearsItsLinkAtOnce(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	hr := w.hr()
+	w.mustLifecycle(hr, w.admin.ID, "suspend")
+	n := w.authorizeSuccession(w.is1, w.mustNominate(hr, w.dev.ID))
+	if w.count("SELECT count(*) FROM email_outbox WHERE nomination_id = $1 AND sealed_token IS NOT NULL", n["id"]) != 1 {
+		t.Fatal("no sealed link to clear")
+	}
+	w.mustLifecycle(hr, w.dev.ID, "suspend")
+	if w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND status = 'CANCELLED'", n["id"]) != 1 ||
+		w.count("SELECT count(*) FROM email_outbox WHERE nomination_id = $1 AND sealed_token IS NOT NULL", n["id"]) != 0 {
+		t.Fatal("the cancelled nomination's link is still stored")
+	}
+}
+
+// F-1: suspended Super Admins still count, so HR cannot suspend their way into a succession;
+// HR keeps emergency suspension, and recover-admin stays the way back once none is active.
+func TestSuspendingSuperAdminsOpensNoHRSuccession(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	hr := w.hr()
+	a2 := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
+	a3 := w.person(testutil.EmployeeSpec{Roles: []string{"SUPER_ADMIN"}})
+	w.mustLifecycle(hr, a2.ID, "suspend")
+	w.mustLifecycle(hr, a3.ID, "suspend")
+	testutil.RequireStatus(t, nominate(hr, w.dev.ID), http.StatusForbidden, "forbidden")
+	w.mustLifecycle(hr, w.admin.ID, "suspend")
+	if h := w.health(hr); h["recoveryRequired"] != true {
+		t.Fatalf("health = %v", h)
+	}
+	testutil.RequireStatus(t, nominate(hr, w.dev.ID), http.StatusForbidden, "forbidden")
+	if w.count("SELECT count(*) FROM super_admin_nominations") != 0 || w.superAdmins() != 0 {
+		t.Fatal("a succession opened while suspended Super Admins remain")
+	}
+	authSvc, err := auth.NewService(w.db.App, auth.Options{Secret: []byte(strings.Repeat("k", 32)), BootstrapFile: t.TempDir() + "/admin.txt", MailKey: testutil.MailKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authSvc.RecoverAdmin(context.Background(), w.dev.Email); err != nil {
+		t.Fatalf("recover-admin: %v", err)
+	}
+	if w.superAdmins() != 1 {
+		t.Fatal("recover-admin did not restore a Super Admin")
+	}
+}
+
+// R-2: with the last Super Admin suspended, HR and the nominee alone never create a Super
+// Admin. An authorizer declining closes the nomination; a link that exists without an
+// authorization (one sent before this rule) is refused.
+func TestHRSuccessionNeedsAnIndependentAuthorizer(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	hr := w.hr()
+	w.mustLifecycle(hr, w.admin.ID, "suspend")
+	n := w.mustNominate(hr, w.dev.ID)
+	if w.count("SELECT count(*) FROM email_outbox WHERE recipient_id = $1 AND kind = 'ROLE_ACCEPTANCE'", w.dev.ID) != 0 {
+		t.Fatal("the nominee got a link before authorization")
+	}
+	list := w.get(w.is1.c, "/api/v1/super-admin-nominations").Body["nominations"].([]any)
+	if len(list) != 1 || list[0].(map[string]any)["canAuthorize"] != true {
+		t.Fatalf("InfoSec cannot authorize: %v", list)
+	}
+	if l := w.get(hr.c, "/api/v1/super-admin-nominations").Body["nominations"].([]any); l[0].(map[string]any)["canAuthorize"] != false {
+		t.Fatalf("HR may authorize their own nomination: %v", l)
+	}
+	testutil.RequireStatus(t, decideNomination(w.is1, n, "decline"), http.StatusOK, "")
+	if w.count("SELECT count(*) FROM super_admin_nominations WHERE id = $1 AND status = 'DECLINED' AND decided_by = $2", n["id"], w.is1.ID) != 1 {
+		t.Fatal("decline not recorded")
+	}
+
+	n = w.authorizeSuccession(w.is1, w.mustNominate(hr, w.dev.ID))
+	token := w.roleLink(w.dev)
+	w.exec("UPDATE super_admin_nominations SET authorized_by = NULL, authorized_at = NULL WHERE id = $1", n["id"])
+	testutil.RequireStatus(t, acceptRole(w.dev, token), http.StatusBadRequest, "invalid_role_link")
+	if w.superAdmins() != 0 || w.count("SELECT count(*) FROM audit_events WHERE action = 'SUPER_ADMIN_ROLE_ACCEPT_FAILED' AND details->>'reason' = 'not_authorized'") != 1 {
+		t.Fatal("an unauthorized link made a Super Admin")
+	}
+}
+
+// Two authorizers at once: exactly one link goes out.
+func TestConcurrentSuccessionAuthorizations(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	hr := w.hr()
+	w.mustLifecycle(hr, w.admin.ID, "suspend")
+	n := w.mustNominate(hr, w.dev.ID)
+	var wg sync.WaitGroup
+	got := make([]testutil.Response, 2)
+	wg.Go(func() { got[0] = decideNomination(w.is1, n, "authorize") })
+	wg.Go(func() { got[1] = decideNomination(w.is2, n, "authorize") })
+	wg.Wait()
+	ok := 0
+	for _, r := range got {
+		switch r.Status {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("response %d %v", r.Status, r.Body)
+		}
+	}
+	if ok != 1 || w.audits("SUPER_ADMIN_ROLE_LINK_ISSUED") != 1 || w.count("SELECT count(*) FROM email_outbox WHERE kind = 'ROLE_ACCEPTANCE'") != 1 {
+		t.Fatalf("successes %d", ok)
 	}
 }

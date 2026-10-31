@@ -32,7 +32,7 @@ func canManageEmployees(p auth.Principal) bool { return hasAny(p, "SUPER_ADMIN",
 
 // seesFullDirectory: these roles see every employee and every field (approved 2026-10-28).
 func seesFullDirectory(p auth.Principal) bool {
-	return hasAny(p, "SUPER_ADMIN", "HR_MANAGER", "INFOSEC", "AUDITOR")
+	return hasAny(p, "SUPER_ADMIN", "HR_MANAGER", "INFOSEC")
 }
 
 var (

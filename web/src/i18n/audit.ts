@@ -33,7 +33,7 @@ export const auditActionLabel: Record<string, string> = {
   REVIEW_CAMPAIGN_STARTED: "Erişim denetimi başlatıldı", REVIEW_REMINDERS_SENT: "İnceleme hatırlatması gönderildi (gün 7)",
   REVIEW_ESCALATED: "İnceleme Bilgi Güvenliğine eskale edildi (gün 14)", REVIEW_KEPT: "Denetim kararı: erişim devam etsin", REVIEW_REVOKED: "Denetim kararı: erişimi kaldır",
   REVIEW_AUTO_REVOKED: "Yanıtlanmadığı için kaldırıldı (gün 21)", REVIEW_FINDING_OPENED: "Yanıtsız kalem güvenlik bulgusu oldu (gün 21)",
-  REVIEW_ITEM_CLOSED: "İnceleme kalemi kapandı", REVIEW_CAMPAIGN_CLOSED: "Erişim denetimi kapandı",
+  REVIEW_ITEM_CLOSED: "İnceleme kalemi kapandı", REVIEW_ITEM_REROUTED: "İnceleme kalemi yeni araç sahibine yönlendirildi", REVIEW_CAMPAIGN_CLOSED: "Erişim denetimi kapandı",
   ACCESS_IMPORTED: "Mevcut erişimler içe aktarıldı", GRANT_IMPORTED: "Mevcut erişim içe aktarıldı",
   GRANT_VERIFIED_BY_TOOL: "İçe aktarılan erişim araçtan doğrulandı",
   DEPARTMENT_CREATED: "Departman tanımlandı", DEPARTMENT_RETIRED: "Departman kullanımdan kaldırıldı",
@@ -59,7 +59,7 @@ export const auditGroups: { value: string; label: string; actions: string[] }[] 
     "SUPER_ADMIN_NOMINATION_DECLINED", "SUPER_ADMIN_NOMINATION_CANCELLED", "SUPER_ADMIN_NOMINATION_EXPIRED", "ADMIN_RECOVERY_REQUIRED", "ADMIN_RECOVERED",
     "SUPER_ADMIN_ROLE_LINK_ISSUED", "SUPER_ADMIN_ROLE_ACCEPTED", "SUPER_ADMIN_ROLE_ACCEPT_FAILED"] },
   { value: "reviews", label: "İncelemeler ve bulgular", actions: ["REVIEW_CAMPAIGN_STARTED", "REVIEW_REMINDERS_SENT", "REVIEW_ESCALATED", "REVIEW_KEPT",
-    "REVIEW_REVOKED", "REVIEW_AUTO_REVOKED", "REVIEW_FINDING_OPENED", "REVIEW_ITEM_CLOSED", "REVIEW_CAMPAIGN_CLOSED", "ACCESS_IMPORTED", "GRANT_IMPORTED",
+    "REVIEW_REVOKED", "REVIEW_AUTO_REVOKED", "REVIEW_FINDING_OPENED", "REVIEW_ITEM_CLOSED", "REVIEW_ITEM_REROUTED", "REVIEW_CAMPAIGN_CLOSED", "ACCESS_IMPORTED", "GRANT_IMPORTED",
     "GRANT_VERIFIED_BY_TOOL", "ORPHAN_DISMISSED"] },
 ];
 
