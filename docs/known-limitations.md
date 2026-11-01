@@ -29,7 +29,8 @@ The limits a reviewer should know first; each is explained in its section below.
 - **Accepted security residuals** (details and history in `docs/qa/final/security-audit.md`):
   - Succession (D2) needs three people: an HR Manager, an independent InfoSec member or Super Admin, and the nominee. If all three collude they can create a Super Admin; Super Admins and InfoSec are notified at nomination and acceptance.
   - Two Super Admins together can issue and reveal an activation link of another privileged account (see the Mock Email Outbox above); the others are notified.
-  - An HR Manager or Super Admin who moves an employee under themself sees that employee on their team; approval still comes from someone else (D3 note 2026-10-31).
+  - An HR Manager or Super Admin who moves an employee under themself sees that employee on their team, including that employee's audit history in Denetim kayıtları; approval still comes from someone else (D3 note 2026-10-31). The transfer is audited.
+  - A single Super Admin can take over an ordinary employee's account (password reset, then reveal the activation link), give it InfoSec and use it to authorize their own nomination. Every step is audited (`ACTIVATION_LINK_VIEWED`, and `ACTIVATION_COMPLETED` names who revealed the link); the control is detective, as Super Admins are trusted (D1).
   - The session signing secret is stored in the database; a database dump allows forging sessions.
   - The audit log is append-only, but the application's database role can insert rows, so a compromised application could add forged events.
   - The API documentation (`/swagger/`) is served only in the local demo setup, where it is readable without signing in (A7 note 2026-10-31).
@@ -116,5 +117,5 @@ The limits a reviewer should know first; each is explained in its section below.
 
 - Real e-mail delivery: activation links and the access-request notice go to the local Mock Email Outbox only (DECISIONS.md F4, O2). Real delivery would send each link to its employee and remove the outbox's reveal.
 - SSO.
-- Real tool connectors: API tools are reached through the Mock Tool Service only (DECISIONS.md A1).
+- Real production tool connectors: API tools use the Mock Tool Service; the optional GitHub sandbox adapter covers one sandbox repository only (DECISIONS.md A1).
 - Investigating past employee activity in external tools. AccessFlow answers who had access in AccessFlow on a date (point-in-time); finding and closing accounts held outside it is an IT/InfoSec task.

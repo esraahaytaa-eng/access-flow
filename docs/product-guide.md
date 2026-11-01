@@ -268,7 +268,7 @@ An API result is observed: AccessFlow read it from the tool. A Manual or Vendor 
 
 > **Kısaca (TR):** Üç araç, üç yöntemi temsil eder. AWS Console (API): Mert'in Admin talebi yöneticide bekliyor, Tuna'nın ReadOnly talebi reddedildi. GitHub (Manuel): Deniz'in erişimini Can elle verdi ve onayladı; Mert'in görevini Emre lisans sınırı yüzünden başarısız bildirdi. Payroll Portal (Tedarikçi): Ece'nin talebi için Hakan tedarikçiye TDR-2026-0142 numaralı talebi açtı; tedarikçi bekleniyor. Bunların hepsi temiz bir başlangıçta hazır gelir.
 
-> AWS, GitHub and the other names are **demo catalog entries**. No third-party system is integrated.
+> AWS, GitHub and the other names are **demo catalog entries**. No third-party system is integrated by default (the optional GitHub sandbox adapter, §5.1, is the one exception).
 
 ### 6.1 AWS Console — API
 

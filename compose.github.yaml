@@ -1,4 +1,4 @@
-# Optional GitHub sandbox adapter (DECISIONS.md A1 note 2026-11-01; README "GitHub sandbox").
+# Optional GitHub sandbox adapter (DECISIONS.md A1 note 2026-11-01; README "Optional: GitHub sandbox adapter").
 # Use only with a separate project and the git-ignored .env.github, never with the default one:
 #   docker compose -p accessflow-github --env-file .env.github -f compose.yaml -f compose.github.yaml up --build
 # This file holds no secret: every value comes from .env.github.

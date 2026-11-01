@@ -1,6 +1,6 @@
 import { defineConfig } from "@playwright/test";
 
-// One serial smoke test against the isolated stack ./e2e.sh starts. No traces, screenshots or
+// Serial smoke tests (the journey and the plain-HTTP check) against the isolated stack ./e2e.sh starts. No traces, screenshots or
 // videos: they could hold the activation link or a session cookie. Output stays in the container.
 export default defineConfig({
   testDir: ".",
