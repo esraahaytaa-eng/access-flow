@@ -36,7 +36,12 @@ var (
 var methods = map[string]bool{"API": true, "MANUAL": true, "VENDOR": true}
 
 // Service runs the catalog transactions.
-type Service struct{ pool *pgxpool.Pool }
+type Service struct {
+	pool *pgxpool.Pool
+	// OwnerChanged, when set, runs in a tool owner change's transaction after its review items
+	// moved: requests.ToolOwnerChanged, set by main (requests imports catalog, not the reverse).
+	OwnerChanged func(ctx context.Context, tx pgx.Tx, actor *uuid.UUID, tool uuid.UUID) error
+}
 
 func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 
@@ -268,6 +273,11 @@ func (s *Service) UpdateTool(ctx context.Context, actor auth.Principal, id uuid.
 		if in.OwnerID != cur.OwnerID {
 			if err := reviews.OwnerChanged(ctx, tx, actorRef(actor), id, in.OwnerID); err != nil {
 				return err
+			}
+			if s.OwnerChanged != nil {
+				if err := s.OwnerChanged(ctx, tx, actorRef(actor), id); err != nil {
+					return err
+				}
 			}
 		}
 		return audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "TOOL_UPDATED", Entity: "tool", EntityID: &id, Details: changes})

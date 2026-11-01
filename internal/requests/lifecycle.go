@@ -110,6 +110,40 @@ func cancelOwn(ctx context.Context, tx pgx.Tx, now time.Time, actor *uuid.UUID, 
 	return nil
 }
 
+// ToolOwnerChanged routes the tool's pending Tool Owner steps again, to its new owner or their
+// fallback, in the owner change's transaction (catalog.Service.OwnerChanged): only the current
+// owner decides, as for review items (D8 note 2026-10-31).
+func ToolOwnerChanged(ctx context.Context, tx pgx.Tx, actor *uuid.UUID, tool uuid.UUID) error {
+	rows, err := tx.Query(ctx, `SELECT s.id, s.item_id FROM approval_steps s JOIN request_items i ON i.id = s.item_id
+		WHERE i.tool_id = $1 AND i.status = 'PENDING_APPROVAL' AND s.type = 'TOOL_OWNER' AND s.status = 'PENDING'
+		  AND s.assignee_id IS DISTINCT FROM (SELECT owner_id FROM tools WHERE id = $1) ORDER BY s.item_id`, tool)
+	if err != nil {
+		return err
+	}
+	type stepRef struct{ step, item uuid.UUID }
+	pending, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (stepRef, error) {
+		var ref stepRef
+		return ref, row.Scan(&ref.step, &ref.item)
+	})
+	if err != nil {
+		return err
+	}
+	for _, ref := range pending {
+		it, err := lockItem(ctx, tx, ref.item)
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(it.steps, func(s Step) bool { return s.ID == ref.step })
+		if it.status != "PENDING_APPROVAL" || it.steps[i].Status != "PENDING" { // decided before its lock
+			continue
+		}
+		if err := rerouteStep(ctx, tx, actor, it, it.steps[i], "tool owner changed"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // rerouteStep routes a pending step of a locked item afresh and records the move.
 func rerouteStep(ctx context.Context, tx pgx.Tx, actor *uuid.UUID, it itemState, step Step, reason string) error {
 	route, err := routeStep(ctx, tx, it, step)

@@ -513,7 +513,8 @@ type levelCheck struct {
 
 // checkLevel: the level and its tool are ACTIVE, the beneficiary has no open item for the
 // tool (2026-10-28: one open item per person and tool) and holds no open grant for it but
-// the one being changed, if any (D4). The tool row lock holds off a concurrent retirement;
+// the one being changed, if any (D4), and no open orphan grant of the tool has the
+// beneficiary's email as its account (D10: it would share the account in the tool). The tool row lock holds off a concurrent retirement;
 // the level is read after it (M3: lock first, then read).
 func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID, changing *uuid.UUID) (levelCheck, error) {
 	var c levelCheck
@@ -530,12 +531,14 @@ func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID, 
 	}
 	// One statement, after the beneficiary's lock: an approval turns the open item into an
 	// open grant in one transaction, so this sees one or the other (D4, A9).
-	var owner, infosec, open, held bool
+	var owner, infosec, open, held, orphan bool
 	if err := tx.QueryRow(ctx, `SELECT name, status, requires_tool_owner, requires_infosec,
 		EXISTS (SELECT 1 FROM request_items WHERE beneficiary_id = $2 AND tool_id = $3 AND status = 'PENDING_APPROVAL'),
 		EXISTS (SELECT 1 FROM grants WHERE employee_id = $2 AND tool_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED')
-		        AND id IS DISTINCT FROM $4)
-		FROM access_levels WHERE id = $1`, levelID, beneficiary, c.toolID, changing).Scan(&c.level, &levelStatus, &owner, &infosec, &open, &held); err != nil {
+		        AND id IS DISTINCT FROM $4),
+		EXISTS (SELECT 1 FROM grants WHERE employee_id IS NULL AND tool_id = $3 AND status NOT IN ('REVOKED', 'CANCELLED')
+		        AND orphan_dismissed_at IS NULL AND lower(account) = (SELECT email FROM employees WHERE id = $2))
+		FROM access_levels WHERE id = $1`, levelID, beneficiary, c.toolID, changing).Scan(&c.level, &levelStatus, &owner, &infosec, &open, &held, &orphan); err != nil {
 		return c, err
 	}
 	if toolStatus != "ACTIVE" || levelStatus != "ACTIVE" {
@@ -546,6 +549,9 @@ func checkLevel(ctx context.Context, tx pgx.Tx, beneficiary, levelID uuid.UUID, 
 	}
 	if held {
 		return c, &platform.Error{Status: http.StatusConflict, Code: "access_exists", Field: "accessLevelId"}
+	}
+	if orphan {
+		return c, &platform.Error{Status: http.StatusConflict, Code: "orphan_account_exists", Field: "accessLevelId"}
 	}
 	c.steps = catalog.Steps(owner, infosec)
 	return c, nil
