@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useEmployees, useTools } from "../api/queries";
 import type {
-  AccessAtResponse, AuditEventsResponse, AuditFilters, HeldGrant, HeldState, LeaverRow, PrivilegedHolder, QuarterReport, Request, RequestItem, RequestsResponse,
+  AccessAtResponse, AuditEvent, AuditEventsResponse, AuditFilters, HeldGrant, HeldState, LeaverRow, PrivilegedHolder, QuarterReport, Request, RequestItem, RequestsResponse,
 } from "../api/types";
 import { auditActionText, auditGroups, detailsText } from "../i18n/audit";
 import { requestKindLabel, roleLabel, stepLabel } from "../i18n/labels";
@@ -73,6 +73,7 @@ function EventsTab() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
+  const [open, setOpen] = useState<AuditEvent | null>(null);
   const action = auditGroups.find((g) => g.value === group)?.actions.join(",") ?? "";
   const search = query({ q: q.trim(), action, actor, tool, from, to });
   useEffect(() => setPage(1), [search]);
@@ -107,14 +108,16 @@ function EventsTab() {
       ) : (
         <>
           <div className="card table-wrap"><table className="table">
-            <thead><tr><th>Zaman</th><th>Yapan</th><th>Olay</th><th>İlgili çalışan</th><th>Ayrıntı</th></tr></thead>
+            <thead><tr><th>Zaman</th><th>Yapan</th><th>Olay</th><th>İlgili çalışan</th><th>Araç ve seviye</th><th>Ayrıntı</th></tr></thead>
             <tbody>{rows.map((e) => (
-              <tr key={e.id}>
+              <tr key={e.id} className="clickable" onClick={() => setOpen(e)}>
                 <td className="nowrap small">{formatDateTime(e.at, timezone)}</td>
                 <td className="small nowrap">{e.actor ? e.actor.fullName : <Tag>Sistem</Tag>}</td>
                 <td style={{ fontWeight: 500 }}>{auditActionText(e.action)}</td>
                 <td className="small nowrap">{e.subject?.fullName ?? "—"}</td>
-                <td className="small" style={{ maxWidth: 380 }}>{detailsText(e.details)}{e.reason && <div className="cell-sub">Gerekçe: {e.reason}</div>}</td>
+                <td>{e.access.length === 0 ? "—" : e.access.map((a, i) => (
+                  <ToolCell key={i} tool={a.tool} level={a.level ?? undefined} sub={a.account && `Hesap: ${a.account}`} />))}</td>
+                <td className="small" style={{ maxWidth: 340 }}>{detailsText(e.details)}{e.reason && <div className="cell-sub">Gerekçe: {e.reason}</div>}</td>
               </tr>
             ))}</tbody>
           </table></div>
@@ -124,7 +127,33 @@ function EventsTab() {
           </p>
         </>
       )}
+      {open && <EventDrawer e={open} timezone={timezone} onClose={() => setOpen(null)} />}
     </>
+  );
+}
+
+// EventDrawer is one event in full: who, whose access, what and why, then the stored record.
+function EventDrawer({ e, timezone, onClose }: { e: AuditEvent; timezone: string; onClose: () => void }) {
+  const join = (v: (string | null)[]) => v.filter(Boolean).join(", ");
+  return (
+    <Drawer open onClose={onClose} title={auditActionText(e.action)} sub={formatDateTime(e.at, timezone)}>
+      <div className="stack" style={{ gap: 20 }}>
+        <KeyValueList items={[
+          ["Yapan", e.actor?.fullName ?? "Sistem"],
+          ["İlgili çalışan", e.subject?.fullName ?? "—"],
+          e.access.length > 0 && ["Araç", join(e.access.map((a) => a.tool))],
+          e.access.some((a) => a.level) && ["Erişim seviyesi", join(e.access.map((a) => a.level))],
+          e.access.some((a) => a.account) && ["Hesap", join(e.access.map((a) => a.account))],
+          detailsText(e.details) !== "" && ["Ayrıntı", detailsText(e.details)],
+          !!e.reason && ["Gerekçe", e.reason],
+        ]} />
+        <details>
+          <summary className="small muted">Teknik kayıt</summary>
+          <KeyValueList items={[["Kayıt", <span className="mono">{e.entity} · {e.entityId ?? "—"}</span>], ["Olay kodu", <span className="mono">{e.action}</span>]]} />
+          <pre className="mono small" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{JSON.stringify(e.details ?? {}, null, 2)}</pre>
+        </details>
+      </div>
+    </Drawer>
   );
 }
 

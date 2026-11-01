@@ -477,7 +477,7 @@ Covered by `TestHRSuccessionOfTheLastSuperAdmin`, `TestScheduledTerminationOfThe
 
 | Tab | English | Shows |
 |---|---|---|
-| Olay geçmişi | Event history | Filter by date, actor, action, tool, text; page through every match; export all matches as CSV (streamed by the server). |
+| Olay geçmişi | Event history | Who acted, whose access, the tool and level (**Araç ve seviye**, with the external account when there is one), what happened in Turkish (e.g. *Çalışan kendi isteğiyle vazgeçti*, *Araçta doğrulandı*) and the reason. Tool and level names are the ones in use when the event happened, even after a rename or retirement. Clicking a row opens the event in full, with the stored record (entity, id, raw details) under **Teknik kayıt**. Filter by date, actor, action, tool, text; page through every match; export all matches as CSV with `tool`, `access_level` and `account` columns (streamed by the server). |
 | Geçmiş erişim sorgusu | Point-in-time access | Who held access to a tool at an instant or end of a date, each grant's state and evidence (verified / self-reported / imported) and its approvers, plus removals in the previous 30 days. |
 | Onay kanıtı | Approval evidence | Each request item's approval chain: who decided each step, when, how (decision, override, submission). |
 | Kanıt raporları | Evidence reports | Privileged roles (D11), Super Admin overrides and direct actions, approval policy, leavers, and the quarterly evidence package. **Not shown to the Auditor.** |

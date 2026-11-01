@@ -132,14 +132,21 @@ func (s *Service) handleExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, "\uFEFF") // lets spreadsheet tools read Turkish characters
 	out := csv.NewWriter(w)
 	_ = out.Write([]string{"occurred_at (" + s.loc.String() + ")", "actor_id", "actor", "action", "entity_type", "entity_id",
-		"subject_id", "subject", "reason", "details"})
+		"subject_id", "subject", "tool", "access_level", "account", "reason", "details"})
 	err = each(func(e Event) error {
 		details, err := json.Marshal(e.Details)
 		if err != nil {
 			return err
 		}
+		// Several items of one request: one value per item, "; " between them, in the same order.
+		var tools, levels, accounts []string
+		for _, a := range e.Access {
+			tools, levels, accounts = append(tools, a.Tool), append(levels, deref(a.Level)), append(accounts, deref(a.Account))
+		}
+		join := func(v []string) string { return cell(strings.Join(v, "; ")) }
 		return out.Write([]string{e.At.In(s.loc).Format(time.RFC3339Nano), personID(e.Actor), cell(personName(e.Actor, "System")), e.Action,
-			e.Entity, idText(e.EntityID), personID(e.Subject), cell(personName(e.Subject, "")), cell(deref(e.Reason)), cell(string(details))})
+			e.Entity, idText(e.EntityID), personID(e.Subject), cell(personName(e.Subject, "")), join(tools), join(levels), join(accounts),
+			cell(deref(e.Reason)), cell(string(details))})
 	})
 	if out.Flush(); err == nil {
 		err = out.Error()

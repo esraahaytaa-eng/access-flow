@@ -528,7 +528,9 @@ export type AuditEvent = {
   subject: Person | null;
   reason: string | null;
   details: Record<string, unknown> | null;
+  access: AuditAccess[]; // the tools and levels the event is about, named as they were then
 };
+export type AuditAccess = { toolId: string; tool: string; level: string | null; account: string | null };
 export type AuditEventsResponse = { events: AuditEvent[]; total: number; page: number; pageSize: number };
 export type AuditFilters = { actors: Person[]; tools: { id: string; name: string }[] };
 

@@ -1,3 +1,6 @@
+import type { StepType } from "../api/types";
+import { stepLabel } from "./labels";
+
 // Audit Explorer labels (design/ AUDIT_ACTION_LABEL and AUDIT_GROUPS), keyed by the API's
 // action names. An action without a label is shown as its code.
 export const auditActionLabel: Record<string, string> = {
@@ -64,11 +67,43 @@ export const auditGroups: { value: string; label: string; actions: string[] }[] 
     "GRANT_VERIFIED_BY_TOOL", "ORPHAN_DISMISSED"] },
 ];
 
-// detailsText flattens an event's details for the table and the CSV: "key: value · …".
+// Why a grant is being removed or suspended (the "by" of GRANT_REVOCATION_REQUESTED and
+// GRANT_SUSPENSION_REQUESTED).
+export const removalByLabel: Record<string, string> = {
+  VOLUNTARY: "Çalışan kendi isteğiyle vazgeçti", MANAGER: "Yönetici kaldırdı", DIRECT: "Süper Yönetici doğrudan kaldırdı",
+  EXPIRED: "Süresi doldu", RETIRED: "Araç veya seviye kullanımdan kaldırıldı", TERMINATION: "İşten çıkış", TRANSFER: "Transfer",
+  LEVEL_CHANGE: "Seviye değişikliği", REVIEW: "Erişim denetimi kararı", ORPHAN: "Sahipsiz hesap", SUSPENSION: "Çalışan askıya alındı",
+};
+
+const evidenceText: Record<string, string> = { VERIFIED: "Araçta doğrulandı", SELF_REPORTED: "Beyana dayalı" };
+
+// Details shown elsewhere (the access column) or only in the technical record.
+const hiddenDetails = new Set(["tool", "level", "account", "items", "operationId", "itemId", "requestItemId", "requestId", "grantId",
+  "importId", "submissionId", "activationId", "position"]);
+
+// detailsText is an event's details in Turkish for the table and the reports: known keys as a
+// sentence, identifiers left to the technical record, anything else as "key: value".
 export function detailsText(details: Record<string, unknown> | null | undefined): string {
   if (!details) return "";
   return Object.entries(details)
-    .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
+    .filter(([k, v]) => v !== null && v !== undefined && v !== "" && !hiddenDetails.has(k))
+    .map(([k, v]) => {
+      const s = String(v);
+      switch (k) {
+        case "by": return removalByLabel[s] ?? s;
+        case "evidence": return evidenceText[s] ?? s;
+        case "type": return stepLabel[s as StepType] ? `${stepLabel[s as StepType]} adımı` : s;
+        case "grantOperationCancelled": return v === true ? "Bekleyen erişim verme işlemi iptal edildi" : "";
+        case "error": return `Hata: ${s}`;
+        case "ticketRef": return `Tedarikçi talep no: ${s}`;
+        case "expiresOn": return `Bitiş: ${s}`;
+        case "takeover": return v === true ? "Başkasından devralındı" : "";
+        case "orphan": return v === true ? "Sahipsiz hesap" : "";
+        case "toolVerified": return v === true ? "Araçta doğrulandı" : "";
+        case "approver": return s.startsWith("unknown") ? "Onaylayan bilinmiyor (AccessFlow öncesi)" : `Onaylayan: ${s}`;
+        default: return `${k}: ${typeof v === "object" ? JSON.stringify(v) : s}`;
+      }
+    })
+    .filter(Boolean)
     .join(" · ");
 }

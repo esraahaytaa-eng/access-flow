@@ -7186,7 +7186,7 @@
         ],
         "operationId": "exportAuditEvents",
         "summary": "Export the audit log as CSV",
-        "description": "Every event matching the filters (the same scope and filters as `GET /audit/events`, without `page`), newest first, streamed as one CSV file (UTF-8 with a byte order mark): occurred_at in the company timezone, actor id and name (`System` for none), action code, entity type and id, subject id and name, reason and the details as JSON. A cell a user wrote that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with `'`. If the server fails while streaming, the connection is aborted, so a cut-off file is never taken for a complete one.",
+        "description": "Every event matching the filters (the same scope and filters as `GET /audit/events`, without `page`), newest first, streamed as one CSV file (UTF-8 with a byte order mark): occurred_at in the company timezone, actor id and name (`System` for none), action code, entity type and id, subject id and name, `tool`, `access_level` and `account` (the event's `access`, as named when it happened; several items of one request joined by `; ` in the same order), reason and the details as JSON. A cell a user wrote that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with `'`. If the server fails while streaming, the connection is aborted, so a cut-off file is never taken for a complete one.",
         "parameters": [
           {
             "name": "action",
@@ -11769,6 +11769,40 @@
         ],
         "description": "A small employee reference: id and full name."
       },
+      "AuditAccess": {
+        "type": "object",
+        "properties": {
+          "toolId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tool": {
+            "type": "string",
+            "description": "The tool's name when the event happened: the name before its first later rename, else today's."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The access level's name when the event happened; `null` for an event about the whole tool."
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The external account (e.g. GitHub login, imported account) the grant or item is for; `null` when none is recorded."
+          }
+        },
+        "required": [
+          "toolId",
+          "tool",
+          "level",
+          "account"
+        ],
+        "description": "A tool, level and external account an audit event is about."
+      },
       "AuditEvent": {
         "type": "object",
         "properties": {
@@ -11826,6 +11860,13 @@
           "details": {
             "type": "object",
             "description": "Free-form JSON object whose keys depend on the action (e.g. `grantId`, `late`, `bulk` for review decisions). Empty object when the event has no details."
+          },
+          "access": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditAccess"
+            },
+            "description": "The access the event is about, resolved from its entity (grant, operation, review item, request, request item, approval step, access level or tool): one entry per tool and level, several for a request with several items. Empty when the event is about no tool."
           }
         },
         "required": [
@@ -11837,7 +11878,8 @@
           "entityId",
           "subject",
           "reason",
-          "details"
+          "details",
+          "access"
         ],
         "description": "One append-only audit log event."
       },
