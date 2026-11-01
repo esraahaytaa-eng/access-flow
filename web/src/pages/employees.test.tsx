@@ -36,6 +36,19 @@ describe("employees", () => {
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ email: "kaan@x.co", fullName: "Kaan Uslu", department: "Ürün", jobTitle: "Mühendis", managerId: "m1" });
   });
 
+  it("exports the employees shown as CSV, with manager names and Turkish headers", async () => {
+    let blob: Blob | undefined;
+    URL.createObjectURL = vi.fn((b: Blob) => { blob = b; return "blob:x"; });
+    URL.revokeObjectURL = vi.fn();
+    fakeServer(dir(employee({ id: "t1", fullName: "Ayrılan Kişi", status: "TERMINATED", managerId: "m1" })));
+    renderPage(<EmployeesPage />, { session: hr });
+    await userEvent.click(await screen.findByRole("button", { name: "CSV indir" }));
+    const rows = (await blob!.text()).replace(/^\uFEFF/, "").split("\r\n");
+    expect(rows[0]).toBe('"Ad soyad","E-posta","Departman","Unvan","Yönetici","Durum","Roller"');
+    expect(rows).toHaveLength(4); // the active employees shown, not the terminated one
+    expect(rows).toContain(`"${employee().fullName}","${employee().email}","${employee().department}","${employee().jobTitle}","Burak Manager","Aktif",""`);
+  });
+
   it("manages departments and job positions in the company catalog", async () => {
     const calls = fakeServer({ ...dir(), "POST /company-catalog/departments": () => ({ status: 201, body: entry("Finans") }),
       "POST /company-catalog/job-positions/Lider/retire": entry("Lider", false) });

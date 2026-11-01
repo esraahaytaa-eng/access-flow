@@ -10,10 +10,13 @@ import { useSession } from "../session";
 import {
   Button, Callout, EmptyState, Field, Input, Modal, PageHeader, Person, SearchBox, Segmented, Select, StatusBadge, TableSkeleton, Tag, ToolCell, useAction,
 } from "../ui/components";
-import { formatDate } from "../ui/format";
+import { downloadCsv } from "../ui/csv";
+import { formatDate, todayIn } from "../ui/format";
 import { statusBadge } from "../ui/status";
 
 const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
+
+const statusText: Record<EmployeeStatus, string> = { ACTIVE: "Aktif", SUSPENDED: "Askıda", TERMINATED: "Ayrılan" };
 
 /** The departments employees hold (for the directory filter, retired ones included). */
 export const departmentsOf = (employees: Employee[]) => [...new Set(employees.map((e) => e.department).filter((d): d is string => !!d))].sort((a, b) => a.localeCompare(b, "tr"));
@@ -49,7 +52,10 @@ export function EmployeesPage() {
   return (
     <>
       <PageHeader title="Çalışanlar" sub="İşe girişler, ekip değişiklikleri, askıya alma ve işten çıkışlar. Her değişiklik erişimlere otomatik yansır ve kayda geçer."
-        actions={<><Button onClick={() => setCatalogOpen(true)}>Departmanlar ve unvanlar</Button><Button variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Yeni çalışan</Button></>} />
+        actions={<><Button icon="download" disabled={rows.length === 0} onClick={() => downloadCsv(`accessflow_calisanlar_${todayIn(timezone)}.csv`, [
+          ["Ad soyad", "E-posta", "Departman", "Unvan", "Yönetici", "Durum", "Roller"],
+          ...rows.map((e) => [e.fullName, e.email, e.department, e.jobTitle, nameOf(e.managerId), statusText[e.status], e.roles.map((r) => roleLabel[r]).join("; ")]),
+        ])}>CSV indir</Button><Button onClick={() => setCatalogOpen(true)}>Departmanlar ve unvanlar</Button><Button variant="primary" icon="plus" onClick={() => setCreateOpen(true)}>Yeni çalışan</Button></>} />
       {catalogOpen && <CatalogModal onClose={() => setCatalogOpen(false)} />}
       <div className="toolbar">
         <SearchBox value={q} onChange={setQ} placeholder="Ad, e-posta veya unvan ara" />
