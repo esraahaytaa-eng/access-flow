@@ -104,6 +104,7 @@ func CreateGroup(t testing.TB, db DB) uuid.UUID {
 type ToolSpec struct {
 	Name, Method string
 	OwnerID      uuid.UUID
+	AccountKind  string // empty: the account is the employee's email
 }
 
 // CreateTool inserts an active tool.
@@ -119,8 +120,8 @@ func CreateTool(t testing.TB, db DB, spec ToolSpec) uuid.UUID {
 		spec.OwnerID = CreateEmployee(t, db, EmployeeSpec{}).ID
 	}
 	var id uuid.UUID
-	if err := db.App.QueryRow(context.Background(), `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id)
-		VALUES ($1, $2, $3, $4) RETURNING id`, spec.Name, spec.Method, spec.OwnerID, CreateGroup(t, db)).Scan(&id); err != nil {
+	if err := db.App.QueryRow(context.Background(), `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id, account_kind)
+		VALUES ($1, $2, $3, $4, nullif($5, '')) RETURNING id`, spec.Name, spec.Method, spec.OwnerID, CreateGroup(t, db), spec.AccountKind).Scan(&id); err != nil {
 		t.Fatalf("create tool: %v", err)
 	}
 	return id

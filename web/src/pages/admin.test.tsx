@@ -126,6 +126,25 @@ describe("tool administration", () => {
     ]);
   });
 
+  it("creates an API tool whose accounts are GitHub usernames", async () => {
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [] },
+      "POST /tools": () => ({ status: 201, body: { id: "t9", name: "GitHub sandbox", fulfillmentMethod: "API", accountKind: "GITHUB_LOGIN", ownerId: "o1", adminGroupId: "grp1", status: "ACTIVE", version: 1 } }),
+      "POST /tools/t9/levels": () => ({ status: 201, body: {} }) });
+    renderPage(<ToolEditPage />, { path: "/tools-admin/yeni", pattern: "/tools-admin/:id", session: sa });
+    await userEvent.type(await screen.findByLabelText(/Araç adı/), "GitHub sandbox");
+    await userEvent.click(screen.getByRole("radio", { name: /Tedarikçi/ }));
+    expect(screen.queryByRole("radiogroup", { name: "Hesap kimliği" })).toBeNull(); // only API tools act on another account
+    await userEvent.click(screen.getByRole("radio", { name: /API/ }));
+    await userEvent.click(within(screen.getByRole("radiogroup", { name: "Hesap kimliği" })).getByRole("radio", { name: /GitHub kullanıcı adı/ }));
+    await screen.findByRole("option", { name: /Can Owner/ });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Araç sahibi/ }), "o1");
+    await userEvent.selectOptions(screen.getByLabelText(/Yönetim grubu/), "grp1");
+    await userEvent.type(screen.getByLabelText(/Seviye adı/), "Read");
+    await userEvent.click(screen.getByRole("button", { name: "Aracı oluştur" }));
+    await waitFor(() => expect(currentPath).toBe("/tools-admin"));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/tools")?.body).toEqual({ name: "GitHub sandbox", fulfillmentMethod: "API", accountKind: "GITHUB_LOGIN", ownerId: "o1", adminGroupId: "grp1" });
+  });
+
   it("confirms a policy change before saving a level's steps", async () => {
     const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "PUT /tools/t1/levels/l1": { id: "l1" } });
     renderPage(<ToolEditPage />, { path: "/tools-admin/t1", pattern: "/tools-admin/:id", session: sa });
@@ -192,6 +211,23 @@ describe("direct grant", () => {
     await waitFor(() => expect(currentPath).toBe("/requests/r5"));
     const { submissionId } = calls.find((c) => c.method === "POST")!.body as { submissionId: string };
     expect(submissionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it("asks for the GitHub username of a GitHub tool and sends it", async () => {
+    const github = { ...jiraAdmin, id: "t7", name: "GitHub sandbox", accountKind: "GITHUB_LOGIN", levels: [{ ...jiraAdmin.levels[0], id: "l7", name: "Read" }] };
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [github] }, "POST /direct-grants": () => ({ status: 201, body: { id: "r6", items: [] } }) });
+    renderPage(<DirectGrantPage />, { session: sa });
+    await screen.findByRole("option", { name: /Can Owner/ });
+    await userEvent.selectOptions(screen.getByLabelText(/Çalışan/), "o1");
+    await userEvent.selectOptions(screen.getByLabelText(/^Araç/), "t7");
+    await userEvent.selectOptions(screen.getByLabelText(/^Seviye/), "l7");
+    await userEvent.type(screen.getByLabelText(/Gerekçe/), "Üretim olayı INC-2301 için acil erişim");
+    await userEvent.click(screen.getByRole("button", { name: "Doğrudan erişim ver" }));
+    expect(screen.getByText("GitHub kullanıcı adını girin.")).toBeTruthy();
+    await userEvent.type(screen.getByLabelText(/GitHub kullanıcı adı/), " octocat ");
+    await userEvent.click(screen.getByRole("button", { name: "Doğrudan erişim ver" }));
+    await waitFor(() => expect(currentPath).toBe("/requests/r6"));
+    expect(calls.find((c) => c.method === "POST")!.body).toMatchObject({ accessLevelId: "l7", account: "octocat" });
   });
 
   it("grants for at most 90 days counting today and opens the request", async () => {

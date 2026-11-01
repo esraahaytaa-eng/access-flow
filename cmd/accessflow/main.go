@@ -129,8 +129,9 @@ func run(args []string) error {
 	// before the pool closes.
 	tools := access.NewHTTPToolClient(cfg.MockToolsURL, 5*time.Second)
 	var client access.ToolClient = tools
-	if cfg.GitHubToken != "" { // optional GitHub sandbox adapter; LoadConfig checked the settings
-		if client, err = gitHubClient(ctx, pool, cfg, tools); err != nil {
+	var accounts requests.AccountLookup // nil: a tool with GitHub usernames cannot be requested
+	if cfg.GitHubToken != "" {          // optional GitHub sandbox adapter; LoadConfig checked the settings
+		if client, accounts, err = gitHubClient(ctx, pool, cfg, tools); err != nil {
 			return err
 		}
 	}
@@ -155,7 +156,7 @@ func run(args []string) error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(pool, svc, loc, tools, webui.Dist(), demoAccounts),
+		Handler:           newRouter(pool, svc, loc, tools, accounts, webui.Dist(), demoAccounts),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
@@ -163,28 +164,26 @@ func run(args []string) error {
 }
 
 // gitHubClient routes GITHUB_TOOL_ID to the GitHub sandbox adapter and every other tool to
-// the Mock Tool Service. It fails closed: an unreachable or public repository, or a tool that
-// is missing or not an API tool, stops the start. The token is never logged.
-func gitHubClient(ctx context.Context, pool *pgxpool.Pool, cfg platform.Config, mock access.ToolClient) (access.ToolClient, error) {
-	users, err := platform.ParseGitHubUsers(cfg.GitHubUsers)
-	if err != nil {
-		return nil, err
-	}
+// the Mock Tool Service, and returns the GitHub username lookup for requests. It fails
+// closed: an unreachable or public repository, or a tool that is missing, not an API tool or
+// not one of GitHub usernames, stops the start. The token is never logged.
+func gitHubClient(ctx context.Context, pool *pgxpool.Pool, cfg platform.Config, mock access.ToolClient) (access.ToolClient, requests.AccountLookup, error) {
 	tool := uuid.MustParse(cfg.GitHubToolID) // checked by LoadConfig
-	gh := access.NewGitHubToolClient(pool, "https://api.github.com", cfg.GitHubRepository, cfg.GitHubToken, users, 5*time.Second)
+	gh := access.NewGitHubToolClient(pool, "https://api.github.com", cfg.GitHubRepository, cfg.GitHubToken, 5*time.Second)
 	if err := gh.CheckRepository(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := gh.CheckTool(ctx, tool); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	slog.Info("GitHub sandbox adapter on", "repository", cfg.GitHubRepository, "tool", tool, "mappedUsers", len(users))
-	return access.RouteTool(tool, gh, mock), nil
+	slog.Info("GitHub sandbox adapter on", "repository", cfg.GitHubRepository, "tool", tool)
+	return access.RouteTool(tool, gh, mock), gh.LookupUser, nil
 }
 
 // newRouter serves the JSON API under /api and the web app on every other path. Demo
 // accounts (demo mode only) are listed, without passwords, for the sign-in page.
-func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools *access.HTTPToolClient, dist fs.FS, demoAccounts []demo.Account) http.Handler {
+func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools *access.HTTPToolClient, accounts requests.AccountLookup,
+	dist fs.FS, demoAccounts []demo.Account) http.Handler {
 	// Rejects cross-origin unsafe requests (Sec-Fetch-Site / Origin), on top of the CSRF token (A4).
 	crossOrigin := http.NewCrossOriginProtection()
 	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +193,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 	peopleSvc := people.NewService(pool, svc)
 	catalogSvc := catalog.NewService(pool)
 	requestsSvc := requests.NewService(pool, loc)
+	requestsSvc.Accounts = accounts
 	accessSvc := access.NewService(pool, tools, loc)
 
 	r := chi.NewRouter()

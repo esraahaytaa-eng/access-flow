@@ -30,11 +30,11 @@ type Config struct {
 	MockToolsURL         string // MOCK_TOOLS_URL: base URL of the Mock Tool Service (A6)
 	MockEmailKeyFile     string // MOCK_EMAIL_KEY_FILE: key encrypting activation links in the Mock Email Outbox (M18)
 	LoginRateLimit       int    // LOGIN_RATE_LIMIT: sign-in and activation attempts per client address per minute; 0 = the default (M18)
-	// Optional GitHub sandbox adapter (A1 note 2026-11-01): all four or none.
+	// Optional GitHub sandbox adapter (A1 note 2026-11-01): all three or none. Each
+	// employee's GitHub username is entered on the request, not configured here.
 	GitHubToken      string // GITHUB_TOKEN: fine-grained token limited to the sandbox repository; never logged
 	GitHubRepository string // GITHUB_REPOSITORY: owner/name of the sandbox repository
 	GitHubToolID     string // GITHUB_TOOL_ID: the AccessFlow tool whose operations go to GitHub
-	GitHubUsers      string // GITHUB_USERS: "email=login,...", parsed by ParseGitHubUsers
 }
 
 // LoadConfig reads the configuration through getenv (os.Getenv in production).
@@ -53,7 +53,6 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		GitHubToken:          getenv("GITHUB_TOKEN"),
 		GitHubRepository:     getenv("GITHUB_REPOSITORY"),
 		GitHubToolID:         getenv("GITHUB_TOOL_ID"),
-		GitHubUsers:          getenv("GITHUB_USERS"),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"
@@ -140,15 +139,12 @@ func checkLocal(cfg Config, env string) error {
 // The AccessFlow repository itself is never a sandbox: the adapter refuses to start on it.
 const accessFlowRepository = "esraahaytaa-eng/access-flow"
 
-var (
-	githubRepository = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
-	githubLogin      = regexp.MustCompile(`^[A-Za-z0-9](-?[A-Za-z0-9]){0,38}$`) // GitHub's username rule
-)
+var githubRepository = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 
 // checkGitHub accepts the GitHub settings only complete and pointing at a sandbox.
 func checkGitHub(cfg Config) error {
 	set := 0
-	for _, v := range []string{cfg.GitHubToken, cfg.GitHubRepository, cfg.GitHubToolID, cfg.GitHubUsers} {
+	for _, v := range []string{cfg.GitHubToken, cfg.GitHubRepository, cfg.GitHubToolID} {
 		if v != "" {
 			set++
 		}
@@ -156,8 +152,8 @@ func checkGitHub(cfg Config) error {
 	switch {
 	case set == 0:
 		return nil
-	case set < 4:
-		return errors.New("GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_TOOL_ID and GITHUB_USERS are set together or not at all")
+	case set < 3:
+		return errors.New("GITHUB_TOKEN, GITHUB_REPOSITORY and GITHUB_TOOL_ID are set together or not at all")
 	case !githubRepository.MatchString(cfg.GitHubRepository):
 		return errors.New("GITHUB_REPOSITORY must be owner/name")
 	case strings.EqualFold(cfg.GitHubRepository, accessFlowRepository):
@@ -166,24 +162,5 @@ func checkGitHub(cfg Config) error {
 	if _, err := uuid.Parse(cfg.GitHubToolID); err != nil {
 		return fmt.Errorf("GITHUB_TOOL_ID must be a tool ID: %w", err)
 	}
-	_, err := ParseGitHubUsers(cfg.GitHubUsers)
-	return err
-}
-
-// ParseGitHubUsers reads "email=login,..." into lowercased email → login; each email and
-// each login appears once, so one GitHub account never stands for two employees.
-func ParseGitHubUsers(s string) (map[string]string, error) {
-	users, logins := map[string]string{}, map[string]bool{}
-	for _, pair := range strings.Split(s, ",") {
-		email, login, ok := strings.Cut(pair, "=")
-		email, login = strings.ToLower(strings.TrimSpace(email)), strings.TrimSpace(login)
-		if !ok || email == "" || !githubLogin.MatchString(login) {
-			return nil, fmt.Errorf("GITHUB_USERS: %q is not email=login", strings.TrimSpace(pair))
-		}
-		if _, dup := users[email]; dup || logins[strings.ToLower(login)] {
-			return nil, fmt.Errorf("GITHUB_USERS: %q is mapped twice", strings.TrimSpace(pair))
-		}
-		users[email], logins[strings.ToLower(login)] = login, true
-	}
-	return users, nil
+	return nil
 }

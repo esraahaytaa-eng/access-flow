@@ -8,4 +8,3 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:?set GITHUB_TOKEN in .env.github}
       GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY in .env.github}
       GITHUB_TOOL_ID: ${GITHUB_TOOL_ID:?set GITHUB_TOOL_ID in .env.github}
-      GITHUB_USERS: ${GITHUB_USERS:?set GITHUB_USERS in .env.github}

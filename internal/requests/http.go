@@ -46,6 +46,7 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		AccessLevelID *uuid.UUID
 		Justification *string
 		Duration      *Duration
+		Account       string // optional: required by the tool's account kind
 	}
 	var in struct {
 		SubmissionID  *uuid.UUID
@@ -66,7 +67,7 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if err == nil {
-				sub.Items = append(sub.Items, ItemInput{*it.AccessLevelID, *it.Justification, *it.Duration})
+				sub.Items = append(sub.Items, ItemInput{*it.AccessLevelID, *it.Justification, *it.Duration, it.Account})
 			}
 		}
 	}
@@ -89,6 +90,7 @@ func (s *Service) handleDirectGrant(w http.ResponseWriter, r *http.Request) {
 		AccessLevelID *uuid.UUID
 		Justification *string
 		ExpiresOn     *string
+		Account       string
 	}
 	err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
 		return []platform.Field{{Name: "submissionId", Present: in.SubmissionID != nil}, {Name: "beneficiaryId", Present: in.BeneficiaryID != nil},
@@ -98,7 +100,7 @@ func (s *Service) handleDirectGrant(w http.ResponseWriter, r *http.Request) {
 	created := false
 	if err == nil {
 		req, created, err = s.DirectGrant(r.Context(), actor(r), DirectGrantInput{*in.SubmissionID, *in.BeneficiaryID,
-			*in.AccessLevelID, *in.Justification, in.ExpiresOn})
+			*in.AccessLevelID, *in.Justification, in.ExpiresOn, in.Account})
 	}
 	status := http.StatusOK
 	if created {

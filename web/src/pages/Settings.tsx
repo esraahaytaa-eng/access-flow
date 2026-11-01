@@ -361,6 +361,7 @@ const workbookReasons: Record<string, string> = {
   unknown_tool: "Araç bulunamadı; Tools sayfasına ekleyin",
   unknown_level: "Seviye bulunamadı; Tools sayfasına ekleyin",
   api_account_mismatch: "API araçlarında hesap, çalışanın e-postası olmalı",
+  account_kind_tool: "GitHub kullanıcı adıyla çalışan araçlara erişim içe aktarılamaz; talep veya doğrudan atama kullanın",
   duplicate_access: "Aynı erişim tekrar ediyor",
   conflicting_access: "Aynı hesap birden fazla çalışana yazılmış",
   employee_differs: "Kayıtlı bilgiden farklı; mevcut kayıt değiştirilmez",

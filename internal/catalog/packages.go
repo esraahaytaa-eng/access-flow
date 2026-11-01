@@ -36,6 +36,7 @@ type CatalogTool struct {
 	ID                uuid.UUID      `json:"id"`
 	Name              string         `json:"name"`
 	FulfillmentMethod string         `json:"fulfillmentMethod"`
+	AccountKind       string         `json:"accountKind,omitempty"` // GITHUB_LOGIN: requests name a GitHub username
 	Owner             Person         `json:"owner"`
 	AdminGroup        auth.Group     `json:"adminGroup"`
 	Status            string         `json:"status,omitempty"`
@@ -59,7 +60,7 @@ type CatalogLevel struct {
 // retired ones too, with versions, for Super Admin and InfoSec.
 func (s *Service) Catalog(ctx context.Context, viewer auth.Principal) ([]CatalogTool, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id, t.name, t.fulfillment_method, t.status, t.version, o.id, o.full_name, g.id, g.name
+		SELECT t.id, t.name, t.fulfillment_method, coalesce(t.account_kind, ''), t.status, t.version, o.id, o.full_name, g.id, g.name
 		FROM tools t JOIN employees o ON o.id = t.owner_id JOIN admin_groups g ON g.id = t.admin_group_id
 		ORDER BY lower(t.name)`)
 	if err != nil {
@@ -67,7 +68,7 @@ func (s *Service) Catalog(ctx context.Context, viewer auth.Principal) ([]Catalog
 	}
 	tools, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (CatalogTool, error) {
 		var t CatalogTool
-		err := row.Scan(&t.ID, &t.Name, &t.FulfillmentMethod, &t.Status, &t.Version, &t.Owner.ID, &t.Owner.FullName,
+		err := row.Scan(&t.ID, &t.Name, &t.FulfillmentMethod, &t.AccountKind, &t.Status, &t.Version, &t.Owner.ID, &t.Owner.FullName,
 			&t.AdminGroup.ID, &t.AdminGroup.Name)
 		return t, err
 	})

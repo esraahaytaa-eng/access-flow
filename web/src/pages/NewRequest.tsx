@@ -13,10 +13,10 @@ import { ApprovalChain, isOpenGrant, MethodTag } from "../ui/domain";
 import { addDays, formatDate, todayIn } from "../ui/format";
 
 type Days = 7 | 30 | 90 | "custom";
-type Line = { key: number; toolId: string; levelId: string; durationType: "" | Duration["type"]; days: Days | null; date: string };
+type Line = { key: number; toolId: string; levelId: string; durationType: "" | Duration["type"]; days: Days | null; date: string; account: string };
 
 let lineSeq = 0;
-const newLine = (toolId = "", levelId = ""): Line => ({ key: ++lineSeq, toolId, levelId, durationType: "", days: null, date: "" });
+const newLine = (toolId = "", levelId = ""): Line => ({ key: ++lineSeq, toolId, levelId, durationType: "", days: null, date: "", account: "" });
 
 export function NewRequestPage() {
   const navigate = useNavigate();
@@ -88,6 +88,7 @@ export function NewRequestPage() {
       const held = heldOf(ln);
       if (tool && held && held.status !== "ACTIVE") m.push(`${tool.name} için süren bir erişim işlemi var.`);
       if (held && held.status === "ACTIVE" && lines.length > 1) m.push("Süre uzatma ve seviye değişikliği tek başına gönderilir.");
+      if (tool?.accountKind && kindOf(ln) === "NEW_ACCESS" && !ln.account.trim()) m.push("GitHub kullanıcı adını girin.");
       if (!ln.durationType) m.push("Süre seçin.");
       else if (ln.durationType === "TEMPORARY" && !ln.days) m.push("Bitiş tarihi seçin.");
       else if (ln.days === "custom" && (!ln.date || ln.date <= todayIn(timezone))) m.push("İleri bir bitiş tarihi seçin.");
@@ -105,7 +106,7 @@ export function NewRequestPage() {
     const r = await run(
       () => change
         ? api.post<Request>(`/grants/${change.id}/change`, { submissionId, accessLevelId: lines[0].levelId, justification, duration: duration(lines[0]) })
-        : api.post<Request>("/requests", { submissionId, beneficiaryId: isOther ? beneficiaryId : null, items: lines.map((ln) => ({ accessLevelId: ln.levelId, justification, duration: duration(ln) })) }),
+        : api.post<Request>("/requests", { submissionId, beneficiaryId: isOther ? beneficiaryId : null, items: lines.map((ln) => ({ accessLevelId: ln.levelId, justification, duration: duration(ln), ...(toolOf(ln)?.accountKind && { account: ln.account.trim() }) })) }),
       { success: "Talebiniz gönderildi", successDesc: bySubmission ? "Yönetici adımı gönderiminizle karşılandı." : "Onaylayıcılara bildirim gönderildi." },
     );
     if (r.ok) {
@@ -168,11 +169,17 @@ export function NewRequestPage() {
                       </div>
                     </div>
                   )}
+                  {tool?.accountKind === "GITHUB_LOGIN" && kind === "NEW_ACCESS" && (
+                    <Field label="GitHub kullanıcı adı" required hint="Erişim bu GitHub hesabına verilir. Onaylayıcılar hesabı görür; talep gönderildikten sonra değiştirilemez.">
+                      <Input value={ln.account} autoComplete="off" spellCheck={false} placeholder="örn. octocat" onChange={(e) => patch(ln.key, { account: e.target.value })} />
+                    </Field>
+                  )}
                   {held && kind !== "NEW_ACCESS" && (
                     <Callout title={kind === "EXTENSION" ? "Süre uzatma talebi" : "Seviye değişikliği talebi"}>
                       {kind === "EXTENSION"
                         ? `Bu seviyeye zaten sahip${isOther ? "" : "siniz"}. Talep onaylanırsa yalnızca süre güncellenir; yeni bir erişim oluşturulmaz.`
                         : `Mevcut seviye: ${held.level}. Yeni seviye etkinleşince eski seviye kaldırılır. Yeni seviyenin onay adımları uygulanır.`}
+                      {held.account && ` GitHub hesabı: @${held.account.name} (değişmez).`}
                     </Callout>
                   )}
                   <div className="field">

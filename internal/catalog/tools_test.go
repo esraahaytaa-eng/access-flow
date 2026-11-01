@@ -76,6 +76,44 @@ func TestToolValidation(t *testing.T) {
 	}
 }
 
+// A tool may name its accounts by a GitHub username instead of the email (A1 note 2026-11-01).
+func TestToolAccountKind(t *testing.T) {
+	env := newEnv(t)
+	_, admin := env.user("SUPER_ADMIN")
+	owner := testutil.CreateEmployee(t, env.db, testutil.EmployeeSpec{}).ID
+	group := testutil.CreateGroup(t, env.db)
+	body := func(name, method string, kind any) map[string]any {
+		return map[string]any{"name": name, "fulfillmentMethod": method, "ownerId": owner, "adminGroupId": group, "accountKind": kind}
+	}
+
+	r := admin.Do("POST", "/api/v1/tools", body("GitHub", "API", "GITHUB_LOGIN"))
+	testutil.RequireStatus(t, r, 201, "")
+	if r.Body["accountKind"] != "GITHUB_LOGIN" {
+		t.Fatalf("accountKind = %v", r.Body["accountKind"])
+	}
+	var audited string
+	env.db.App.QueryRow(t.Context(), "SELECT details->>'accountKind' FROM audit_events WHERE action = 'TOOL_CREATED'").Scan(&audited)
+	if audited != "GITHUB_LOGIN" {
+		t.Fatalf("audited accountKind = %q", audited)
+	}
+	r = admin.Do("POST", "/api/v1/tools", body("Jira", "API", nil))
+	testutil.RequireStatus(t, r, 201, "")
+	if _, ok := r.Body["accountKind"]; ok {
+		t.Fatalf("an email-account tool reports accountKind %v", r.Body["accountKind"])
+	}
+	testutil.RequireStatus(t, admin.Do("POST", "/api/v1/tools", body("X", "API", "SLACK_ID")), 400, "invalid_account_kind")
+	// Only an API tool looks the account up and acts on it; Manual and Vendor work by email.
+	testutil.RequireStatus(t, admin.Do("POST", "/api/v1/tools", body("Y", "MANUAL", "GITHUB_LOGIN")), 400, "account_kind_requires_api")
+
+	kinds := map[string]any{}
+	for _, tool := range admin.Do("GET", "/api/v1/tools", nil).Body["tools"].([]any) {
+		kinds[tool.(map[string]any)["name"].(string)] = tool.(map[string]any)["accountKind"]
+	}
+	if kinds["GitHub"] != "GITHUB_LOGIN" || kinds["Jira"] != nil {
+		t.Fatalf("catalog account kinds = %v", kinds)
+	}
+}
+
 func TestAddingAStepNotifiesInfoSec(t *testing.T) {
 	env := newEnv(t)
 	_, admin := env.user("SUPER_ADMIN")

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,11 +24,27 @@ type ToolClient interface {
 }
 
 // ToolOperation grants, revokes, suspends or resumes one (tool, account, level) (D4).
-// Tool and Level are AccessFlow IDs; Account is the employee's email.
+// Tool and Level are AccessFlow IDs; Account is the grant's account: the employee's email,
+// or the tool-specific account the request named (a GitHub login, A1 note 2026-11-01).
 type ToolOperation struct {
 	ID                         uuid.UUID
 	Type, Tool, Account, Level string
 }
+
+// ExternalAccount is a tool-specific account (A1 note 2026-11-01): the name the tool knows
+// the employee by, as the tool spells it, and its immutable reference (GitHub's user id).
+type ExternalAccount struct {
+	Name string `json:"name"`
+	Ref  string `json:"ref"`
+}
+
+// Why an external account cannot be granted to: a malformed name, no such account, or an
+// account that is not a person's (a GitHub organization or bot).
+var (
+	ErrAccountInvalid    = errors.New("invalid account name")
+	ErrAccountNotFound   = errors.New("account not found")
+	ErrAccountNotAllowed = errors.New("not a user account")
+)
 
 // ToolResult says whether the tool changed anything: APPLIED or NO_CHANGE.
 type ToolResult struct{ Result string }

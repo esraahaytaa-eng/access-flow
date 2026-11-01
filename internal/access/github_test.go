@@ -3,6 +3,7 @@ package access_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +36,8 @@ type fakeGitHub struct {
 	members map[string]bool   // org members: a PUT adds them directly, without an invitation
 	invites []fakeInvite
 	nextID  int64
-	calls   []string // "METHOD path", in order
+	users   map[int64]fakeUser // GitHub accounts by their immutable id
+	calls   []string           // "METHOD path", in order
 	replies []fakeReply
 	private bool
 	// beforeInviteDelete runs just before an invitation is deleted (a race: accepted meanwhile).
@@ -51,6 +53,8 @@ type fakeInvite struct {
 	expired bool
 }
 
+type fakeUser struct{ login, kind string } // kind: User, Organization, Bot
+
 type fakeReply struct {
 	status int
 	header map[string]string
@@ -58,10 +62,28 @@ type fakeReply struct {
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
-	return &fakeGitHub{t: t, roles: map[string]string{}, members: map[string]bool{}, nextID: 100, private: true}
+	return &fakeGitHub{t: t, roles: map[string]string{}, members: map[string]bool{}, nextID: 100, private: true,
+		users: map[int64]fakeUser{}}
 }
 
-// failNext answers the next n calls with status (and header), whatever they ask.
+// user creates a GitHub account of kind and returns its id.
+func (f *fakeGitHub) user(login, kind string) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	f.users[f.nextID] = fakeUser{login, kind}
+	return f.nextID
+}
+
+// rename is the account's owner changing its username; the id stays.
+func (f *fakeGitHub) rename(id int64, login string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users[id] = fakeUser{login, f.users[id].kind}
+}
+
+// failNext answers the next n calls with status (and header), whatever they ask; status 0
+// lets a call through.
 func (f *fakeGitHub) failNext(n, status int, header map[string]string, body string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -158,7 +180,9 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	if len(f.replies) > 0 {
+	if len(f.replies) > 0 && f.replies[0].status == 0 {
+		f.replies = f.replies[1:]
+	} else if len(f.replies) > 0 {
 		reply := f.replies[0]
 		f.replies = f.replies[1:]
 		for k, v := range reply.header {
@@ -168,19 +192,39 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, reply.body)
 		return
 	}
-	base := "/repos/" + sandboxRepo
-	path, ok := strings.CutPrefix(r.URL.Path, base)
-	if !ok {
-		f.t.Errorf("%s %s is outside the sandbox repository", r.Method, r.URL.Path)
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
 	send := func(status int, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if v != nil {
 			_ = json.NewEncoder(w).Encode(v)
 		}
+	}
+	// The two account reads outside the repository: by username, and by id.
+	if login, ok := strings.CutPrefix(r.URL.Path, "/users/"); ok && r.Method == http.MethodGet {
+		for id, u := range f.users {
+			if strings.EqualFold(u.login, login) {
+				send(200, map[string]any{"login": u.login, "id": id, "type": u.kind})
+				return
+			}
+		}
+		send(404, map[string]any{"message": "Not Found"})
+		return
+	}
+	if raw, ok := strings.CutPrefix(r.URL.Path, "/user/"); ok && r.Method == http.MethodGet {
+		id, _ := strconv.ParseInt(raw, 10, 64)
+		if u, found := f.users[id]; found {
+			send(200, map[string]any{"login": u.login, "id": id, "type": u.kind})
+			return
+		}
+		send(404, map[string]any{"message": "Not Found"})
+		return
+	}
+	base := "/repos/" + sandboxRepo
+	path, ok := strings.CutPrefix(r.URL.Path, base)
+	if !ok {
+		f.t.Errorf("%s %s is outside the sandbox repository", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+		return
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	switch {
@@ -262,7 +306,7 @@ func slicesContainsInvite(invites []fakeInvite, id int64) bool {
 type ghRig struct {
 	*rig
 	gh     *fakeGitHub
-	users  map[string]string
+	ids    map[string]int64 // login → GitHub id, of the accounts grantFor created
 	client *access.GitHubToolClient
 }
 
@@ -272,18 +316,21 @@ func newGitHubRig(t *testing.T) *ghRig {
 	f := newFakeGitHub(t)
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	users := map[string]string{}
-	client := access.NewGitHubToolClient(r.db.App, srv.URL, sandboxRepo, sandboxToken, users, time.Second)
+	client := access.NewGitHubToolClient(r.db.App, srv.URL, sandboxRepo, sandboxToken, time.Second)
 	r.runner = access.NewRunner(r.db.App, client)
-	return &ghRig{rig: r, gh: f, users: users, client: client}
+	return &ghRig{rig: r, gh: f, ids: map[string]int64{}, client: client}
 }
 
-// grantFor approves an API grant for a new employee mapped to the GitHub login.
+// grantFor approves an API grant for a new employee for the GitHub account login, as a
+// request records it: the login and its id (A1 note 2026-11-01).
 func (g *ghRig) grantFor(login string) approvedGrant {
 	g.t.Helper()
-	a := g.grant("API")
-	g.users[strings.ToLower(a.emp.Email)] = login
-	return a
+	id, ok := g.ids[login]
+	if !ok {
+		id = g.gh.user(login, "User")
+		g.ids[login] = id
+	}
+	return g.grantWith("API", login, strconv.FormatInt(id, 10))
 }
 
 // active brings a grant to ACTIVE: invitation sent, accepted, verified.
@@ -416,9 +463,9 @@ func TestGitHubGrantRefusesAccessThatAlreadyExists(t *testing.T) {
 	}
 }
 
-func TestGitHubGrantForAnUnmappedEmployeeIsRejectedWithoutACall(t *testing.T) {
+func TestGitHubGrantWithoutAGitHubAccountIsRejectedWithoutACall(t *testing.T) {
 	g := newGitHubRig(t)
-	a := g.grant("API") // no GitHub login mapped
+	a := g.grant("API") // the employee's email, no GitHub login or id
 	g.runOnce(true)
 	g.requireState(a, "FAILED", "FAILED", 1)
 	if len(g.gh.calls) != 0 {
@@ -430,8 +477,8 @@ func TestGitHubGrantForAnUnmappedEmployeeIsRejectedWithoutACall(t *testing.T) {
 func TestGitHubGrantRetryAdoptsItsOwnInvitation(t *testing.T) {
 	g := newGitHubRig(t)
 	a := g.grantFor("ada-gh")
-	g.exec(`INSERT INTO github_access (grant_id, repository, account, login, level_id, state) VALUES ($1, $2, $3, 'ada-gh', $4, 'INVITING')`,
-		a.id, sandboxRepo, a.emp.Email, a.level)
+	g.exec(`INSERT INTO github_access (grant_id, repository, account, user_id, level_id, state) VALUES ($1, $2, 'ada-gh', $3, $4, 'INVITING')`,
+		a.id, sandboxRepo, g.ids["ada-gh"], a.level)
 	id := g.gh.invite("ada-gh", "read")
 	g.runOnce(true)
 	g.requireState(a, "PROVISIONING", "PENDING", 0)
@@ -505,6 +552,96 @@ func TestGitHubRemovalTakesAwayOnlyReadItGranted(t *testing.T) {
 	}
 	if g.gh.role("ada-gh") != "" || g.ledger(a) != "REMOVED" {
 		t.Fatalf("role %q, ledger %q", g.gh.role("ada-gh"), g.ledger(a))
+	}
+}
+
+// GitHub logins can be renamed and a freed name claimed by someone else. The grant's GitHub
+// id decides: a renamed account is never acted on by its old name, and its removal is never
+// reported done while the renamed account may still hold the access (A1 note 2026-11-01).
+func TestGitHubRenamedAccountIsLeftForAPerson(t *testing.T) {
+	t.Run("before the invitation", func(t *testing.T) {
+		g := newGitHubRig(t)
+		a := g.grantFor("ada-gh")
+		g.gh.rename(g.ids["ada-gh"], "ada-renamed")
+		g.gh.user("ada-gh", "User") // someone else now owns the old name
+		g.runOnce(true)
+		g.requireState(a, "FAILED", "FAILED", 1)
+		if _, msg := g.lastOp(a, "GRANT"); !strings.Contains(msg, "renamed from ada-gh to ada-renamed") {
+			t.Fatalf("error %q", msg)
+		}
+		if g.gh.count("PUT ") != 0 || g.ledger(a) != "" {
+			t.Fatalf("PUT %d, ledger %q; want nothing sent or recorded", g.gh.count("PUT "), g.ledger(a))
+		}
+	})
+	t.Run("before the removal", func(t *testing.T) {
+		g := newGitHubRig(t)
+		a := g.active("ada-gh")
+		g.gh.rename(g.ids["ada-gh"], "ada-renamed")
+		g.remove(a)
+		g.runOnce(true)
+		if s, msg := g.lastOp(a, "REVOKE"); s != "FAILED" || !strings.Contains(msg, "renamed from ada-gh to ada-renamed") {
+			t.Fatalf("REVOKE %s (%q)", s, msg)
+		}
+		if g.grantStatus(a) == "REVOKED" || g.ledger(a) != "ACTIVE" || g.gh.count("DELETE ") != 0 {
+			t.Fatalf("grant %s, ledger %q, deletes %d; want the removal open for a person", g.grantStatus(a), g.ledger(a), g.gh.count("DELETE "))
+		}
+		if g.count("SELECT count(*) FROM operations WHERE grant_id = $1 AND type = 'REVOKE' AND status = 'FAILED'", a.id) != 1 {
+			t.Fatal("the failed removal is not in Exceptions")
+		}
+	})
+	t.Run("an account deleted on GitHub", func(t *testing.T) {
+		g := newGitHubRig(t)
+		a := g.active("ada-gh")
+		delete(g.gh.users, g.ids["ada-gh"])
+		g.remove(a)
+		g.runOnce(true)
+		if s, msg := g.lastOp(a, "REVOKE"); s != "FAILED" || !strings.Contains(msg, "no longer exists") {
+			t.Fatalf("REVOKE %s (%q)", s, msg)
+		}
+		if g.grantStatus(a) == "REVOKED" {
+			t.Fatal("the removal was reported done without GitHub confirming it")
+		}
+	})
+}
+
+// LookupUser is how a request checks the GitHub username before anyone approves it.
+func TestGitHubLookupUser(t *testing.T) {
+	g := newGitHubRig(t)
+	ctx := context.Background()
+	id := g.gh.user("Ada-GH", "User")
+	g.gh.user("acme", "Organization")
+	got, err := g.client.LookupUser(ctx, "GITHUB_LOGIN", "ada-gh")
+	if err != nil || got.Name != "Ada-GH" || got.Ref != strconv.FormatInt(id, 10) {
+		t.Fatalf("lookup = %+v, %v; want GitHub's spelling and id %d", got, err, id)
+	}
+	for _, tc := range []struct {
+		name, login string
+		want        error
+	}{
+		{"an organization", "acme", access.ErrAccountNotAllowed},
+		{"no such account", "nobody", access.ErrAccountNotFound},
+		{"a space", "ada gh", access.ErrAccountInvalid},
+		{"a path", "../repos", access.ErrAccountInvalid},
+		{"an email", "ada@example.com", access.ErrAccountInvalid},
+		{"too long", strings.Repeat("a", 40), access.ErrAccountInvalid},
+		{"a double hyphen", "ada--gh", access.ErrAccountInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := g.client.LookupUser(ctx, "GITHUB_LOGIN", tc.login); !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v; want %v", err, tc.want)
+			}
+		})
+	}
+	if n := g.gh.count("GET /users/"); n != 3 {
+		t.Fatalf("GitHub was asked %d times; want 3 (malformed names are refused without a call)", n)
+	}
+	g.gh.failNext(1, 502, nil, `{"message":"Bad Gateway"}`)
+	_, err = g.client.LookupUser(ctx, "GITHUB_LOGIN", "ada-gh")
+	if err == nil || errors.Is(err, access.ErrAccountNotFound) || errors.Is(err, access.ErrAccountInvalid) {
+		t.Fatalf("an unreachable GitHub = %v; want an error that is not a verdict on the account", err)
+	}
+	if _, err := g.client.LookupUser(ctx, "SLACK_ID", "ada-gh"); err == nil {
+		t.Fatal("another account kind was looked up on GitHub")
 	}
 }
 
@@ -676,6 +813,7 @@ func TestGitHubErrorsAreRetriedOrFinal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newGitHubRig(t)
 			a := g.grantFor("ada-gh")
+			g.gh.failNext(1, 0, nil, "") // the account check passes; the repository answers
 			g.gh.failNext(1, tc.status, tc.header, `{"message":"no"}`)
 			g.runOnce(true)
 			want := "PENDING"
@@ -722,10 +860,14 @@ func TestGitHubCheckRepository(t *testing.T) {
 func TestGitHubCheckTool(t *testing.T) {
 	g := newGitHubRig(t)
 	ctx := context.Background()
-	api := testutil.CreateTool(t, g.db, testutil.ToolSpec{Method: "API"})
+	api := testutil.CreateTool(t, g.db, testutil.ToolSpec{Method: "API", AccountKind: "GITHUB_LOGIN"})
+	byEmail := testutil.CreateTool(t, g.db, testutil.ToolSpec{Method: "API"})
 	manual := testutil.CreateTool(t, g.db, testutil.ToolSpec{Method: "MANUAL"})
 	if err := g.client.CheckTool(ctx, api); err != nil {
-		t.Fatalf("API tool: %v", err)
+		t.Fatalf("API tool with GitHub usernames: %v", err)
+	}
+	if err := g.client.CheckTool(ctx, byEmail); err == nil {
+		t.Fatal("a tool whose accounts are emails was accepted")
 	}
 	if err := g.client.CheckTool(ctx, manual); err == nil {
 		t.Fatal("a Manual tool was accepted")

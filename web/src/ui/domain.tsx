@@ -1,5 +1,5 @@
 // Request and grant cells shared by several pages (design/ spec 1.24).
-import type { ApprovalStep, Duration, FulfillmentMethod, Grant, RequestItem, RequestKind } from "../api/types";
+import type { ApprovalStep, Duration, ExternalAccount, FulfillmentMethod, Grant, RequestItem, RequestKind } from "../api/types";
 import { methodLabel, methodTitle, requestKindLabel, stepLabel } from "../i18n/labels";
 import { reasonText } from "../i18n/reasons";
 import { useSession } from "../session";
@@ -59,6 +59,9 @@ export function DurationText({ duration }: { duration: Duration }) {
 }
 
 export const RequestKindTag = ({ kind }: { kind: RequestKind }) => kind === "NEW_ACCESS" ? null : <Tag>{requestKindLabel[kind]}</Tag>;
+
+/** A tool-specific account as approvers and auditors see it: the GitHub login and its immutable id. */
+export const accountText = (a: ExternalAccount) => `@${a.name} · GitHub kimliği ${a.ref}`;
 
 export const MethodTag = ({ method }: { method: FulfillmentMethod }) => <Tag title={methodTitle[method]}>{methodLabel[method]}</Tag>;
 

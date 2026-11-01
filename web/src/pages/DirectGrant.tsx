@@ -23,7 +23,7 @@ export function DirectGrantPage() {
   );
 }
 
-type Form = { employeeId: string; toolId: string; levelId: string; days: string; why: string };
+type Form = { employeeId: string; toolId: string; levelId: string; days: string; why: string; account: string };
 
 function GrantTab() {
   const navigate = useNavigate();
@@ -31,7 +31,7 @@ function GrantTab() {
   const { me, timezone } = useSession();
   const employees = (useEmployees().data ?? []) as Employee[];
   const tools = (useTools().data ?? []).filter((t) => t.status !== "RETIRED");
-  const [form, setForm] = useState<Form>({ employeeId: "", toolId: "", levelId: "", days: "30", why: "" });
+  const [form, setForm] = useState<Form>({ employeeId: "", toolId: "", levelId: "", days: "30", why: "", account: "" });
   const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({});
   const [submissionId] = useState(newSubmissionId);
   const [run, busy] = useAction();
@@ -49,6 +49,7 @@ function GrantTab() {
       employeeId: form.employeeId ? undefined : "Çalışan seçin.",
       toolId: form.toolId ? undefined : "Araç seçin.",
       levelId: form.toolId && !form.levelId ? "Seviye seçin." : undefined,
+      account: tool?.accountKind && !form.account.trim() ? "GitHub kullanıcı adını girin." : undefined,
       days: validDays ? undefined : "2 ile 90 gün arasında bir süre girin.",
       why: form.why.trim().length >= 15 ? undefined : "Gerekçe en az 15 karakter olmalı.",
     };
@@ -56,10 +57,11 @@ function GrantTab() {
     if (Object.values(next).some(Boolean)) return;
     const r = await run(() => api.post<Request>("/direct-grants", {
       submissionId, beneficiaryId: form.employeeId, accessLevelId: form.levelId, justification: form.why.trim(), expiresOn,
+      ...(tool?.accountKind && { account: form.account.trim() }),
     }), { success: "Doğrudan erişim başlatıldı", successDesc: "Bilgi Güvenliği ve çalışanın yöneticisi bilgilendirildi." });
     if (r.ok) { qc.invalidateQueries({ queryKey: ["requests"] }); navigate(`/requests/${r.res.id}`); }
     else if (r.err instanceof ApiError && r.err.field) {
-      const key = ({ beneficiaryId: "employeeId", accessLevelId: "levelId", expiresOn: "days", justification: "why" } as Record<string, keyof Form>)[r.err.field];
+      const key = ({ beneficiaryId: "employeeId", accessLevelId: "levelId", expiresOn: "days", justification: "why", account: "account" } as Record<string, keyof Form>)[r.err.field];
       if (key) setErrors({ [key]: errorMessage(r.err) });
     }
   };
@@ -75,6 +77,11 @@ function GrantTab() {
             </Field>
             <Field label="Araç" required error={errors.toolId}><Select value={form.toolId} onChange={(e) => set("toolId", e.target.value)} placeholder="Araç seçin" options={tools.map((t) => ({ value: t.id, label: t.name }))} /></Field>
             <Field label="Seviye" required error={errors.levelId}><Select value={form.levelId} disabled={!tool} onChange={(e) => set("levelId", e.target.value)} placeholder={tool ? "Seviye seçin" : "Önce araç seçin"} options={levels.map((l) => ({ value: l.id, label: l.name }))} /></Field>
+            {tool?.accountKind === "GITHUB_LOGIN" && (
+              <Field label="GitHub kullanıcı adı" required error={errors.account} className="full" hint="Erişim bu GitHub hesabına verilir; kayıttan sonra değiştirilemez.">
+                <Input value={form.account} autoComplete="off" spellCheck={false} placeholder="örn. octocat" invalid={!!errors.account} onChange={(e) => set("account", e.target.value)} />
+              </Field>
+            )}
             <Field label="Süre (gün)" required error={errors.days} hint={`Bugün dahil, en fazla 90 gün · son gün: ${validDays ? formatDate(expiresOn, timezone) : "—"}`}>
               <div className="row">
                 <Segmented<number> label="Hazır süreler" value={days} onChange={(v) => set("days", String(v))} options={[7, 30, 90].map((v) => ({ value: v, label: String(v) }))} />

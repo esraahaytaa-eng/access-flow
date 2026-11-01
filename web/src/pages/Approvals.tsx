@@ -9,7 +9,7 @@ import { useSession } from "../session";
 import {
   Button, Callout, Card, ConfirmDialog, Drawer, EmptyState, Field, KeyValueList, Modal, PageHeader, Person, SearchBox, Segmented, Select, Tabs, TableSkeleton, Textarea, ToolCell, useAction,
 } from "../ui/components";
-import { DurationText } from "../ui/domain";
+import { accountText, DurationText } from "../ui/domain";
 import { formatDate, sinceText } from "../ui/format";
 import { ItemTimeline } from "./RequestDetail";
 
@@ -79,7 +79,7 @@ export function ApprovalsPage() {
                 return (
                   <tr key={a.step.id} className="clickable" tabIndex={0} onClick={() => setOpenId(a.step.id)} onKeyDown={(e) => e.key === "Enter" && setOpenId(a.step.id)}>
                     <td><Person person={a.item.beneficiary} sub={false} /></td>
-                    <td><ToolCell tool={a.item.tool} level={a.item.level} sub={<span className="mono">{a.item.requestId.slice(0, 8)}</span>} /></td>
+                    <td><ToolCell tool={a.item.tool} level={a.item.level} sub={<span className="mono">{a.item.requestId.slice(0, 8)}{a.item.account && ` · @${a.item.account.name}`}</span>} /></td>
                     <td>
                       <div className="stack-sm" style={{ gap: 2 }}>
                         <span>{stepLabel[a.step.type]}</span>
@@ -143,7 +143,7 @@ export function DecisionDrawer({ approval, canDecide, onClose }: { approval: App
           <div><div className="label" style={{ marginBottom: 6 }}>Hak sahibi</div><Person person={item.beneficiary} sub={[beneficiary?.jobTitle, beneficiary?.department].filter(Boolean).join(" · ") || false} /></div>
           <div><div className="label" style={{ marginBottom: 6 }}>Yöneticisi</div><Person person={manager} /></div>
         </div>
-        <KeyValueList items={[["Süre", <DurationText duration={item.duration} />], ["Gönderen", item.submittedBy.id === item.beneficiary.id ? "Çalışanın kendisi" : item.submittedBy.fullName]]} />
+        <KeyValueList items={[item.account && ["GitHub hesabı", accountText(item.account)], ["Süre", <DurationText duration={item.duration} />], ["Gönderen", item.submittedBy.id === item.beneficiary.id ? "Çalışanın kendisi" : item.submittedBy.fullName]]} />
         <div><div className="label" style={{ marginBottom: 6 }}>Gerekçe</div><div className="tl-note" style={{ marginTop: 0 }}>{item.justification}</div></div>
         <div><div className="section-title">Onay geçmişi</div><ItemTimeline item={item} /></div>
         {canDecide && (

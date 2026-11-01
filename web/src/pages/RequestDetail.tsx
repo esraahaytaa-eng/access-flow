@@ -7,7 +7,7 @@ import { stepLabel } from "../i18n/labels";
 import { reasonText, routingNoteText } from "../i18n/reasons";
 import { useSession } from "../session";
 import { Button, Card, ConfirmDialog, EmptyState, Icon, KeyValueList, PageHeader, Person, Skeleton, ToolMark } from "../ui/components";
-import { DurationText, ItemStateCell, RequestKindTag } from "../ui/domain";
+import { accountText, DurationText, ItemStateCell, RequestKindTag } from "../ui/domain";
 import { formatDateTime } from "../ui/format";
 import type { IconName } from "../ui/icons";
 
@@ -94,7 +94,7 @@ export function RequestDetailPage() {
               sub={<span className="row" style={{ gap: 6, marginTop: 4 }}><span className="mono">{it.id.slice(0, 8)}</span><RequestKindTag kind={request.kind} /></span>}
               actions={<ItemStateCell item={it} withSub={false} />}>
               <div className="stack" style={{ gap: 18 }}>
-                <KeyValueList items={[["Süre", <DurationText duration={it.duration} />]]} />
+                <KeyValueList items={[it.account && ["GitHub hesabı", accountText(it.account)], ["Süre", <DurationText duration={it.duration} />]]} />
                 <ItemTimeline item={it} kind={request.kind} />
                 {(canWithdraw(it) || (["REJECTED", "CANCELLED", "WITHDRAWN"].includes(it.status) && me.id === it.beneficiary.id)) && (
                   <div className="row-wrap" style={{ justifyContent: "flex-end" }}>

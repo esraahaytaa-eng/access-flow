@@ -29,7 +29,7 @@ func testRouter(t *testing.T, dist fstest.MapFS, demoAccounts ...demo.Account) h
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), dist, demoAccounts)
+	return newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), nil, dist, demoAccounts)
 }
 
 func TestRouter(t *testing.T) {
@@ -247,7 +247,7 @@ func TestAuditorReachesOnlyTheAuditEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), fstest.MapFS{}, demo.Accounts)
+	router := newRouter(db.App, svc, time.UTC, access.NewHTTPToolClient("http://127.0.0.1:1", time.Second), nil, fstest.MapFS{}, demo.Accounts)
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 	signIn := func(roles ...string) *testutil.Client {

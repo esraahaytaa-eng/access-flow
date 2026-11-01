@@ -160,6 +160,11 @@ func TestProblems(t *testing.T) {
 			Problem{Sheet: SheetAccess, Row: 3, Column: "Access Level", Reason: "unknown_level", Expected: "User"}},
 		{"API account of someone else", func(w *Workbook, _ *Snapshot) { w.Access[3].Account = "bob@co.test" },
 			Problem{Sheet: SheetAccess, Row: 5, Column: "Account", Reason: "api_account_mismatch", Expected: "ann@co.test"}},
+		{"access to a tool whose accounts are GitHub usernames", func(_ *Workbook, s *Snapshot) {
+			aws := s.Tools["aws"]
+			aws.AccountKind = "GITHUB_LOGIN" // requested with the username and its GitHub id, never imported
+			s.Tools["aws"] = aws
+		}, Problem{Sheet: SheetAccess, Row: 5, Column: "Tool", Reason: "account_kind_tool"}},
 		{"duplicate access", func(w *Workbook, _ *Snapshot) {
 			w.Access = append(w.Access, AccessRow{6, "ann@co.test", "GitHub", "Developer", "ANN@co.test"})
 		},

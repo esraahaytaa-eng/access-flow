@@ -47,16 +47,29 @@ func newRig(t *testing.T) *rig {
 // grant approves an item for a new employee on a new tool of method and creates its grant.
 func (r *rig) grant(method string) approvedGrant {
 	r.t.Helper()
+	return r.grantWith(method, "", "")
+}
+
+// grantWith is grant for a tool-specific account and its reference (a GitHub login and id);
+// empty ones mean the employee's email.
+func (r *rig) grantWith(method, account, ref string) approvedGrant {
+	r.t.Helper()
 	ctx := context.Background()
 	g := approvedGrant{emp: testutil.CreateEmployee(r.t, r.db, testutil.EmployeeSpec{})}
-	g.tool = testutil.CreateTool(r.t, r.db, testutil.ToolSpec{Method: method})
+	kind := ""
+	if account != "" {
+		kind = "GITHUB_LOGIN"
+	}
+	g.tool = testutil.CreateTool(r.t, r.db, testutil.ToolSpec{Method: method, AccountKind: kind})
 	g.level = testutil.CreateLevel(r.t, r.db, g.tool, "User", false, false)
 	err := platform.InTx(ctx, r.db.App, func(tx pgx.Tx, now time.Time) error {
 		var item uuid.UUID
 		if err := tx.QueryRow(ctx, `WITH req AS (INSERT INTO requests (submission_id, beneficiary_id, submitted_by)
 			VALUES (uuidv7(), $1, $1) RETURNING id)
-			INSERT INTO request_items (request_id, beneficiary_id, tool_id, access_level_id, justification, duration_type, status)
-			SELECT id, $1, $2, $3, 'x', 'UNTIL_REVOKED', 'APPROVED' FROM req RETURNING id`, g.emp.ID, g.tool, g.level).Scan(&item); err != nil {
+			INSERT INTO request_items (request_id, beneficiary_id, tool_id, access_level_id, justification, duration_type, status,
+				account, account_ref)
+			SELECT id, $1, $2, $3, 'x', 'UNTIL_REVOKED', 'APPROVED', nullif($4, ''), nullif($5, '') FROM req RETURNING id`,
+			g.emp.ID, g.tool, g.level, account, ref).Scan(&item); err != nil {
 			return err
 		}
 		var err error

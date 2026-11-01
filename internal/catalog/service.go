@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -21,6 +22,8 @@ import (
 
 var (
 	errInvalidMethod   = platform.ValidationError("fulfillmentMethod", "invalid_fulfillment_method")
+	errAccountKind     = platform.ValidationError("accountKind", "invalid_account_kind")
+	errAccountKindAPI  = platform.ValidationError("accountKind", "account_kind_requires_api")
 	errOwnerNotActive  = platform.ValidationError("ownerId", "owner_not_active")
 	errGroupNotFound   = platform.ValidationError("adminGroupId", "admin_group_not_found")
 	errToolNameTaken   = platform.NewError(http.StatusConflict, "tool_name_taken")
@@ -51,6 +54,7 @@ type Tool struct {
 	FulfillmentMethod string    `json:"fulfillmentMethod"`
 	OwnerID           uuid.UUID `json:"ownerId"`
 	AdminGroupID      uuid.UUID `json:"adminGroupId"`
+	AccountKind       string    `json:"accountKind,omitempty"` // empty: the account is the employee's email
 	Status            string    `json:"status"`
 	Version           int       `json:"version"`
 }
@@ -67,10 +71,15 @@ type Level struct {
 	Version           int       `json:"version"`
 }
 
+// AccountGitHubLogin is the one tool account kind besides the email: a GitHub username,
+// for the GitHub sandbox adapter (DECISIONS.md A1 note 2026-11-01).
+const AccountGitHubLogin = "GITHUB_LOGIN"
+
 // NewTool is the input for CreateTool. The method is fixed for the tool's lifetime.
 type NewTool struct {
 	Name, FulfillmentMethod string
 	OwnerID, AdminGroupID   uuid.UUID
+	AccountKind             string // "" or GITHUB_LOGIN; fixed once the tool exists
 }
 
 // ToolUpdate carries every editable tool field and the version it was read at.
@@ -123,11 +132,11 @@ func checkGroup(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	return nil
 }
 
-const toolColumns = "id, name, fulfillment_method, owner_id, admin_group_id, status, version"
+const toolColumns = "id, name, fulfillment_method, owner_id, admin_group_id, coalesce(account_kind, ''), status, version"
 
 func scanTool(row pgx.Row) (Tool, error) {
 	var t Tool
-	err := row.Scan(&t.ID, &t.Name, &t.FulfillmentMethod, &t.OwnerID, &t.AdminGroupID, &t.Status, &t.Version)
+	err := row.Scan(&t.ID, &t.Name, &t.FulfillmentMethod, &t.OwnerID, &t.AdminGroupID, &t.AccountKind, &t.Status, &t.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tool{}, platform.ErrNotFound
 	}
@@ -181,15 +190,21 @@ func CreateToolTx(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Prin
 	if !methods[in.FulfillmentMethod] {
 		return Tool{}, errInvalidMethod
 	}
+	switch {
+	case in.AccountKind != "" && in.AccountKind != AccountGitHubLogin:
+		return Tool{}, errAccountKind
+	case in.AccountKind != "" && in.FulfillmentMethod != "API": // only an API tool looks the account up and acts on it
+		return Tool{}, errAccountKindAPI
+	}
 	if err := checkOwner(ctx, tx, in.OwnerID); err != nil {
 		return Tool{}, err
 	}
 	if err := checkGroup(ctx, tx, in.AdminGroupID); err != nil {
 		return Tool{}, err
 	}
-	tool, err := scanTool(tx.QueryRow(ctx, `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id, seeded, created_by, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING `+toolColumns,
-		name, in.FulfillmentMethod, in.OwnerID, in.AdminGroupID, actor.EmployeeID == uuid.Nil, actorRef(actor), now))
+	tool, err := scanTool(tx.QueryRow(ctx, `INSERT INTO tools (name, fulfillment_method, owner_id, admin_group_id, account_kind, seeded, created_by, created_at)
+		VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7, $8) RETURNING `+toolColumns,
+		name, in.FulfillmentMethod, in.OwnerID, in.AdminGroupID, in.AccountKind, actor.EmployeeID == uuid.Nil, actorRef(actor), now))
 	if isUnique(err) {
 		return Tool{}, errToolNameTaken
 	}
@@ -197,7 +212,8 @@ func CreateToolTx(ctx context.Context, tx pgx.Tx, now time.Time, actor auth.Prin
 		return Tool{}, err
 	}
 	return tool, audit.Record(ctx, tx, audit.Event{ActorID: actorRef(actor), Action: "TOOL_CREATED", Entity: "tool", EntityID: &tool.ID,
-		Details: map[string]any{"name": name, "fulfillmentMethod": in.FulfillmentMethod, "ownerId": in.OwnerID, "adminGroupId": in.AdminGroupID}})
+		Details: map[string]any{"name": name, "fulfillmentMethod": in.FulfillmentMethod, "ownerId": in.OwnerID, "adminGroupId": in.AdminGroupID,
+			"accountKind": cmp.Or(in.AccountKind, "EMAIL")}})
 }
 
 // UpdateTool changes a tool's name, owner or admin group; an unchanged edit does nothing.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,14 +23,14 @@ import (
 )
 
 // GitHubToolClient gives Read on one private sandbox repository through the GitHub REST API,
-// for the one tool GITHUB_TOOL_ID names (A1 note 2026-11-01). Its ledger (github_access)
-// records what AccessFlow created: GitHub is changed only for access recorded there, and
-// anything the adapter cannot prove is a rejection that waits in Exceptions for a person.
-// GitHub has no suspended state: a SUSPEND removes the access, a RESUME invites again (D7).
+// for the one tool GITHUB_TOOL_ID names (A1 note 2026-11-01). The account is the GitHub login
+// and id the request recorded on the grant. Its ledger (github_access) records what
+// AccessFlow created: GitHub is changed only for access recorded there, and anything the
+// adapter cannot prove is a rejection that waits in Exceptions for a person. GitHub has no
+// suspended state: a SUSPEND removes the access, a RESUME invites again (D7).
 type GitHubToolClient struct {
 	pool              *pgxpool.Pool
 	base, repo, token string
-	users             map[string]string // lowercased email → GitHub login
 	http              *http.Client
 }
 
@@ -47,17 +48,70 @@ const (
 	noLedgerRecord        = "AccessFlow has no record of granting this GitHub access; review it by hand"
 )
 
+// githubLogin is GitHub's username rule: letters, digits and single inner hyphens, at most 39.
+var githubLogin = regexp.MustCompile(`^[A-Za-z0-9](-?[A-Za-z0-9]){0,38}$`)
+
 // rejection is an answer retrying cannot change: the runner fails the operation at once (O3).
 type rejection struct{ msg string }
 
 func (r rejection) Error() string { return r.msg }
 
 // NewGitHubToolClient returns the adapter for repository (owner/name) at baseURL
-// (https://api.github.com in production); users maps lowercased emails to logins.
-func NewGitHubToolClient(pool *pgxpool.Pool, baseURL, repository, token string, users map[string]string,
-	timeout time.Duration) *GitHubToolClient {
-	return &GitHubToolClient{pool: pool, base: strings.TrimRight(baseURL, "/"), repo: repository, token: token, users: users,
+// (https://api.github.com in production).
+func NewGitHubToolClient(pool *pgxpool.Pool, baseURL, repository, token string, timeout time.Duration) *GitHubToolClient {
+	return &GitHubToolClient{pool: pool, base: strings.TrimRight(baseURL, "/"), repo: repository, token: token,
 		http: &http.Client{Timeout: timeout}}
+}
+
+// LookupUser finds the GitHub user a request names, for requests.Service.Accounts: GitHub's
+// spelling of the login and the immutable id. An organization or bot is not a person's
+// account; a malformed name is refused without a call.
+func (c *GitHubToolClient) LookupUser(ctx context.Context, kind, login string) (ExternalAccount, error) {
+	if kind != "GITHUB_LOGIN" {
+		return ExternalAccount{}, fmt.Errorf("github: no lookup for account kind %q", kind)
+	}
+	if !githubLogin.MatchString(login) {
+		return ExternalAccount{}, ErrAccountInvalid
+	}
+	ctx, cancel := context.WithTimeout(ctx, githubAccountDeadline)
+	defer cancel()
+	var got struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+		Type  string `json:"type"`
+	}
+	status, err := c.send(ctx, http.MethodGet, "/users/"+login, nil, &got, http.StatusOK, http.StatusNotFound)
+	switch {
+	case err != nil:
+		return ExternalAccount{}, err
+	case status == http.StatusNotFound:
+		return ExternalAccount{}, ErrAccountNotFound
+	case got.Type != "User":
+		return ExternalAccount{}, ErrAccountNotAllowed
+	case got.ID == 0 || !strings.EqualFold(got.Login, login):
+		return ExternalAccount{}, fmt.Errorf("github: the user answer for %s is incomplete", login)
+	}
+	return ExternalAccount{Name: got.Login, Ref: strconv.FormatInt(got.ID, 10)}, nil
+}
+
+// sameAccount confirms that GitHub user id still has the login AccessFlow recorded. Logins
+// can be renamed and a freed one claimed by someone else, so a renamed or deleted account is
+// never acted on by its old name, and its removal never reported done: a person decides.
+func (c *GitHubToolClient) sameAccount(ctx context.Context, id int64, login string) error {
+	var got struct {
+		Login string `json:"login"`
+	}
+	status, err := c.send(ctx, http.MethodGet, "/user/"+strconv.FormatInt(id, 10), nil, &got, http.StatusOK, http.StatusNotFound)
+	switch {
+	case err != nil:
+		return err
+	case status == http.StatusNotFound:
+		return rejection{fmt.Sprintf("GitHub user %d (%s) no longer exists; check the repository's access by hand", id, login)}
+	case !strings.EqualFold(got.Login, login):
+		return rejection{fmt.Sprintf("GitHub user %d was renamed from %s to %s; AccessFlow did not change its access: review it by hand",
+			id, login, got.Login)}
+	}
+	return nil
 }
 
 // CheckRepository confirms at startup that the token reaches the repository and that it is
@@ -67,7 +121,7 @@ func (c *GitHubToolClient) CheckRepository(ctx context.Context) error {
 		FullName string `json:"full_name"`
 		Private  bool   `json:"private"`
 	}
-	if _, err := c.send(ctx, http.MethodGet, "", nil, &got, http.StatusOK); err != nil {
+	if _, err := c.send(ctx, http.MethodGet, c.repoPath(""), nil, &got, http.StatusOK); err != nil {
 		return fmt.Errorf("GITHUB_REPOSITORY %s: %w", c.repo, err)
 	}
 	if !strings.EqualFold(got.FullName, c.repo) {
@@ -79,16 +133,19 @@ func (c *GitHubToolClient) CheckRepository(ctx context.Context) error {
 	return nil
 }
 
-// CheckTool confirms at startup that GITHUB_TOOL_ID names an API tool: the runner handles
-// only API operations, so any other tool would never reach GitHub.
+// CheckTool confirms at startup that GITHUB_TOOL_ID names an API tool whose accounts are
+// GitHub usernames: the runner handles only API operations, and only such a tool's requests
+// record the login and id the adapter acts on.
 func (c *GitHubToolClient) CheckTool(ctx context.Context, tool uuid.UUID) error {
-	var method string
-	err := c.pool.QueryRow(ctx, "SELECT fulfillment_method FROM tools WHERE id = $1", tool).Scan(&method)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var method, kind string
+	err := c.pool.QueryRow(ctx, "SELECT fulfillment_method, coalesce(account_kind, '') FROM tools WHERE id = $1", tool).Scan(&method, &kind)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
 		return fmt.Errorf("GITHUB_TOOL_ID %s names no tool; create the tool first, then restart", tool)
-	}
-	if err == nil && method != "API" {
-		err = fmt.Errorf("GITHUB_TOOL_ID %s is a %s tool; it must be an API tool", tool, method)
+	case err == nil && method != "API":
+		return fmt.Errorf("GITHUB_TOOL_ID %s is a %s tool; it must be an API tool", tool, method)
+	case err == nil && kind != "GITHUB_LOGIN":
+		return fmt.Errorf("GITHUB_TOOL_ID %s does not use GitHub usernames; create the tool with that account identity", tool)
 	}
 	return err
 }
@@ -96,16 +153,17 @@ func (c *GitHubToolClient) CheckTool(ctx context.Context, tool uuid.UUID) error 
 // ledger is AccessFlow's record of one grant's access in the repository.
 type ledger struct {
 	login, state string
+	user         int64
 	level        uuid.UUID
 	invitation   *int64
 	overdue      bool // invited more than 7 days ago: GitHub's own invitation lifetime
 }
 
-const ledgerColumns = "login, state, level_id, invitation_id, coalesce(invited_at < now() - interval '7 days', false)"
+const ledgerColumns = "account, user_id, state, level_id, invitation_id, coalesce(invited_at < now() - interval '7 days', false)"
 
 func scanLedger(row pgx.Row) (*ledger, error) {
 	var l ledger
-	err := row.Scan(&l.login, &l.state, &l.level, &l.invitation, &l.overdue)
+	err := row.Scan(&l.login, &l.user, &l.state, &l.level, &l.invitation, &l.overdue)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -127,16 +185,28 @@ func (c *GitHubToolClient) Apply(ctx context.Context, op ToolOperation) (ToolRes
 	ctx, cancel := context.WithTimeout(ctx, githubApplyDeadline)
 	defer cancel()
 	var grant uuid.UUID
-	if err := c.pool.QueryRow(ctx, "SELECT grant_id FROM operations WHERE id = $1", op.ID).Scan(&grant); err != nil {
+	var ref *string
+	if err := c.pool.QueryRow(ctx, "SELECT o.grant_id, g.account_ref FROM operations o JOIN grants g ON g.id = o.grant_id WHERE o.id = $1",
+		op.ID).Scan(&grant, &ref); err != nil {
 		return ToolResult{}, err
+	}
+	if ref == nil {
+		return ToolResult{}, rejection{"the grant names no GitHub account; request the access with a GitHub username"}
+	}
+	user, err := strconv.ParseInt(*ref, 10, 64)
+	if err != nil {
+		return ToolResult{}, rejection{"the grant's GitHub user id is not a number"}
 	}
 	row, err := scanLedger(c.pool.QueryRow(ctx, "SELECT "+ledgerColumns+" FROM github_access WHERE grant_id = $1", grant))
 	if err != nil {
 		return ToolResult{}, err
 	}
+	if err := c.sameAccount(ctx, user, op.Account); err != nil {
+		return ToolResult{}, err
+	}
 	switch op.Type {
 	case "GRANT", "RESUME":
-		return c.give(ctx, op, grant, row)
+		return c.give(ctx, op, grant, user, row)
 	case "REVOKE", "SUSPEND":
 		return c.take(ctx, op, grant, row)
 	}
@@ -145,17 +215,14 @@ func (c *GitHubToolClient) Apply(ctx context.Context, op ToolOperation) (ToolRes
 
 // give invites the person with Read and reports ErrInvitationPending until GitHub shows the
 // invitation accepted. Access that AccessFlow did not grant is never taken over.
-func (c *GitHubToolClient) give(ctx context.Context, op ToolOperation, grant uuid.UUID, row *ledger) (ToolResult, error) {
+func (c *GitHubToolClient) give(ctx context.Context, op ToolOperation, grant uuid.UUID, user int64, row *ledger) (ToolResult, error) {
 	back := "REMOVED" // where a failed invitation leaves the record
 	if op.Type == "RESUME" {
 		back = "SUSPENDED"
 	}
 	switch {
 	case row == nil && op.Type == "GRANT":
-		login, err := c.login(op.Account)
-		if err != nil {
-			return ToolResult{}, err
-		}
+		login := op.Account
 		if err := c.requireNoAccess(ctx, login); err != nil {
 			return ToolResult{}, err
 		}
@@ -164,8 +231,8 @@ func (c *GitHubToolClient) give(ctx context.Context, op ToolOperation, grant uui
 		if err != nil {
 			return ToolResult{}, err
 		}
-		_, err = c.pool.Exec(ctx, `INSERT INTO github_access (grant_id, repository, account, login, level_id, state)
-			VALUES ($1, $2, $3, $4, $5, 'INVITING')`, grant, c.repo, op.Account, login, level)
+		_, err = c.pool.Exec(ctx, `INSERT INTO github_access (grant_id, repository, account, user_id, level_id, state)
+			VALUES ($1, $2, $3, $4, $5, 'INVITING')`, grant, c.repo, login, user, level)
 		if err != nil {
 			return ToolResult{}, managedElsewhere(err)
 		}
@@ -252,7 +319,7 @@ func (c *GitHubToolClient) invite(ctx context.Context, grant uuid.UUID, login st
 	var created struct {
 		ID int64 `json:"id"`
 	}
-	status, err := c.send(ctx, http.MethodPut, "/collaborators/"+url.PathEscape(login), map[string]string{"permission": "pull"},
+	status, err := c.send(ctx, http.MethodPut, c.repoPath("/collaborators/"+url.PathEscape(login)), map[string]string{"permission": "pull"},
 		&created, http.StatusCreated, http.StatusNoContent)
 	if err != nil {
 		return ToolResult{}, err
@@ -306,7 +373,7 @@ func (c *GitHubToolClient) take(ctx context.Context, op ToolOperation, grant uui
 	}
 	switch {
 	case role == "read" && row.state != "SUSPENDED":
-		if _, err := c.send(ctx, http.MethodDelete, "/collaborators/"+url.PathEscape(row.login), nil, nil, http.StatusNoContent); err != nil {
+		if _, err := c.send(ctx, http.MethodDelete, c.repoPath("/collaborators/"+url.PathEscape(row.login)), nil, nil, http.StatusNoContent); err != nil {
 			return ToolResult{}, err
 		}
 	case role != "" && row.state == "ACTIVE":
@@ -322,24 +389,25 @@ func (c *GitHubToolClient) take(ctx context.Context, op ToolOperation, grant uui
 func (c *GitHubToolClient) Account(ctx context.Context, tool, account string) (ToolAccount, error) {
 	ctx, cancel := context.WithTimeout(ctx, githubAccountDeadline)
 	defer cancel()
-	// The newest record, ended or not, still names the login AccessFlow used.
+	// The newest record, ended or not, has the GitHub id AccessFlow acted on.
 	row, err := scanLedger(c.pool.QueryRow(ctx, "SELECT "+ledgerColumns+` FROM github_access
 		WHERE repository = $1 AND lower(account) = lower($2) ORDER BY state = 'REMOVED', updated_at DESC LIMIT 1`, c.repo, account))
 	if err != nil {
 		return ToolAccount{}, err
 	}
-	var login string
-	if row != nil {
-		login = row.login
-	} else if login, err = c.login(account); err != nil {
+	if row == nil {
+		return ToolAccount{}, rejection{noLedgerRecord}
+	}
+	if err := c.sameAccount(ctx, row.user, row.login); err != nil {
 		return ToolAccount{}, err
 	}
+	login := row.login
 	role, err := c.role(ctx, login)
 	if err != nil {
 		return ToolAccount{}, err
 	}
 	switch {
-	case role == "read" && row != nil && row.state == "ACTIVE":
+	case role == "read" && row.state == "ACTIVE":
 		return ToolAccount{Exists: true, Levels: []ToolLevel{{row.level.String(), "ACTIVE"}}}, nil
 	case role != "":
 		return ToolAccount{}, rejection{notGranted(role)}
@@ -351,7 +419,7 @@ func (c *GitHubToolClient) Account(ctx context.Context, tool, account string) (T
 	if inv != nil {
 		return ToolAccount{}, errors.New("github: an invitation is still pending")
 	}
-	if row != nil && row.state == "SUSPENDED" {
+	if row.state == "SUSPENDED" {
 		return ToolAccount{Exists: true, Levels: []ToolLevel{{row.level.String(), "SUSPENDED"}}}, nil
 	}
 	return ToolAccount{Exists: false, Levels: []ToolLevel{}}, nil
@@ -367,14 +435,6 @@ func managedElsewhere(err error) error {
 
 func notGranted(role string) string {
 	return fmt.Sprintf("the GitHub account has %s access that AccessFlow did not grant; review it by hand", role)
-}
-
-func (c *GitHubToolClient) login(email string) (string, error) {
-	login := c.users[strings.ToLower(email)]
-	if login == "" {
-		return "", rejection{"no GitHub login is mapped for this employee (GITHUB_USERS)"}
-	}
-	return login, nil
 }
 
 // requireNoAccess refuses an account that already has any access or pending invitation.
@@ -402,7 +462,7 @@ func (c *GitHubToolClient) role(ctx context.Context, login string) (string, erro
 		Permission string `json:"permission"`
 		RoleName   string `json:"role_name"` // finer than permission: triage reports permission "read"
 	}
-	if _, err := c.send(ctx, http.MethodGet, "/collaborators/"+url.PathEscape(login)+"/permission", nil, &got, http.StatusOK); err != nil {
+	if _, err := c.send(ctx, http.MethodGet, c.repoPath("/collaborators/"+url.PathEscape(login)+"/permission"), nil, &got, http.StatusOK); err != nil {
 		return "", err
 	}
 	role := cmp.Or(got.RoleName, got.Permission)
@@ -436,7 +496,7 @@ func (i invitation) login() string {
 func (c *GitHubToolClient) findInvitation(ctx context.Context, match func(invitation) bool) (*invitation, error) {
 	for page := 1; page <= maxInvitationPages; page++ {
 		var list []invitation
-		path := "/invitations?per_page=" + strconv.Itoa(invitationsPerPage) + "&page=" + strconv.Itoa(page)
+		path := c.repoPath("/invitations?per_page=" + strconv.Itoa(invitationsPerPage) + "&page=" + strconv.Itoa(page))
 		if _, err := c.send(ctx, http.MethodGet, path, nil, &list, http.StatusOK); err != nil {
 			return nil, err
 		}
@@ -452,13 +512,15 @@ func (c *GitHubToolClient) findInvitation(ctx context.Context, match func(invita
 
 // deleteInvitation cancels an invitation; one already gone (accepted, declined) is fine.
 func (c *GitHubToolClient) deleteInvitation(ctx context.Context, id int64) error {
-	_, err := c.send(ctx, http.MethodDelete, "/invitations/"+strconv.FormatInt(id, 10), nil, nil, http.StatusNoContent, http.StatusNotFound)
+	_, err := c.send(ctx, http.MethodDelete, c.repoPath("/invitations/"+strconv.FormatInt(id, 10)), nil, nil, http.StatusNoContent, http.StatusNotFound)
 	return err
 }
 
-// send calls the repository's API and decodes a JSON answer into out. A status outside ok is
-// an error: temporary (server errors, rate limits) or a rejection. The token is never part
-// of an error.
+func (c *GitHubToolClient) repoPath(path string) string { return "/repos/" + c.repo + path }
+
+// send calls the API at path and decodes a JSON answer into out. A status outside ok is an
+// error: temporary (server errors, rate limits) or a rejection. The token is never part of
+// an error.
 func (c *GitHubToolClient) send(ctx context.Context, method, path string, body, out any, ok ...int) (int, error) {
 	var reader io.Reader
 	if body != nil {
@@ -468,7 +530,7 @@ func (c *GitHubToolClient) send(ctx context.Context, method, path string, body, 
 		}
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+"/repos/"+c.repo+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return 0, err
 	}

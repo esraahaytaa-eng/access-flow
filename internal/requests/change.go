@@ -67,11 +67,12 @@ func (s *Service) Change(ctx context.Context, actor auth.Principal, grantID uuid
 		var tool uuid.UUID
 		var expires *time.Time
 		var live, changing bool
-		if err := tx.QueryRow(ctx, `SELECT e.status, e.manager_id, g.tool_id, g.expires_on,
+		var account, ref *string // the held grant's account carries over (A1 note 2026-11-01)
+		if err := tx.QueryRow(ctx, `SELECT e.status, e.manager_id, g.tool_id, g.expires_on, g.account, g.account_ref,
 			       g.status = 'ACTIVE' AND (g.expires_on IS NULL OR g.expires_on >= $2),
 			       EXISTS (SELECT 1 FROM grants n WHERE n.replaces_grant_id = g.id AND n.status NOT IN ('REVOKED', 'CANCELLED'))
 			FROM grants g JOIN employees e ON e.id = g.employee_id WHERE g.id = $1`, grantID, access.Today(now, s.loc)).
-			Scan(&status, &manager, &tool, &expires, &live, &changing); err != nil {
+			Scan(&status, &manager, &tool, &expires, &account, &ref, &live, &changing); err != nil {
 			return err
 		}
 		if err := checkOnBehalf(ctx, tx, actor, employee); errors.Is(err, errBeneficiaryNotAllowed) {
@@ -107,7 +108,10 @@ func (s *Service) Change(ctx context.Context, actor auth.Principal, grantID uuid
 		if kind == "EXTENSION" && (expires == nil || (newExpires != nil && !newExpires.After(*expires))) {
 			return platform.ValidationError("duration", "not_an_extension") // a later date, or Until Revoked
 		}
-		item := newItem{c, ItemInput{in.AccessLevelID, justification, in.Duration}, newExpires, &grantID}
+		item := newItem{c, ItemInput{AccessLevelID: in.AccessLevelID, Justification: justification, Duration: in.Duration}, newExpires, &grantID, nil}
+		if account != nil && ref != nil {
+			item.account = &access.ExternalAccount{Name: *account, Ref: *ref}
+		}
 		if req, err = s.create(ctx, tx, now, actor, kind, in.SubmissionID, employee, manager, []newItem{item}); err != nil {
 			return err
 		}
