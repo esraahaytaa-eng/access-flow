@@ -276,3 +276,59 @@ describe("settings", () => {
     ]));
   });
 });
+
+describe("real GitHub API integration", () => {
+  const github = { ...jiraAdmin, id: "t7", name: "GitHub demo-project", accountKind: "GITHUB_LOGIN", levels: [{ ...jiraAdmin.levels[0], id: "l7", name: "Read" }] };
+  const manual = { ...jiraAdmin, id: "t8", name: "GitHub", fulfillmentMethod: "MANUAL" };
+  const page = (id: string) => renderPage(<ToolEditPage />, { path: `/tools-admin/${id}`, pattern: "/tools-admin/:id", session: sa });
+
+  it("shows the real GitHub API only for the tool the backend names, and only reads", async () => {
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin, github, manual] }, "GET /integrations/github": { enabled: true, toolId: "t7" } });
+    const view = page("t7");
+    expect(await screen.findByText("Gerçek GitHub API entegrasyonu aktif")).toBeTruthy();
+    expect(screen.getByText("Erişim davetleri, yetki doğrulama ve erişim kaldırma işlemleri doğrudan GitHub API üzerinden gerçekleştirilir.")).toBeTruthy();
+    view.unmount();
+    const other = page("t1"); // another API tool stays on the mock
+    expect(await screen.findByText("Mock Tool Service kullanılıyor")).toBeTruthy();
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+    other.unmount();
+    page("t8"); // a Manual tool has no API service to name
+    await screen.findByDisplayValue("GitHub");
+    expect(screen.queryByText("Mock Tool Service kullanılıyor")).toBeNull();
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+    expect(screen.queryByRole("button", { name: /test et/i })).toBeNull();
+  });
+
+  it("claims no service when the status cannot be read", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [github] }, "GET /integrations/github": () => ({ status: 500, body: { error: "internal_error" } }) });
+    page("t7");
+    await screen.findByDisplayValue("GitHub demo-project");
+    await waitFor(() => expect(screen.queryByText("Mock Tool Service kullanılıyor")).toBeNull());
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+  });
+
+  it("shows the mock for the GitHub tool when the adapter is off", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [github] }, "GET /integrations/github": { enabled: false, toolId: null } });
+    page("t7");
+    expect(await screen.findByText("Mock Tool Service kullanılıyor")).toBeTruthy();
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+  });
+
+  it("points a reviewer of the default setup to the optional adapter", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "GET /integrations/github": { enabled: false, toolId: null } });
+    renderPage(<ToolsAdminPage />, { session: sa });
+    expect(await screen.findByText(/İsteğe bağlı gerçek GitHub API/)).toBeTruthy();
+    expect(await screen.findByText(/Bu örnekte etkin değil/)).toBeTruthy(); // shown once the backend answered
+  });
+
+  it("explains a GitHub provisioning failure in Turkish, keeping the technical detail", async () => {
+    fakeServer({ ...base, "GET /exceptions": { ...noExceptions, failedOperations: [
+      op({ id: "op2", type: "GRANT", tool: "GitHub demo-project", lastError: "the GitHub account has write access that AccessFlow did not grant; review it by hand" }),
+      op({ id: "op3", type: "GRANT", tool: "GitHub demo-project", lastError: "github status 422" })] } });
+    renderPage(<ExceptionsPage />, { session: sa });
+    expect(await screen.findByText(/GitHub hesabında AccessFlow’un vermediği bir erişim var/)).toBeTruthy();
+    expect(screen.getByText(/GitHub isteği reddetti \(HTTP 422\)/)).toBeTruthy();
+    expect(screen.getAllByText("Teknik ayrıntı")).toHaveLength(2);
+  });
+});

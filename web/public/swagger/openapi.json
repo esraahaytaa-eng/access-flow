@@ -3620,6 +3620,65 @@
         }
       }
     },
+    "/integrations/github": {
+      "get": {
+        "tags": [
+          "Tools"
+        ],
+        "operationId": "getGitHubIntegration",
+        "summary": "Optional GitHub sandbox adapter: on in this instance?",
+        "description": "Any signed-in employee. Whether this instance runs the optional GitHub sandbox adapter and which tool it serves; every other API tool uses the Mock Tool Service. The tool catalog and the tool page label each API tool from it. Calls nothing (no GitHub request); returns no token, repository or other setting.",
+        "responses": {
+          "200": {
+            "description": "The adapter's state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "toolId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid",
+                      "description": "The tool the adapter serves; null when off."
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "toolId"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session, or the signed-in employee is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_change_required` (temporary password).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/starter-packages": {
       "get": {
         "tags": [
@@ -9311,7 +9370,7 @@
           "account": {
             "type": "string",
             "maxLength": 39,
-            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached."
+            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached, `429 account_check_rate_limited` when GitHub's rate limit is reached. A repeated `submissionId` returns the saved request without a lookup."
           }
         }
       },
@@ -9383,7 +9442,7 @@
           "account": {
             "type": "string",
             "maxLength": 39,
-            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached."
+            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached, `429 account_check_rate_limited` when GitHub's rate limit is reached. A repeated `submissionId` returns the saved request without a lookup."
           }
         }
       },

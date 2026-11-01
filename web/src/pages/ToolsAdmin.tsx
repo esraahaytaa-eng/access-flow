@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { useTools } from "../api/queries";
+import { useGitHubIntegration, useTools } from "../api/queries";
 import type { CatalogStatus } from "../api/types";
-import { Button, EmptyState, PageHeader, SearchBox, Segmented, TableSkeleton, ToolMark } from "../ui/components";
+import { Button, Callout, EmptyState, PageHeader, SearchBox, Segmented, TableSkeleton, ToolMark } from "../ui/components";
 import { ApprovalChain, MethodTag } from "../ui/domain";
 
 const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
@@ -10,6 +10,8 @@ const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
 export function ToolsAdminPage() {
   const navigate = useNavigate();
   const query = useTools();
+  const github = useGitHubIntegration();
+  const githubTool = query.data?.find((t) => t.id === github.data?.toolId);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<CatalogStatus | "ALL">("ACTIVE");
   const rows = (query.data ?? []).filter((t) => (status === "ALL" || t.status === status) && (!q.trim() || lower(t.name).includes(lower(q.trim())))).sort((a, b) => a.name.localeCompare(b.name, "tr"));
@@ -17,6 +19,13 @@ export function ToolsAdminPage() {
     <>
       <PageHeader title="Araç yönetimi" sub="Araçları, erişim seviyelerini, sahiplerini, yönetim gruplarını ve her seviyenin onay adımlarını yönetin."
         actions={<Button variant="primary" icon="plus" onClick={() => navigate("/tools-admin/yeni")}>Yeni araç</Button>} />
+      <div style={{ marginBottom: 16 }}>
+        <Callout title="İsteğe bağlı gerçek GitHub API">
+          API araçları varsayılan olarak Mock Tool Service ile çalışır; Manuel ve Tedarikçi karşılamaları beyana dayalıdır. Bir API aracı, hesap kimliği “GitHub kullanıcı adı” seçilerek
+          isteğe bağlı gerçek GitHub API adaptörüne bağlanabilir (tek bir özel sandbox deposu; kurulum: <span className="mono">.env.example</span>, <span className="mono">compose.github.yaml</span>, README).{" "}
+          {github.data && <span className="strong">{github.data.enabled ? `Bu örnekte etkin${githubTool ? `: ${githubTool.name}` : ""}.` : "Bu örnekte etkin değil."}</span>}
+        </Callout>
+      </div>
       <div className="toolbar">
         <SearchBox value={q} onChange={setQ} placeholder="Araç ara" />
         <Segmented<CatalogStatus | "ALL"> label="Durum" value={status} onChange={setStatus} options={[{ value: "ACTIVE", label: "Kullanımda" }, { value: "RETIRED", label: "Kullanımdan kaldırılan" }, { value: "ALL", label: "Tümü" }]} />

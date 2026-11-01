@@ -588,6 +588,9 @@ export type SuperAdminNomination = {
 export type NominationsResponse = { nominations: SuperAdminNomination[] };
 
 /** GET /admin/health */
+/** The optional GitHub sandbox adapter in this instance (Super Admin). */
+export type GitHubIntegration = { enabled: boolean; toolId: string | null };
+
 export type AdminHealth = { activeSuperAdmins: number; infosecMembers: number; recoveryRequired: boolean; warning: boolean };
 
 export interface DemoResponse {

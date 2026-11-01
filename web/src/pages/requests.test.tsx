@@ -85,6 +85,14 @@ describe("my access", () => {
     expect(await screen.findByText("@octocat")).toBeTruthy();
   });
 
+  it("tells the person to accept a pending GitHub invitation", async () => {
+    fakeServer({ "GET /access": { grants: [grant({ tool: "GitHub demo-project", status: "PROVISIONING", displayStatus: "PROVISIONING", evidence: null, account: { name: "octocat", ref: "583231" } })] } });
+    renderPage(<MyAccessPage />);
+    await userEvent.click(await screen.findByRole("tab", { name: /İşlemde/ }));
+    await userEvent.click(screen.getByText("GitHub demo-project"));
+    expect(await screen.findByText(/@octocat hesabına gönderilen daveti GitHub’da kabul edin/)).toBeTruthy();
+  });
+
   it("labels self-reported access and offers no actions on a grant in progress", async () => {
     fakeServer({ "GET /access": { grants: [grant({ method: "MANUAL", displayStatus: "ACTIVE / SELF_REPORTED", evidence: "SELF_REPORTED" }), grant({ id: "g2", tool: "Figma", status: "PENDING_FULFILLMENT", displayStatus: "WAITING_VENDOR", evidence: null })] } });
     renderPage(<MyAccessPage />);

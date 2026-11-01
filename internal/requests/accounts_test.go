@@ -3,8 +3,13 @@ package requests
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -32,6 +37,8 @@ func (w *world) sandbox() (tool, read uuid.UUID, lookups *int) {
 			return access.ExternalAccount{}, access.ErrAccountInvalid
 		case name == "down":
 			return access.ExternalAccount{}, errors.New("github: 502")
+		case name == "limited":
+			return access.ExternalAccount{}, fmt.Errorf("github status 429: %w", access.ErrRateLimited)
 		}
 		return access.ExternalAccount{}, access.ErrAccountNotFound
 	}
@@ -60,11 +67,12 @@ func TestExternalAccountValidation(t *testing.T) {
 		{"unknown account", "nobody-here", read, 400, "account_not_found"},
 		{"an organization is not a user", "github", read, 400, "account_not_allowed"},
 		{"GitHub unreachable", "down", read, 503, "account_check_unavailable"},
+		{"GitHub rate limit", "limited", read, 429, "account_check_rate_limited"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := submit(w.dev.c, body(nil, withAccount(item(tc.level), tc.account)))
 			testutil.RequireStatus(t, r, tc.status, tc.code)
-			if tc.status == 400 && r.Body["field"] != "items[0].account" {
+			if r.Body["field"] != "items[0].account" { // shown next to the GitHub username field
 				t.Fatalf("field = %v", r.Body["field"])
 			}
 		})
@@ -197,5 +205,48 @@ func TestExternalAccountRetryNeedsNoLookup(t *testing.T) {
 	testutil.RequireStatus(t, directGrant(w.admin, direct), http.StatusOK, "")
 	if *lookups != before {
 		t.Fatalf("retries looked the account up %d times; want 0", *lookups-before)
+	}
+}
+
+// The integration status the catalog and the tool page show: any signed-in employee, no
+// GitHub call, nothing but whether the adapter is on and which tool it serves.
+func TestGitHubIntegrationStatus(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tool, _, _ := w.sandbox()
+	status := func(p person) testutil.Response {
+		return p.c.Do(http.MethodGet, "/api/v1/integrations/github", nil)
+	}
+	everyone := []person{w.dev, w.owner, w.is1, w.admin}
+	anonymous := testutil.NewClient(t, w.srv)
+	testutil.RequireStatus(t, anonymous.Do(http.MethodGet, "/api/v1/integrations/github", nil), http.StatusUnauthorized, "authentication_required")
+	// Off: the default setup has no adapter, so every API tool uses the Mock Tool Service.
+	for _, p := range everyone {
+		if r := status(p); r.Status != http.StatusOK || r.Body["enabled"] != false || r.Body["toolId"] != nil || len(r.Body) != 2 {
+			t.Fatalf("status = %d %v", r.Status, r.Body)
+		}
+	}
+
+	var calls atomic.Int32
+	gh := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		rw.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(gh.Close)
+	w.access.GitHub = access.NewGitHubToolClient(w.db.App, gh.URL, "sandbox/repo", "github_pat_secret", time.Second)
+	w.access.GitHubTool = tool
+	for _, p := range everyone {
+		r := status(p)
+		if r.Status != http.StatusOK || r.Body["enabled"] != true || r.Body["toolId"] != tool.String() || len(r.Body) != 2 {
+			t.Fatalf("status = %d %v", r.Status, r.Body)
+		}
+		for _, secret := range []string{"github_pat_secret", "sandbox/repo", gh.URL} {
+			if strings.Contains(string(r.Raw), secret) {
+				t.Fatalf("the status leaks %q: %s", secret, r.Raw)
+			}
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("the status called GitHub %d times; want 0", n)
 	}
 }

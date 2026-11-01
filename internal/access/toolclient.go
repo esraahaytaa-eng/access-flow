@@ -44,6 +44,9 @@ var (
 	ErrAccountInvalid    = errors.New("invalid account name")
 	ErrAccountNotFound   = errors.New("account not found")
 	ErrAccountNotAllowed = errors.New("not a user account")
+	// ErrRateLimited is the tool refusing more calls for now (GitHub's primary or secondary
+	// rate limit): temporary, like an outage.
+	ErrRateLimited = errors.New("rate limited")
 )
 
 // ToolResult says whether the tool changed anything: APPLIED or NO_CHANGE.

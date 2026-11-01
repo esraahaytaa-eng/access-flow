@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useEmployees, useExceptions, useTools } from "../api/queries";
 import type { Approval, CappedList, Operation, Orphan, Overlap } from "../api/types";
 import { operationLabel, stepLabel } from "../i18n/labels";
+import { toolErrorText } from "../i18n/reasons";
 import { useSession } from "../session";
 import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, PageHeader, Person, Segmented, StatusBadge, TableSkeleton, ToolCell, useAction } from "../ui/components";
 import { formatDateTime, relativeTime } from "../ui/format";
@@ -27,6 +28,7 @@ const opBody = (op: Operation, note?: string) => (
     {op.lastError && (op.attempts > 0 ? (
       <div className="small">
         <div style={{ color: "var(--red)" }}>Araç çağrısı başarısız oldu · {op.attempts} deneme</div>
+        {toolErrorText(op.lastError) && <div>{toolErrorText(op.lastError)}</div>}
         <details className="muted"><summary>Teknik ayrıntı</summary><span className="mono">{op.lastError}</span></details>
       </div>
     ) : <div className="small" style={{ color: "var(--red)" }}>{op.lastError}</div>)}

@@ -12,6 +12,7 @@ export const errorMessages: Record<string, string> = {
   file_too_large: "Dosya çok büyük (en fazla 2 MB).",
   access_exists: "Bu araç için zaten açık bir erişiminiz var.",
   admin_group_not_found: "Yönetim grubu bulunamadı.",
+  account_check_rate_limited: "GitHub istek sınırına ulaşıldı. Birkaç dakika sonra yeniden deneyin.",
   account_check_unavailable: "GitHub hesabı şu anda doğrulanamıyor. Biraz sonra yeniden deneyin.",
   account_invalid: "Geçerli bir GitHub kullanıcı adı girin: harf, rakam ve tek tire, en fazla 39 karakter.",
   account_kind_requires_api: "GitHub kullanıcı adı yalnızca API ile karşılanan araçlarda kullanılabilir.",

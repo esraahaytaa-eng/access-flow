@@ -187,15 +187,35 @@ describe("starter package", () => {
     await userEvent.type(screen.getByLabelText(/neden ihtiyaç/), why);
     await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
     expect(await screen.findByText("GitHub kullanıcı adını girin.")).toBeTruthy();
+    expect(screen.getByLabelText(/GitHub kullanıcı adı/).closest(".field")!.textContent).toContain("GitHub kullanıcı adını girin.");
     expect(calls.some((c) => c.method === "POST")).toBe(false);
 
     await userEvent.type(screen.getByLabelText(/GitHub kullanıcı adı/), "octocat");
     await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
-    expect(await screen.findByText("Bu GitHub kullanıcı adı bulunamadı.")).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText(/GitHub kullanıcı adı/).closest(".field")!.textContent).toContain("Bu GitHub kullanıcı adı bulunamadı."));
     expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({ items: [{ accessLevelId: "l5", account: "octocat" }] });
     reply = { status: 201, body: { id: "r9", items: [] } };
     await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
     await waitFor(() => expect(currentPath).toBe("/requests/r9"));
+  });
+
+  it("shows GitHub's rate limit and outage next to the username field", async () => {
+    const github = { ...jira, id: "t5", name: "GitHub sandbox", accountKind: "GITHUB_LOGIN", levels: [{ ...jira.levels[0], id: "l5", name: "Read" }] };
+    let reply = { status: 429, body: { error: "account_check_rate_limited", field: "items[0].account" } };
+    fakeServer(routes({ "GET /tools": { tools: [github] }, "POST /requests": () => reply }));
+    renderPage(<NewRequestPage />);
+    await userEvent.type(await screen.findByRole("combobox", { name: /^Araç/ }), "GitHub");
+    await userEvent.click(await screen.findByRole("option", { name: "GitHub sandbox" }));
+    await userEvent.click(screen.getByRole("radio", { name: /^Read/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Kaldırılana kadar/ }));
+    await userEvent.type(screen.getByLabelText(/GitHub kullanıcı adı/), "octocat");
+    await userEvent.type(screen.getByLabelText(/neden ihtiyaç/), why);
+    await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
+    const field = () => screen.getByLabelText(/GitHub kullanıcı adı/).closest(".field")!;
+    await waitFor(() => expect(field().textContent).toContain("GitHub istek sınırına ulaşıldı"));
+    reply = { status: 503, body: { error: "account_check_unavailable", field: "items[0].account" } };
+    await userEvent.click(screen.getByRole("button", { name: "Talebi gönder" }));
+    await waitFor(() => expect(field().textContent).toContain("GitHub hesabı şu anda doğrulanamıyor"));
   });
 
   it("sends no account for a tool that uses the employee's email", async () => {

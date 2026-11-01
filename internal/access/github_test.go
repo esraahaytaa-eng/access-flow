@@ -640,6 +640,16 @@ func TestGitHubLookupUser(t *testing.T) {
 	if err == nil || errors.Is(err, access.ErrAccountNotFound) || errors.Is(err, access.ErrAccountInvalid) {
 		t.Fatalf("an unreachable GitHub = %v; want an error that is not a verdict on the account", err)
 	}
+	for _, h := range []map[string]string{nil, {"Retry-After": "60"}, {"X-RateLimit-Remaining": "0"}} {
+		status := http.StatusTooManyRequests
+		if h != nil {
+			status = http.StatusForbidden
+		}
+		g.gh.failNext(1, status, h, `{"message":"API rate limit exceeded"}`)
+		if _, err := g.client.LookupUser(ctx, "GITHUB_LOGIN", "ada-gh"); !errors.Is(err, access.ErrRateLimited) {
+			t.Fatalf("a rate limit (%d %v) = %v; want ErrRateLimited", status, h, err)
+		}
+	}
 	if _, err := g.client.LookupUser(ctx, "SLACK_ID", "ada-gh"); err == nil {
 		t.Fatal("another account kind was looked up on GitHub")
 	}
@@ -827,14 +837,15 @@ func TestGitHubErrorsAreRetriedOrFinal(t *testing.T) {
 	}
 }
 
-// Even if GitHub echoed the token, it would never be stored, audited or shown.
+// GitHub's own answer text, which could even echo the token, is never stored, audited or
+// shown: the operation keeps the status code only.
 func TestGitHubTokenNeverReachesErrorsOrAudit(t *testing.T) {
 	g := newGitHubRig(t)
 	a := g.grantFor("ada-gh")
 	g.gh.failNext(1, 500, nil, `{"message":"bad header Bearer `+sandboxToken+`"}`)
 	g.runOnce(true)
-	if _, msg := g.lastOp(a, "GRANT"); strings.Contains(msg, sandboxToken) || !strings.Contains(msg, "[redacted]") {
-		t.Fatalf("error %q", msg)
+	if _, msg := g.lastOp(a, "GRANT"); msg != "github status 500" {
+		t.Fatalf("error %q; want only the status", msg)
 	}
 	if n := g.count("SELECT count(*) FROM audit_events WHERE details::text LIKE '%' || $1 || '%'", sandboxToken); n != 0 {
 		t.Fatalf("%d audit events contain the token", n)

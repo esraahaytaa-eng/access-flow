@@ -227,9 +227,10 @@ In the demo the "tool" is the **Mock Tool Service**, a small separate service wi
 | 1 | The request form (or the Super Admin's direct grant) requires **GitHub kullanıcı adı**. The server checks it with GitHub and stores the login as GitHub spells it, with GitHub's numeric user id. | The requester types their GitHub username. |
 | 2 | Approvers see **GitHub hesabı: @login · GitHub kimliği …** before deciding; the audit trail records it. It cannot be changed after submission; a level change or extension keeps it. | The Manager and Tool Owner check the account belongs to the person. |
 | 3 | After approval GitHub sends an invitation; the grant stays `PROVISIONING` until it is accepted and Read is verified. | The person accepts the invitation in GitHub. |
+| 3b | A failure (the account already has access or an invitation, the invitation is declined or expires, GitHub refuses a call) leaves the grant failed; **İstisnalar** explains it in Turkish and keeps only GitHub's status code as the technical detail. Username problems (missing, invalid, not found, GitHub unavailable or rate-limited) are shown next to the field before anything is stored. | An admin resolves it in GitHub and retries from İstisnalar. |
 | 4 | Every removal, suspension and read-back uses the stored login and id. A renamed or deleted account is never acted on: the operation fails into **İstisnalar** with the reason. | InfoSec or an admin checks the repository and resolves it there. |
 
-The demo's own "GitHub" tool is a Manual tool (§5.2) and is not affected.
+The tool catalog card (every employee) and the tool's page (Super Admin) show which service runs each API tool: **Gerçek GitHub API entegrasyonu aktif** for the tool the adapter serves, **Mock Tool Service kullanılıyor** for every other. The invitation, acceptance, Read verification and revocation were live-tested on a sandbox repository (2026-11-01). The demo's own "GitHub" tool is a Manual tool (§5.2) and is not affected.
 
 ### 5.2 Manual (e.g. GitHub, Figma) — [Implemented] + [Manual / İnsan işi]
 

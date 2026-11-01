@@ -18,7 +18,11 @@ import (
 // or fails with access.ErrAccountInvalid, ErrAccountNotFound or ErrAccountNotAllowed.
 type AccountLookup func(ctx context.Context, kind, name string) (access.ExternalAccount, error)
 
-var errAccountUnavailable = platform.NewError(http.StatusServiceUnavailable, "account_check_unavailable")
+// GitHub could not answer; the field lets the form show it next to the username.
+var (
+	errAccountUnavailable = &platform.Error{Status: http.StatusServiceUnavailable, Code: "account_check_unavailable", Field: "account"}
+	errAccountRateLimited = &platform.Error{Status: http.StatusTooManyRequests, Code: "account_check_rate_limited", Field: "account"}
+)
 
 // resolveAccount checks an item's account against its tool's account kind and looks it up
 // (A1 note 2026-11-01). It runs before the transaction, so no network call waits under a
@@ -53,6 +57,9 @@ func (s *Service) resolveAccount(ctx context.Context, levelID uuid.UUID, name st
 		return nil, platform.ValidationError("account", "account_not_found")
 	case errors.Is(err, access.ErrAccountNotAllowed):
 		return nil, platform.ValidationError("account", "account_not_allowed")
+	case errors.Is(err, access.ErrRateLimited):
+		slog.WarnContext(ctx, "account lookup rate limited", "kind", kind)
+		return nil, errAccountRateLimited
 	case err != nil:
 		slog.WarnContext(ctx, "account lookup failed", "kind", kind, "error", err)
 		return nil, errAccountUnavailable

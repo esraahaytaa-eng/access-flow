@@ -20,6 +20,7 @@ export function GrantDrawer({ grant, onClose, footer }: { grant: Grant; onClose:
     <Drawer open onClose={onClose} title={`${grant.tool} · ${grant.level}`} sub={grant.employee?.fullName} footer={footer}>
       <div className="stack" style={{ gap: 20 }}>
         <div className="row-wrap"><GrantBadges grant={grant} /><MethodTag method={grant.method} />{grant.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>}{grant.imported && <Tag title="AccessFlow’dan önce vardı; onaylayan bilinmiyor">İçe aktarılan</Tag>}</div>
+        {grant.status === "PROVISIONING" && grant.account && <Callout title="GitHub daveti bekleniyor">@{grant.account.name} hesabına gönderilen daveti GitHub’da kabul edin. Erişim, kabul ve Okuma izni GitHub’dan doğrulanınca etkin olur.</Callout>}
         {grant.status === "FAILED" && <Callout tone="danger" title="Erişim verilemedi">Yetkili bir yönetici işlemi İstisnalar ekranından yeniden deneyebilir.</Callout>}
         {grant.status === "REVOCATION_FAILED" && <Callout tone="danger" title="Kaldırma başarısız">Kaldırma doğrulanana kadar erişim sürmüş sayılır.</Callout>}
         <KeyValueList items={[

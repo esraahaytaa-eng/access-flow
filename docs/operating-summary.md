@@ -35,7 +35,7 @@ Detailed business rules, exceptions, security decisions, architecture trade-offs
 ## Assumptions and Boundaries
 
 - **Implemented:** everything above, plus the onboarding workbook, account imports, Exceptions and the audit explorer.
-- **Simulated:** API tools reach a local Mock Tool Service, not real GitHub or AWS; an optional adapter, off by default, can manage Read on one private GitHub sandbox repository instead. E-mail goes to a local Mock Email Outbox and is never sent; a Super Admin passes activation links on, and each reveal is audited.
+- **Simulated:** API tools reach a local Mock Tool Service, not real GitHub or AWS. **Optional real GitHub API adapter:** off by default and enabled only through `.env.github` and `compose.github.yaml`, it manages Read on one private sandbox repository for one tool, whose catalog card and page then show *Gerçek GitHub API entegrasyonu aktif*; invitation, acceptance, Read verification and revocation were live-tested. It is sandbox-scoped, not a production connector ([README](../README.md#optional-github-sandbox-adapter)). Other API tools stay mocked; Manual and Vendor results stay self-reported. E-mail goes to a local Mock Email Outbox and is never sent; a Super Admin passes activation links on, and each reveal is audited.
 - **Done by people:** hosting, HTTPS, secrets and backups; current HR data; exporting tool accounts; closing accounts in external tools, including the 14 former employees'. AccessFlow tracks those removals but cannot see into the tools.
 - **Assumed:** HR is the source of truth for employees; tool accounts match corporate e-mails; every tool has an owner and an admin group; one timezone and one `app` instance.
 - **Future:** real tool adapters, real e-mail, SSO and MFA.

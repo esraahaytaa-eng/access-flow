@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -519,8 +520,8 @@ func (c *GitHubToolClient) deleteInvitation(ctx context.Context, id int64) error
 func (c *GitHubToolClient) repoPath(path string) string { return "/repos/" + c.repo + path }
 
 // send calls the API at path and decodes a JSON answer into out. A status outside ok is an
-// error: temporary (server errors, rate limits) or a rejection. The token is never part of
-// an error.
+// error: temporary (server errors, rate limits) or a rejection. The error names the status
+// only: GitHub's message goes to the server log (redacted), never to stored errors or the UI.
 func (c *GitHubToolClient) send(ctx context.Context, method, path string, body, out any, ok ...int) (int, error) {
 	var reader io.Reader
 	if body != nil {
@@ -554,9 +555,14 @@ func (c *GitHubToolClient) send(ctx context.Context, method, path string, body, 
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(raw, &answer)
-		msg := fmt.Sprintf("github status %d: %s", resp.StatusCode, c.redact(answer.Message[:min(len(answer.Message), 200)]))
+		slog.WarnContext(ctx, "github answer", "method", method, "status", resp.StatusCode,
+			"message", c.redact(answer.Message[:min(len(answer.Message), 200)]))
+		msg := fmt.Sprintf("github status %d", resp.StatusCode)
 		limited := resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0"
-		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden && limited {
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden && limited:
+			return resp.StatusCode, fmt.Errorf("%s (%w)", msg, ErrRateLimited)
+		case resp.StatusCode >= 500:
 			return resp.StatusCode, errors.New(msg)
 		}
 		return resp.StatusCode, rejection{msg}

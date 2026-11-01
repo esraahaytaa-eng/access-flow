@@ -1,11 +1,18 @@
 // Request and grant cells shared by several pages (design/ spec 1.24).
-import type { ApprovalStep, Duration, ExternalAccount, FulfillmentMethod, Grant, RequestItem, RequestKind } from "../api/types";
+import type { ApprovalStep, Duration, ExternalAccount, FulfillmentMethod, GitHubIntegration, Grant, RequestItem, RequestKind } from "../api/types";
 import { methodLabel, methodTitle, requestKindLabel, stepLabel } from "../i18n/labels";
 import { reasonText } from "../i18n/reasons";
 import { useSession } from "../session";
 import { Badge, Icon, StatusBadge, Tag } from "./components";
 import { daysUntil, formatDate } from "./format";
 import { displayBadges, statusBadge, suspensionBadge, type Badge as BadgeValue } from "./status";
+
+/** Which service runs an API tool, from the backend's integration status (never the tool's name): the real
+ *  GitHub adapter or the Mock Tool Service; null for a Manual or Vendor tool, or while the status is unknown. */
+export function toolService(tool: { id: string; fulfillmentMethod: FulfillmentMethod }, status: GitHubIntegration | undefined): "GITHUB" | "MOCK" | null {
+  if (tool.fulfillmentMethod !== "API" || !status) return null;
+  return status.enabled && status.toolId === tool.id ? "GITHUB" : "MOCK";
+}
 
 const Badges = ({ badges }: { badges: BadgeValue[] }) => (
   <div className="row-wrap" style={{ gap: 6 }}>

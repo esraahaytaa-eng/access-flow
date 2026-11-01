@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { useMyGrants, useTools } from "../api/queries";
+import { useGitHubIntegration, useMyGrants, useTools } from "../api/queries";
 import type { FulfillmentMethod } from "../api/types";
 import { methodDesc } from "../i18n/labels";
 import { Badge, Button, Drawer, EmptyState, PageHeader, Person, SearchBox, Select, Skeleton, Tag, ToolMark } from "../ui/components";
-import { ApprovalChain, isOpenGrant, MethodTag } from "../ui/domain";
+import { ApprovalChain, isOpenGrant, MethodTag, toolService } from "../ui/domain";
 
 const lower = (s: string) => s.toLocaleLowerCase("tr-TR");
 
@@ -12,6 +12,7 @@ export function CatalogPage() {
   const navigate = useNavigate();
   const query = useTools();
   const grants = (useMyGrants().data ?? []).filter(isOpenGrant);
+  const integration = useGitHubIntegration().data;
   const [q, setQ] = useState("");
   const [method, setMethod] = useState<"" | FulfillmentMethod>("");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -42,7 +43,7 @@ export function CatalogPage() {
       ) : (
         <div className="catalog">
           {tools.map((t) => {
-            const g = myGrant(t.id);
+            const g = myGrant(t.id), service = toolService(t, integration);
             return (
               <button type="button" key={t.id} className="tool-card" onClick={() => setOpenId(t.id)}>
                 <div className="between" style={{ width: "100%" }}>
@@ -50,6 +51,8 @@ export function CatalogPage() {
                   <MethodTag method={t.fulfillmentMethod} />
                 </div>
                 <div className="desc">{methodDesc[t.fulfillmentMethod]}</div>
+                {service === "GITHUB" && <Badge tone="green" dot>Gerçek GitHub API entegrasyonu aktif</Badge>}
+                {service === "MOCK" && <span className="muted small">Mock Tool Service kullanılıyor</span>}
                 <div className="between" style={{ width: "100%" }}>
                   <span className="muted small">{t.levels.filter((l) => l.requestable).length} erişim seviyesi</span>
                   {g && <Badge tone={g.status === "ACTIVE" ? "green" : "amber"} dot>{g.level}{g.status !== "ACTIVE" ? " · işlemde" : ""}</Badge>}

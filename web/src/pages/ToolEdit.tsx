@@ -2,11 +2,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
-import { useAdminGroups, useEmployees, useTools } from "../api/queries";
+import { useAdminGroups, useEmployees, useGitHubIntegration, useTools } from "../api/queries";
 import type { AccountKind, CatalogTool, Employee, FulfillmentMethod, StepType, Tool } from "../api/types";
 import { methodDesc, methodLabel } from "../i18n/labels";
 import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, Input, PageHeader, Select, Switch, TableSkeleton, useAction } from "../ui/components";
-import { ApprovalChain } from "../ui/domain";
+import { ApprovalChain, toolService } from "../ui/domain";
 import { managerOptions } from "./Employees";
 
 type Level = { key: string; id: string | null; name: string; owner: boolean; infosec: boolean; retire: boolean; retired: boolean; version: number | null; orig?: { name: string; owner: boolean; infosec: boolean } };
@@ -112,6 +112,7 @@ function ToolForm({ tool }: { tool?: CatalogTool }) {
                 ))}
               </div>
               {errors.method && <div className="error-text">{errors.method}</div>}
+              {tool?.fulfillmentMethod === "API" && <ToolServiceNote tool={tool} />}
               {form.method === "API" && (
                 <div className="field">
                   <span className="label">Hesap kimliği</span>
@@ -181,4 +182,13 @@ function ToolForm({ tool }: { tool?: CatalogTool }) {
         onConfirm={async () => { await api.post(`/tools/${tool!.id}/retire`, { version: tool!.version }); qc.invalidateQueries({ queryKey: ["tools"] }); navigate("/tools-admin"); }} />
     </>
   );
+}
+
+/** Which service runs an API tool's operations in this instance, as the backend reports it. */
+function ToolServiceNote({ tool }: { tool: CatalogTool }) {
+  const service = toolService(tool, useGitHubIntegration().data); // null while loading or unreadable: claim nothing
+  if (!service) return null;
+  return service === "GITHUB"
+    ? <Callout tone="success" title="Gerçek GitHub API entegrasyonu aktif">Erişim davetleri, yetki doğrulama ve erişim kaldırma işlemleri doğrudan GitHub API üzerinden gerçekleştirilir.</Callout>
+    : <Callout title="Mock Tool Service kullanılıyor">Bu aracın API işlemleri yerel Mock Tool Service üzerinden simüle edilir.</Callout>;
 }

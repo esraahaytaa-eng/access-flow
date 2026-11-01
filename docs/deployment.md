@@ -35,7 +35,7 @@ All optional:
 | `MOCK_TOOLS_URL` | `http://mocktools:8081` (set in `compose.yaml`) | the Mock Tool Service the operation runner calls |
 | `LOGIN_RATE_LIMIT` | `60` | sign-in and activation attempts per client address per minute (a local-demo default) |
 | `MOCK_EMAIL_KEY_FILE` | `/var/lib/accessflow/mock-email.key` | the key encrypting pending activation links in the Mock Email Outbox (the `appdata` volume) |
-| `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_TOOL_ID` | none | the optional GitHub sandbox adapter: all three or none (a partial setting stops startup). Only through `compose.github.yaml` and a git-ignored `.env.github` copied from [`.env.example`](../.env.example), in a separate Compose project; never in the default one. Employees' GitHub usernames are entered on requests, not configured ([README](../README.md#optional-github-sandbox-adapter)) |
+| `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_TOOL_ID` | none | the optional GitHub sandbox adapter: all three or none (a partial setting stops startup). Only through `compose.github.yaml` and a git-ignored `.env.github` copied from [`.env.example`](../.env.example), in a separate Compose project; never in the default one. Employees' GitHub usernames are entered on requests, not configured. The tool catalog and the tool's page show whether the adapter serves it (*Gerçek GitHub API entegrasyonu aktif*, otherwise *Mock Tool Service kullanılıyor*) ([README](../README.md#optional-github-sandbox-adapter)) |
 
 Database credentials are fixed local values in `compose.yaml` (A2). PostgreSQL applies them only when its volume is first created.
 
