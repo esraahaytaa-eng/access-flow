@@ -220,6 +220,18 @@ All three methods share one pipeline: an approved item creates a grant and a `GR
 
 In the demo the "tool" is the **Mock Tool Service**, a small separate service with its own database that stores (tool, account, level). The account is the employee's corporate e-mail. In a real deployment an adapter implementing `access.ToolClient` (`Apply`, `Account`) would call the real AWS or Jira API ([Future / Gelecek]); approval, audit and lifecycle logic would not change.
 
+**Optional GitHub sandbox adapter — [Implemented, off by default; not production-ready].** One extra API tool can be served by real GitHub instead of the mock: Read on one private sandbox repository ([README](../README.md#optional-github-sandbox-adapter), DECISIONS.md A1 amendment 2026-11-01). Such a tool is created with the account identity **GitHub kullanıcı adı**, so its account is not the e-mail:
+
+| # | AccessFlow does | People do |
+|---|---|---|
+| 1 | The request form (or the Super Admin's direct grant) requires **GitHub kullanıcı adı**. The server checks it with GitHub and stores the login as GitHub spells it, with GitHub's numeric user id. | The requester types their GitHub username. |
+| 2 | Approvers see **GitHub hesabı: @login · GitHub kimliği …** before deciding; the audit trail records it. It cannot be changed after submission; a level change or extension keeps it. | The Manager and Tool Owner check the account belongs to the person. |
+| 3 | After approval GitHub sends an invitation; the grant stays `PROVISIONING` until it is accepted and Read is verified. | The person accepts the invitation in GitHub. |
+| 3b | A failure (the account already has access or an invitation, the invitation is declined or expires, GitHub refuses a call) leaves the grant failed; **İstisnalar** explains it in Turkish and keeps only GitHub's status code as the technical detail. Username problems (missing, invalid, not found, GitHub unavailable or rate-limited) are shown next to the field before anything is stored. | An admin resolves it in GitHub and retries from İstisnalar. |
+| 4 | Every removal, suspension and read-back uses the stored login and id. A renamed or deleted account is never acted on: the operation fails into **İstisnalar** with the reason. | InfoSec or an admin checks the repository and resolves it there. |
+
+The tool catalog card (every employee) and the tool's page (Super Admin) show which service runs each API tool: **Gerçek GitHub API entegrasyonu aktif** for the tool the adapter serves, **Mock Tool Service kullanılıyor** for every other. The invitation, acceptance, Read verification and revocation were live-tested on a sandbox repository (2026-11-01). The demo's own "GitHub" tool is a Manual tool (§5.2) and is not affected.
+
 ### 5.2 Manual (e.g. GitHub, Figma) — [Implemented] + [Manual / İnsan işi]
 
 | # | AccessFlow does | People do (in the external tool) |
@@ -334,6 +346,7 @@ As in section 5. Effective access (O1) starts when activation is **verified** (A
 ### 7.4 Direct grant / Doğrudan erişim — [Implemented]
 
 A Super Admin may grant access directly, skipping the approval steps (D1). It is always temporary, **at most 90 days** (latest date: today + 89), never for the Super Admin's own access, uses the tool's normal method, and is reported. InfoSec, the beneficiary's manager and any bypassed approver are notified in the app. Demo: admin gave **elif.celik Figma/Editor for 14 days**, "Lansman öncesi acil tasarım düzeltmesi"; the Figma task waits for IT Operations, and the admin could not confirm it even if they were a member.
+For a tool whose accounts are GitHub usernames (optional sandbox adapter, §5.1), the direct grant also requires the person's GitHub username, checked and recorded exactly as on a request.
 
 ### 7.5 Revocation / Kaldırma — [Implemented]
 
@@ -464,7 +477,7 @@ Covered by `TestHRSuccessionOfTheLastSuperAdmin`, `TestScheduledTerminationOfThe
 
 | Tab | English | Shows |
 |---|---|---|
-| Olay geçmişi | Event history | Filter by date, actor, action, tool, text; page through every match; export all matches as CSV (streamed by the server). |
+| Olay geçmişi | Event history | Who acted, whose access, the tool and level (**Araç ve seviye**, with the external account when there is one), what happened in Turkish (e.g. *Çalışan kendi isteğiyle vazgeçti*, *Araçta doğrulandı*) and the reason. Tool and level names are the ones in use when the event happened, even after a rename or retirement. Clicking a row opens the event in full, with the stored record (entity, id, raw details) under **Teknik kayıt**. Filter by date, actor, action, tool, text; page through every match; export all matches as CSV with `tool`, `access_level` and `account` columns (streamed by the server). |
 | Geçmiş erişim sorgusu | Point-in-time access | Who held access to a tool at an instant or end of a date, each grant's state and evidence (verified / self-reported / imported) and its approvers, plus removals in the previous 30 days. |
 | Onay kanıtı | Approval evidence | Each request item's approval chain: who decided each step, when, how (decision, override, submission). |
 | Kanıt raporları | Evidence reports | Privileged roles (D11), Super Admin overrides and direct actions, approval policy, leavers, and the quarterly evidence package. **Not shown to the Auditor.** |

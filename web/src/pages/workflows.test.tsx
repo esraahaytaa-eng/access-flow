@@ -35,6 +35,17 @@ describe("approval inbox", () => {
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => (c.body as { version: number }).version)).toEqual([3, 4]));
   });
 
+  it("shows the GitHub account the approver decides on", async () => {
+    const withAccount = approval({ item: item({ beneficiary: person("e2", "Deniz Kara"), submittedBy: person("e2", "Deniz Kara"), tool: "GitHub sandbox", account: { name: "octocat", ref: "583231" } }) });
+    fakeServer({ ...base, "GET /approvals": { approvals: [withAccount] } });
+    renderPage(<ApprovalsPage />);
+    expect(await screen.findByText(/@octocat/)).toBeTruthy(); // in the list
+    await userEvent.click(screen.getByText("Deniz Kara"));
+    const drawer = screen.getByRole("dialog");
+    expect(within(drawer).getByText("GitHub hesabı")).toBeTruthy();
+    expect(within(drawer).getByText("@octocat · GitHub kimliği 583231")).toBeTruthy();
+  });
+
   it("requires a reason to reject", async () => {
     const calls = fakeServer({ ...base, "GET /approvals": { approvals: [approval()] }, "POST /approvals/s1/reject": item({ status: "REJECTED" }) });
     renderPage(<ApprovalsPage />);

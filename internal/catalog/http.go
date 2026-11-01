@@ -33,6 +33,7 @@ func (s *Service) handleCreateTool(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name, FulfillmentMethod *string
 		OwnerID, AdminGroupID   *uuid.UUID
+		AccountKind             string // optional
 	}
 	if err := platform.DecodeRequired(w, r, &in, func() []platform.Field {
 		return []platform.Field{{Name: "name", Present: in.Name != nil}, {Name: "fulfillmentMethod", Present: in.FulfillmentMethod != nil},
@@ -41,7 +42,7 @@ func (s *Service) handleCreateTool(w http.ResponseWriter, r *http.Request) {
 		platform.WriteError(w, r, err)
 		return
 	}
-	t, err := s.CreateTool(r.Context(), actor(r), NewTool{*in.Name, *in.FulfillmentMethod, *in.OwnerID, *in.AdminGroupID})
+	t, err := s.CreateTool(r.Context(), actor(r), NewTool{*in.Name, *in.FulfillmentMethod, *in.OwnerID, *in.AdminGroupID, in.AccountKind})
 	platform.Respond(w, r, http.StatusCreated, t, err)
 }
 

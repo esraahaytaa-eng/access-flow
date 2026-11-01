@@ -7,7 +7,7 @@ import type { Grant } from "../api/types";
 import { reasonText } from "../i18n/reasons";
 import { useSession } from "../session";
 import { Button, Callout, ConfirmDialog, Drawer, EmptyState, KeyValueList, PageHeader, Tabs, TableSkeleton, Tag, ToolCell } from "../ui/components";
-import { ExpiryCell, GrantBadges, MethodTag } from "../ui/domain";
+import { accountText, ExpiryCell, GrantBadges, MethodTag } from "../ui/domain";
 import { formatDate, formatDateTime } from "../ui/format";
 
 type Bucket = "active" | "progress" | "history";
@@ -20,9 +20,11 @@ export function GrantDrawer({ grant, onClose, footer }: { grant: Grant; onClose:
     <Drawer open onClose={onClose} title={`${grant.tool} · ${grant.level}`} sub={grant.employee?.fullName} footer={footer}>
       <div className="stack" style={{ gap: 20 }}>
         <div className="row-wrap"><GrantBadges grant={grant} /><MethodTag method={grant.method} />{grant.retainedOnTransfer && <Tag warn>Transferde korundu</Tag>}{grant.imported && <Tag title="AccessFlow’dan önce vardı; onaylayan bilinmiyor">İçe aktarılan</Tag>}</div>
+        {grant.status === "PROVISIONING" && grant.account && <Callout title="GitHub daveti bekleniyor">@{grant.account.name} hesabına gönderilen daveti GitHub’da kabul edin. Erişim, kabul ve Okuma izni GitHub’dan doğrulanınca etkin olur.</Callout>}
         {grant.status === "FAILED" && <Callout tone="danger" title="Erişim verilemedi">Yetkili bir yönetici işlemi İstisnalar ekranından yeniden deneyebilir.</Callout>}
         {grant.status === "REVOCATION_FAILED" && <Callout tone="danger" title="Kaldırma başarısız">Kaldırma doğrulanana kadar erişim sürmüş sayılır.</Callout>}
         <KeyValueList items={[
+          grant.account && ["GitHub hesabı", accountText(grant.account)],
           ["Etkin başlangıç", grant.effectiveFrom ? formatDateTime(grant.effectiveFrom, timezone) : "Henüz etkin değil"],
           ["Bitiş", <ExpiryCell grant={grant} />],
           ["Kanıt", grant.evidence === "VERIFIED" ? "API durum sorgusuyla doğrulandı" : grant.evidence === "SELF_REPORTED" ? "Yetkili yönetici tarafından onaylandı (beyana dayalı)" : "—"],
@@ -68,7 +70,7 @@ export function MyAccessPage() {
             <tbody>
               {shown.map((g) => (
                 <tr key={g.id} className="clickable" tabIndex={0} onClick={() => setOpen(g)} onKeyDown={(e) => e.key === "Enter" && setOpen(g)}>
-                  <td><ToolCell tool={g.tool} level={g.level} /></td>
+                  <td><ToolCell tool={g.tool} level={g.level} sub={g.account && `@${g.account.name}`} /></td>
                   <td><GrantBadges grant={g} /></td>
                   <td className="nowrap small">{formatDate(g.effectiveFrom, timezone)}</td>
                   <td className="nowrap small"><ExpiryCell grant={g} /></td>

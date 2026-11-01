@@ -19,6 +19,8 @@ func TestLoadConfig(t *testing.T) {
 	demo := with(with(with(with(full, "ACCESSFLOW_DEMO", "true"), "ACCESSFLOW_ENV", "local"),
 		"DATABASE_URL", "postgres://accessflow_app:x@postgres:5432/accessflow"), "MIGRATION_DATABASE_URL", "postgres://accessflow_owner:x@postgres:5432/accessflow")
 	demo = with(demo, "DEMO_PASSWORDS", "admin=Demo-Admin-Pass-1")
+	gh := with(with(with(full, "GITHUB_TOKEN", "github_pat_test"), "GITHUB_REPOSITORY", "accessflow-sandbox/demo-repository"),
+		"GITHUB_TOOL_ID", "0195f000-0000-7000-8000-000000000001")
 	cases := []struct {
 		name    string
 		env     map[string]string
@@ -66,6 +68,19 @@ func TestLoadConfig(t *testing.T) {
 		{name: "demo on another migration database", env: with(demo, "MIGRATION_DATABASE_URL", "postgres://owner:x@10.0.0.5/accessflow"), wantErr: true},
 		{name: "demo whose URL overrides the host in its query", env: with(demo, "DATABASE_URL", "postgres://app:x@postgres:5432/accessflow?host=db.prod.internal"), wantErr: true},
 		{name: "demo without demo passwords", env: with(demo, "DEMO_PASSWORDS", ""), wantErr: true},
+		{name: "GitHub sandbox adapter", env: gh,
+			want: changed(func(c *platform.Config) {
+				c.GitHubToken, c.GitHubRepository, c.GitHubToolID = gh["GITHUB_TOKEN"], gh["GITHUB_REPOSITORY"], gh["GITHUB_TOOL_ID"]
+			})},
+		// The adapter is all or nothing, and never points at the AccessFlow repository itself.
+		{name: "GitHub without a token", env: with(gh, "GITHUB_TOKEN", ""), wantErr: true},
+		{name: "GitHub without a repository", env: with(gh, "GITHUB_REPOSITORY", ""), wantErr: true},
+		{name: "GitHub without a tool", env: with(gh, "GITHUB_TOOL_ID", ""), wantErr: true},
+		{name: "GitHub token alone", env: with(full, "GITHUB_TOKEN", "github_pat_x"), wantErr: true},
+		{name: "GitHub repository is not owner/name", env: with(gh, "GITHUB_REPOSITORY", "sandbox/demo/extra"), wantErr: true},
+		{name: "GitHub repository is the AccessFlow repository", env: with(gh, "GITHUB_REPOSITORY", "esraahaytaa-eng/access-flow"), wantErr: true},
+		{name: "GitHub repository is the AccessFlow repository in other case", env: with(gh, "GITHUB_REPOSITORY", "EsraaHaytaa-Eng/Access-Flow"), wantErr: true},
+		{name: "GitHub tool is not a UUID", env: with(gh, "GITHUB_TOOL_ID", "github"), wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

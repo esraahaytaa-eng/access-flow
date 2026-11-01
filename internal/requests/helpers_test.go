@@ -28,6 +28,7 @@ type world struct {
 	t       *testing.T
 	db      testutil.DB
 	svc     *Service
+	access  *access.Service // its GitHub adapter is off unless a test sets it
 	srv     *httptest.Server
 	toolsLn net.Listener // where startTools serves the Mock Tool Service
 
@@ -65,6 +66,7 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { toolsLn.Close() })
+	accessSvc := access.NewService(db.App, access.NewHTTPToolClient("http://"+toolsLn.Addr().String(), 5*time.Second), istanbul)
 	r := chi.NewRouter()
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Mount("/auth", authSvc.Routes())
@@ -73,7 +75,7 @@ func newWorld(t *testing.T) *world {
 			authSvc.RegisterActivations(r)
 			svc.Register(r)
 			people.NewService(db.App, authSvc).Register(r)
-			access.NewService(db.App, access.NewHTTPToolClient("http://"+toolsLn.Addr().String(), 5*time.Second), istanbul).Register(r)
+			accessSvc.Register(r)
 			notify.Register(r, db.App)
 			catalog.NewService(db.App).Register(r)
 			reviews.NewService(db.App).Register(r)
@@ -82,7 +84,7 @@ func newWorld(t *testing.T) *world {
 	})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	w := &world{t: t, db: db, svc: svc, srv: srv, toolsLn: toolsLn}
+	w := &world{t: t, db: db, svc: svc, access: accessSvc, srv: srv, toolsLn: toolsLn}
 	w.skip = w.person(testutil.EmployeeSpec{})
 	w.mgr = w.person(testutil.EmployeeSpec{ManagerID: w.skip.ID})
 	w.dev = w.person(testutil.EmployeeSpec{ManagerID: w.mgr.ID, Department: "Engineering"})

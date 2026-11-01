@@ -126,6 +126,25 @@ describe("tool administration", () => {
     ]);
   });
 
+  it("creates an API tool whose accounts are GitHub usernames", async () => {
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [] },
+      "POST /tools": () => ({ status: 201, body: { id: "t9", name: "GitHub sandbox", fulfillmentMethod: "API", accountKind: "GITHUB_LOGIN", ownerId: "o1", adminGroupId: "grp1", status: "ACTIVE", version: 1 } }),
+      "POST /tools/t9/levels": () => ({ status: 201, body: {} }) });
+    renderPage(<ToolEditPage />, { path: "/tools-admin/yeni", pattern: "/tools-admin/:id", session: sa });
+    await userEvent.type(await screen.findByLabelText(/Araç adı/), "GitHub sandbox");
+    await userEvent.click(screen.getByRole("radio", { name: /Tedarikçi/ }));
+    expect(screen.queryByRole("radiogroup", { name: "Hesap kimliği" })).toBeNull(); // only API tools act on another account
+    await userEvent.click(screen.getByRole("radio", { name: /API/ }));
+    await userEvent.click(within(screen.getByRole("radiogroup", { name: "Hesap kimliği" })).getByRole("radio", { name: /GitHub kullanıcı adı/ }));
+    await screen.findByRole("option", { name: /Can Owner/ });
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /Araç sahibi/ }), "o1");
+    await userEvent.selectOptions(screen.getByLabelText(/Yönetim grubu/), "grp1");
+    await userEvent.type(screen.getByLabelText(/Seviye adı/), "Read");
+    await userEvent.click(screen.getByRole("button", { name: "Aracı oluştur" }));
+    await waitFor(() => expect(currentPath).toBe("/tools-admin"));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/tools")?.body).toEqual({ name: "GitHub sandbox", fulfillmentMethod: "API", accountKind: "GITHUB_LOGIN", ownerId: "o1", adminGroupId: "grp1" });
+  });
+
   it("confirms a policy change before saving a level's steps", async () => {
     const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "PUT /tools/t1/levels/l1": { id: "l1" } });
     renderPage(<ToolEditPage />, { path: "/tools-admin/t1", pattern: "/tools-admin/:id", session: sa });
@@ -194,6 +213,23 @@ describe("direct grant", () => {
     expect(submissionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  it("asks for the GitHub username of a GitHub tool and sends it", async () => {
+    const github = { ...jiraAdmin, id: "t7", name: "GitHub sandbox", accountKind: "GITHUB_LOGIN", levels: [{ ...jiraAdmin.levels[0], id: "l7", name: "Read" }] };
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [github] }, "POST /direct-grants": () => ({ status: 201, body: { id: "r6", items: [] } }) });
+    renderPage(<DirectGrantPage />, { session: sa });
+    await screen.findByRole("option", { name: /Can Owner/ });
+    await userEvent.selectOptions(screen.getByLabelText(/Çalışan/), "o1");
+    await userEvent.selectOptions(screen.getByLabelText(/^Araç/), "t7");
+    await userEvent.selectOptions(screen.getByLabelText(/^Seviye/), "l7");
+    await userEvent.type(screen.getByLabelText(/Gerekçe/), "Üretim olayı INC-2301 için acil erişim");
+    await userEvent.click(screen.getByRole("button", { name: "Doğrudan erişim ver" }));
+    expect(screen.getByText("GitHub kullanıcı adını girin.")).toBeTruthy();
+    await userEvent.type(screen.getByLabelText(/GitHub kullanıcı adı/), " octocat ");
+    await userEvent.click(screen.getByRole("button", { name: "Doğrudan erişim ver" }));
+    await waitFor(() => expect(currentPath).toBe("/requests/r6"));
+    expect(calls.find((c) => c.method === "POST")!.body).toMatchObject({ accessLevelId: "l7", account: "octocat" });
+  });
+
   it("grants for at most 90 days counting today and opens the request", async () => {
     const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "POST /direct-grants": () => ({ status: 201, body: { id: "r5", items: [] } }) });
     renderPage(<DirectGrantPage />, { session: sa });
@@ -238,5 +274,61 @@ describe("settings", () => {
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => [c.path, c.body])).toEqual([
       ["/admin-groups", { name: "Finans BT" }], ["/admin-groups/grp1/members", { employeeId: "is1" }],
     ]));
+  });
+});
+
+describe("real GitHub API integration", () => {
+  const github = { ...jiraAdmin, id: "t7", name: "GitHub demo-project", accountKind: "GITHUB_LOGIN", levels: [{ ...jiraAdmin.levels[0], id: "l7", name: "Read" }] };
+  const manual = { ...jiraAdmin, id: "t8", name: "GitHub", fulfillmentMethod: "MANUAL" };
+  const page = (id: string) => renderPage(<ToolEditPage />, { path: `/tools-admin/${id}`, pattern: "/tools-admin/:id", session: sa });
+
+  it("shows the real GitHub API only for the tool the backend names, and only reads", async () => {
+    const calls = fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin, github, manual] }, "GET /integrations/github": { enabled: true, toolId: "t7" } });
+    const view = page("t7");
+    expect(await screen.findByText("Gerçek GitHub API entegrasyonu aktif")).toBeTruthy();
+    expect(screen.getByText("Erişim davetleri, yetki doğrulama ve erişim kaldırma işlemleri doğrudan GitHub API üzerinden gerçekleştirilir.")).toBeTruthy();
+    view.unmount();
+    const other = page("t1"); // another API tool stays on the mock
+    expect(await screen.findByText("Mock Tool Service kullanılıyor")).toBeTruthy();
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+    other.unmount();
+    page("t8"); // a Manual tool has no API service to name
+    await screen.findByDisplayValue("GitHub");
+    expect(screen.queryByText("Mock Tool Service kullanılıyor")).toBeNull();
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+    expect(screen.queryByRole("button", { name: /test et/i })).toBeNull();
+  });
+
+  it("claims no service when the status cannot be read", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [github] }, "GET /integrations/github": () => ({ status: 500, body: { error: "internal_error" } }) });
+    page("t7");
+    await screen.findByDisplayValue("GitHub demo-project");
+    await waitFor(() => expect(screen.queryByText("Mock Tool Service kullanılıyor")).toBeNull());
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+  });
+
+  it("shows the mock for the GitHub tool when the adapter is off", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [github] }, "GET /integrations/github": { enabled: false, toolId: null } });
+    page("t7");
+    expect(await screen.findByText("Mock Tool Service kullanılıyor")).toBeTruthy();
+    expect(screen.queryByText("Gerçek GitHub API entegrasyonu aktif")).toBeNull();
+  });
+
+  it("points a reviewer of the default setup to the optional adapter", async () => {
+    fakeServer({ ...base, "GET /tools": { tools: [jiraAdmin] }, "GET /integrations/github": { enabled: false, toolId: null } });
+    renderPage(<ToolsAdminPage />, { session: sa });
+    expect(await screen.findByText(/İsteğe bağlı gerçek GitHub API/)).toBeTruthy();
+    expect(await screen.findByText(/Bu örnekte etkin değil/)).toBeTruthy(); // shown once the backend answered
+  });
+
+  it("explains a GitHub provisioning failure in Turkish, keeping the technical detail", async () => {
+    fakeServer({ ...base, "GET /exceptions": { ...noExceptions, failedOperations: [
+      op({ id: "op2", type: "GRANT", tool: "GitHub demo-project", lastError: "the GitHub account has write access that AccessFlow did not grant; review it by hand" }),
+      op({ id: "op3", type: "GRANT", tool: "GitHub demo-project", lastError: "github status 422" })] } });
+    renderPage(<ExceptionsPage />, { session: sa });
+    expect(await screen.findByText(/GitHub hesabında AccessFlow’un vermediği bir erişim var/)).toBeTruthy();
+    expect(screen.getByText(/GitHub isteği reddetti \(HTTP 422\)/)).toBeTruthy();
+    expect(screen.getAllByText("Teknik ayrıntı")).toHaveLength(2);
   });
 });

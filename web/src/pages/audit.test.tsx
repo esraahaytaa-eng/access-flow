@@ -18,7 +18,8 @@ const base = { "GET /employees": { employees: [] }, "GET /tools": { tools: [] },
 const page = (events: unknown[], total = events.length, p = 1) => ({ events, total, page: p, pageSize: 100 });
 const event = (over: Record<string, unknown> = {}) => ({
   id: "ev1", at: "2026-10-20T09:00:00Z", actor: { id: "m1", fullName: "Murat Yönetici" }, action: "STEP_APPROVED", entity: "approval_step",
-  entityId: "s1", subject: { id: "e2", fullName: "Deniz Kara" }, reason: null, details: { tool: "Jira" }, ...over,
+  entityId: "s1", subject: { id: "e2", fullName: "Deniz Kara" }, reason: null, details: { type: "MANAGER" },
+  access: [{ toolId: "t1", tool: "Jira", level: "Viewer", account: null }], ...over,
 });
 const held = (over: Record<string, unknown> = {}) => ({
   grantId: "g1", employee: { id: "e2", fullName: "Deniz Kara" }, account: null, tool: "Jira", level: "Viewer", method: "API", state: "ACTIVE",
@@ -35,10 +36,40 @@ describe("audit explorer", () => {
     renderPage(<AuditPage />, { session: infosec });
     expect(await screen.findByText("Onay adımı onaylandı")).toBeTruthy();
     expect(screen.getByText("Sistem")).toBeTruthy();
-    expect(screen.getByText("tool: Jira")).toBeTruthy();
+    const approved = screen.getByText("Onay adımı onaylandı").closest("tr")!;
+    expect(within(approved).getByText("Jira")).toBeTruthy(); // the access column, not a raw "tool: Jira"
+    expect(within(approved).getByText("Yönetici adımı")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Kanıt raporları" })).toBeTruthy();
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Olay türü" }), "requests");
     await waitFor(() => expect(calls.some((c) => c.path.startsWith("/audit/events?action=REQUEST_SUBMITTED"))).toBe(true));
+  });
+
+  it("names the tool, level and account of access events in Turkish, with the technical record in the details", async () => {
+    const access = [{ toolId: "t9", tool: "GitHub demo-project", level: "Read", account: "esrahayta" }];
+    fakeServer({ ...base, "GET /audit/events?": page([
+      event({ id: "ev1", action: "GRANT_REVOCATION_REQUESTED", entity: "grant", entityId: "g1", actor: { id: "e2", fullName: "Okan Yılmaz" },
+        subject: { id: "e2", fullName: "Okan Yılmaz" }, reason: "isyemiyorum", details: { by: "VOLUNTARY", grantOperationCancelled: false }, access }),
+      event({ id: "ev2", action: "GRANT_REVOKED", entity: "grant", entityId: "g1", actor: null, subject: { id: "e2", fullName: "Okan Yılmaz" },
+        details: { evidence: "VERIFIED", operationId: "op1" }, access }),
+    ]) });
+    renderPage(<AuditPage />, { session: auditor });
+    const requested = (await screen.findByText("Erişim kaldırma talep edildi")).closest("tr")!;
+    expect(within(requested).getByText("GitHub demo-project")).toBeTruthy();
+    expect(within(requested).getByText(/Read/)).toBeTruthy();
+    expect(within(requested).getByText("Hesap: esrahayta")).toBeTruthy();
+    expect(within(requested).getByText("Çalışan kendi isteğiyle vazgeçti")).toBeTruthy();
+    expect(within(requested).getByText("Gerekçe: isyemiyorum")).toBeTruthy();
+    const revoked = screen.getByText("Erişim kaldırıldı").closest("tr")!;
+    expect(within(revoked).getByText("Araçta doğrulandı")).toBeTruthy();
+    expect(screen.queryByText(/VOLUNTARY|grantOperationCancelled|operationId/)).toBeNull();
+
+    await userEvent.click(requested);
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getByText("Erişim seviyesi")).toBeTruthy();
+    expect(within(drawer).getByText("esrahayta")).toBeTruthy();
+    expect(within(drawer).getByText("isyemiyorum")).toBeTruthy();
+    expect(within(drawer).getByText("Teknik kayıt")).toBeTruthy(); // collapsed: entity, id and raw details
+    expect(within(drawer).getByText(/"by": "VOLUNTARY"/)).toBeTruthy();
   });
 
   it("shows point-in-time states, evidence and approvers", async () => {

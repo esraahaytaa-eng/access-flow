@@ -2909,7 +2909,7 @@
         ],
         "operationId": "createTool",
         "summary": "Create a tool",
-        "description": "Super Admin only. The fulfillment method is fixed for the tool's lifetime; the owner must be an ACTIVE employee. Audited as `TOOL_CREATED`.",
+        "description": "Super Admin only. The fulfillment method is fixed for the tool's lifetime; the owner must be an ACTIVE employee. The account identity (`accountKind`) is fixed too. Audited as `TOOL_CREATED`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2937,6 +2937,13 @@
                   "adminGroupId": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "accountKind": {
+                    "type": "string",
+                    "enum": [
+                      "GITHUB_LOGIN"
+                    ],
+                    "description": "Optional; omit for the employee's email. `GITHUB_LOGIN` (a GitHub username) only for an API tool (`account_kind_requires_api`); any other value is `invalid_account_kind`. Fixed for the tool's lifetime."
                   }
                 },
                 "required": [
@@ -3602,6 +3609,65 @@
           },
           "409": {
             "description": "`version_conflict`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/github": {
+      "get": {
+        "tags": [
+          "Tools"
+        ],
+        "operationId": "getGitHubIntegration",
+        "summary": "Optional GitHub sandbox adapter: on in this instance?",
+        "description": "Any signed-in employee. Whether this instance runs the optional GitHub sandbox adapter and which tool it serves; every other API tool uses the Mock Tool Service. The tool catalog and the tool page label each API tool from it. Calls nothing (no GitHub request); returns no token, repository or other setting.",
+        "responses": {
+          "200": {
+            "description": "The adapter's state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "toolId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid",
+                      "description": "The tool the adapter serves; null when off."
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "toolId"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`authentication_required`: no valid session, or the signed-in employee is no longer active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_change_required` (temporary password).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7120,7 +7186,7 @@
         ],
         "operationId": "exportAuditEvents",
         "summary": "Export the audit log as CSV",
-        "description": "Every event matching the filters (the same scope and filters as `GET /audit/events`, without `page`), newest first, streamed as one CSV file (UTF-8 with a byte order mark): occurred_at in the company timezone, actor id and name (`System` for none), action code, entity type and id, subject id and name, reason and the details as JSON. A cell a user wrote that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with `'`. If the server fails while streaming, the connection is aborted, so a cut-off file is never taken for a complete one.",
+        "description": "Every event matching the filters (the same scope and filters as `GET /audit/events`, without `page`), newest first, streamed as one CSV file (UTF-8 with a byte order mark): occurred_at in the company timezone, actor id and name (`System` for none), action code, entity type and id, subject id and name, `tool`, `access_level` and `account` (the event's `access`, as named when it happened; several items of one request joined by `; ` in the same order), reason and the details as JSON. A cell a user wrote that starts with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with `'`. If the server fails while streaming, the connection is aborted, so a cut-off file is never taken for a complete one.",
         "parameters": [
           {
             "name": "action",
@@ -9111,6 +9177,7 @@
           "level",
           "justification",
           "duration",
+          "account",
           "status",
           "version",
           "createdAt",
@@ -9153,6 +9220,17 @@
           },
           "duration": {
             "$ref": "#/components/schemas/Duration"
+          },
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAccount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tool-specific account the access is for; null when the tool uses the employee's email."
           },
           "status": {
             "type": "string",
@@ -9288,6 +9366,11 @@
           },
           "duration": {
             "$ref": "#/components/schemas/DurationInput"
+          },
+          "account": {
+            "type": "string",
+            "maxLength": 39,
+            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached, `429 account_check_rate_limited` when GitHub's rate limit is reached. A repeated `submissionId` returns the saved request without a lookup."
           }
         }
       },
@@ -9355,6 +9438,11 @@
             ],
             "format": "date",
             "description": "Required in practice (missing, null or blank is `400 expires_required`); YYYY-MM-DD after today in the company timezone; the latest allowed date is today + 89 days (access ends at 00:00 the next day, at most 90 days from now)."
+          },
+          "account": {
+            "type": "string",
+            "maxLength": 39,
+            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached, `429 account_check_rate_limited` when GitHub's rate limit is reached. A repeated `submissionId` returns the saved request without a lookup."
           }
         }
       },
@@ -10293,6 +10381,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "accountKind": {
+            "type": "string",
+            "enum": [
+              "GITHUB_LOGIN"
+            ],
+            "description": "Present when the tool's accounts are not the employee's email: `GITHUB_LOGIN` is a GitHub username (optional GitHub sandbox adapter). Fixed when the tool is created."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -10390,6 +10485,13 @@
               "MANUAL",
               "VENDOR"
             ]
+          },
+          "accountKind": {
+            "type": "string",
+            "enum": [
+              "GITHUB_LOGIN"
+            ],
+            "description": "Present when the tool's accounts are not the employee's email: `GITHUB_LOGIN` is a GitHub username (optional GitHub sandbox adapter). Fixed when the tool is created."
           },
           "owner": {
             "$ref": "#/components/schemas/ToolPerson"
@@ -10578,6 +10680,17 @@
               "VENDOR"
             ]
           },
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAccount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tool-specific account the access is for; null when the tool uses the employee's email."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -10688,6 +10801,7 @@
           "accessLevelId",
           "level",
           "method",
+          "account",
           "status",
           "displayStatus",
           "evidence",
@@ -11655,6 +11769,40 @@
         ],
         "description": "A small employee reference: id and full name."
       },
+      "AuditAccess": {
+        "type": "object",
+        "properties": {
+          "toolId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tool": {
+            "type": "string",
+            "description": "The tool's name when the event happened: the name before its first later rename, else today's."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The access level's name when the event happened; `null` for an event about the whole tool."
+          },
+          "account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The external account (e.g. GitHub login, imported account) the grant or item is for; `null` when none is recorded."
+          }
+        },
+        "required": [
+          "toolId",
+          "tool",
+          "level",
+          "account"
+        ],
+        "description": "A tool, level and external account an audit event is about."
+      },
       "AuditEvent": {
         "type": "object",
         "properties": {
@@ -11712,6 +11860,13 @@
           "details": {
             "type": "object",
             "description": "Free-form JSON object whose keys depend on the action (e.g. `grantId`, `late`, `bulk` for review decisions). Empty object when the event has no details."
+          },
+          "access": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditAccess"
+            },
+            "description": "The access the event is about, resolved from its entity (grant, operation, review item, request, request item, approval step, access level or tool): one entry per tool and level, several for a request with several items. Empty when the event is about no tool."
           }
         },
         "required": [
@@ -11723,7 +11878,8 @@
           "entityId",
           "subject",
           "reason",
-          "details"
+          "details",
+          "access"
         ],
         "description": "One append-only audit log event."
       },
@@ -12644,6 +12800,24 @@
           "expiringSoon": {
             "type": "integer",
             "description": "Open grants expiring within 14 days in the company time zone (or already past)."
+          }
+        }
+      },
+      "ExternalAccount": {
+        "type": "object",
+        "required": [
+          "name",
+          "ref"
+        ],
+        "description": "A tool-specific account (DECISIONS.md A1 amendment 2026-11-01): the GitHub login as GitHub spells it and GitHub's immutable numeric user id. Fixed once submitted.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "octocat"
+          },
+          "ref": {
+            "type": "string",
+            "example": "583231"
           }
         }
       }

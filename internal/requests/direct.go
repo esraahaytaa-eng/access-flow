@@ -21,6 +21,7 @@ type DirectGrantInput struct {
 	AccessLevelID uuid.UUID
 	Justification string
 	ExpiresOn     *string
+	Account       string // the tool-specific account, when the tool has an account kind
 }
 
 // DirectGrant creates a DIRECT_GRANT request whose one item is approved at once, with no
@@ -35,6 +36,17 @@ func (s *Service) DirectGrant(ctx context.Context, actor auth.Principal, in Dire
 		return Request{}, false, errSeparation
 	}
 	justification, err := checkText(in.Justification, "justification", "justification_required")
+	if err != nil {
+		return Request{}, false, err
+	}
+	// As Submit: a retry returns the stored request before any GitHub lookup.
+	if prev, err := existing(ctx, s.pool, actor, in.SubmissionID, "DIRECT_GRANT"); err != nil || prev != nil {
+		if prev != nil {
+			return *prev, false, nil
+		}
+		return Request{}, false, err
+	}
+	acc, err := s.resolveAccount(ctx, in.AccessLevelID, in.Account)
 	if err != nil {
 		return Request{}, false, err
 	}
@@ -77,13 +89,15 @@ func (s *Service) DirectGrant(ctx context.Context, actor auth.Principal, in Dire
 			VALUES ($1, 'DIRECT_GRANT', $2, $3, $4) RETURNING id`, in.SubmissionID, in.BeneficiaryID, actor.EmployeeID, now).Scan(&requestID); err != nil {
 			return err
 		}
+		account, ref := accountColumns(acc)
 		if err := tx.QueryRow(ctx, `INSERT INTO request_items (request_id, beneficiary_id, tool_id, access_level_id, justification,
-			duration_type, expires_on, status, closed_at, created_at) VALUES ($1, $2, $3, $4, $5, 'TEMPORARY', $6, 'APPROVED', $7, $7) RETURNING id`,
-			requestID, in.BeneficiaryID, c.toolID, in.AccessLevelID, justification, expires, now).Scan(&itemID); err != nil {
+			duration_type, expires_on, status, closed_at, created_at, account, account_ref)
+			VALUES ($1, $2, $3, $4, $5, 'TEMPORARY', $6, 'APPROVED', $7, $7, $8, $9) RETURNING id`,
+			requestID, in.BeneficiaryID, c.toolID, in.AccessLevelID, justification, expires, now, account, ref).Scan(&itemID); err != nil {
 			return err
 		}
-		details := map[string]any{"requestId": requestID, "itemId": itemID, "tool": c.tool, "level": c.level,
-			"expiresOn": expires.Format(time.DateOnly), "submissionId": in.SubmissionID}
+		details := accountDetails(map[string]any{"requestId": requestID, "itemId": itemID, "tool": c.tool, "level": c.level,
+			"expiresOn": expires.Format(time.DateOnly), "submissionId": in.SubmissionID}, acc)
 		if err := audit.Record(ctx, tx, audit.Event{ActorID: &actor.EmployeeID, Action: "DIRECT_GRANT_CREATED", Entity: "request_item",
 			EntityID: &itemID, SubjectID: &in.BeneficiaryID, Reason: justification, Details: details}); err != nil {
 			return err

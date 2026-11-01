@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +38,9 @@ const (
 type Service struct {
 	pool *pgxpool.Pool
 	loc  *time.Location // company timezone (A6)
+	// Accounts looks up tool-specific accounts (the GitHub adapter); nil when none is
+	// configured, and then a tool with an account kind cannot be requested.
+	Accounts AccountLookup
 }
 
 func NewService(pool *pgxpool.Pool, loc *time.Location) *Service {
@@ -86,6 +90,10 @@ type Item struct {
 	ClosedReason  *string      `json:"closedReason"`
 	Steps         []Step       `json:"steps"`
 	Fulfillment   *Fulfillment `json:"fulfillment"` // once approved; approval is not access
+
+	// Account: the tool-specific account the access is for (A1 note 2026-11-01); nil when
+	// the tool uses the employee's email.
+	Account *access.ExternalAccount `json:"account"`
 }
 
 // Fulfillment is the grant of an approved item, with its display status (Fulfillment methods).
@@ -137,7 +145,8 @@ func loadItems(ctx context.Context, q querier, where string, args ...any) ([]Ite
 	rows, err := q.Query(ctx, `
 		SELECT i.id, i.request_id, b.id, b.full_name, s.id, s.full_name, t.id, t.name, l.id, l.name, i.justification,
 		       i.duration_type, to_char(i.expires_on, 'YYYY-MM-DD'), i.status, i.version, i.created_at, i.closed_at,
-		       i.closed_reason, g.id, g.method, g.status, g.activation_evidence, g.closed_reason, o.ticket_ref IS NOT NULL
+		       i.closed_reason, g.id, g.method, g.status, g.activation_evidence, g.closed_reason, o.ticket_ref IS NOT NULL,
+		       i.account, i.account_ref
 		FROM request_items i JOIN requests r ON r.id = i.request_id
 		LEFT JOIN grants g ON g.request_item_id = i.id OR (r.kind = 'EXTENSION' AND i.status = 'APPROVED' AND g.id = i.grant_id)
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
@@ -152,9 +161,13 @@ func loadItems(ctx context.Context, q querier, where string, args ...any) ([]Ite
 		var grant *uuid.UUID
 		var method, status, evidence, reason *string
 		var ticket bool
+		var account, ref *string
 		err := row.Scan(&it.ID, &it.RequestID, &it.Beneficiary.ID, &it.Beneficiary.FullName, &it.SubmittedBy.ID, &it.SubmittedBy.FullName,
 			&it.ToolID, &it.Tool, &it.AccessLevelID, &it.Level, &it.Justification, &it.Duration.Type, &it.Duration.ExpiresOn,
-			&it.Status, &it.Version, &it.CreatedAt, &it.ClosedAt, &it.ClosedReason, &grant, &method, &status, &evidence, &reason, &ticket)
+			&it.Status, &it.Version, &it.CreatedAt, &it.ClosedAt, &it.ClosedReason, &grant, &method, &status, &evidence, &reason, &ticket, &account, &ref)
+		if account != nil && ref != nil {
+			it.Account = &access.ExternalAccount{Name: *account, Ref: *ref}
+		}
 		if grant != nil {
 			it.Fulfillment = &Fulfillment{GrantID: *grant, Status: access.DisplayStatus(*method, *status, ticket), Evidence: evidence, ClosedReason: reason}
 		}
@@ -239,6 +252,7 @@ type ItemInput struct {
 	AccessLevelID uuid.UUID
 	Justification string
 	Duration      Duration
+	Account       string // the tool-specific account, when the tool has an account kind
 }
 
 // Submission is a NEW_ACCESS request; a nil BeneficiaryID means the submitter.
@@ -322,6 +336,25 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 		}
 		justifications[i] = j
 	}
+	// A retry returns the stored request before any GitHub lookup (A9); the check in the
+	// transaction below still settles concurrent first submissions.
+	if prev, err := existing(ctx, s.pool, actor, in.SubmissionID, "NEW_ACCESS"); err != nil || prev != nil {
+		if prev != nil {
+			return *prev, false, nil
+		}
+		return Request{}, false, err
+	}
+	accounts := make([]*access.ExternalAccount, len(in.Items))
+	for i, it := range in.Items {
+		if i > 0 && slices.ContainsFunc(in.Items[:i], func(o ItemInput) bool { return o.AccessLevelID == it.AccessLevelID }) {
+			continue // refused as duplicate_tool below; GitHub is asked once per level
+		}
+		acc, err := s.resolveAccount(ctx, it.AccessLevelID, it.Account)
+		if err != nil {
+			return Request{}, false, itemError(i, err)
+		}
+		accounts[i] = acc
+	}
 	beneficiary := actor.EmployeeID
 	if in.BeneficiaryID != nil {
 		beneficiary = *in.BeneficiaryID
@@ -376,7 +409,7 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 				return itemError(i, err)
 			}
 			it.Justification = justifications[i]
-			all = append(all, newItem{c, it, expires, nil})
+			all = append(all, newItem{c, it, expires, nil, accounts[i]})
 		}
 		if req, err = s.create(ctx, tx, now, actor, "NEW_ACCESS", in.SubmissionID, beneficiary, managerID, all); err != nil {
 			return err
@@ -396,6 +429,7 @@ type newItem struct {
 	ItemInput
 	expires *time.Time
 	grantID *uuid.UUID // the grant an EXTENSION or LEVEL_CHANGE acts on
+	account *access.ExternalAccount
 }
 
 // create writes a request of kind with its items and their steps, records REQUEST_SUBMITTED
@@ -415,9 +449,10 @@ func (s *Service) create(ctx context.Context, tx pgx.Tx, now time.Time, actor au
 	var itemIDs []uuid.UUID
 	for _, c := range all {
 		var itemID uuid.UUID
+		account, ref := accountColumns(c.account)
 		if err := tx.QueryRow(ctx, `INSERT INTO request_items (request_id, beneficiary_id, tool_id, access_level_id, justification,
-				duration_type, expires_on, grant_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-			requestID, beneficiary, c.toolID, c.AccessLevelID, c.Justification, c.Duration.Type, c.expires, c.grantID, now).Scan(&itemID); err != nil {
+				duration_type, expires_on, grant_id, account, account_ref, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+			requestID, beneficiary, c.toolID, c.AccessLevelID, c.Justification, c.Duration.Type, c.expires, c.grantID, account, ref, now).Scan(&itemID); err != nil {
 			return Request{}, err
 		}
 		for pos, typ := range c.steps {
@@ -433,7 +468,7 @@ func (s *Service) create(ctx context.Context, tx pgx.Tx, now time.Time, actor au
 			}
 		}
 		itemIDs = append(itemIDs, itemID)
-		d := map[string]any{"itemId": itemID, "tool": c.tool, "level": c.level, "duration": c.Duration.Type, "expiresOn": c.expires}
+		d := accountDetails(map[string]any{"itemId": itemID, "tool": c.tool, "level": c.level, "duration": c.Duration.Type, "expiresOn": c.expires}, c.account)
 		if c.grantID != nil {
 			d["grantId"] = *c.grantID
 		}

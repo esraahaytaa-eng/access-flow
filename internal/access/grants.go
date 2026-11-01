@@ -32,9 +32,10 @@ func CreateGrant(ctx context.Context, tx pgx.Tx, now time.Time, actor, itemID uu
 	}
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `INSERT INTO grants (request_item_id, employee_id, tool_id, access_level_id, method, status, expires_on,
-		       replaces_grant_id, created_at)
+		       replaces_grant_id, account, account_ref, created_at)
 		SELECT i.id, i.beneficiary_id, i.tool_id, i.access_level_id, t.fulfillment_method,
-		       CASE WHEN t.fulfillment_method = 'API' THEN 'PROVISIONING' ELSE 'PENDING_FULFILLMENT' END, i.expires_on, i.grant_id, $2
+		       CASE WHEN t.fulfillment_method = 'API' THEN 'PROVISIONING' ELSE 'PENDING_FULFILLMENT' END, i.expires_on, i.grant_id,
+		       i.account, i.account_ref, $2
 		FROM request_items i JOIN tools t ON t.id = i.tool_id WHERE i.id = $1 RETURNING id`, itemID, now).Scan(&id); err != nil {
 		return uuid.Nil, err
 	}
@@ -243,6 +244,8 @@ type Grant struct {
 	ToolVerifiedAt *time.Time `json:"toolVerifiedAt"`
 	Version        int        `json:"version"`
 	CreatedAt      time.Time  `json:"createdAt"`
+
+	Account *ExternalAccount `json:"account"` // a tool-specific account (A1 note 2026-11-01); nil for the email
 }
 
 // Retention records why a grant was kept when its holder was transferred (D5).
@@ -264,7 +267,8 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		               CASE WHEN x.last_error IS NULL THEN '_REQUESTED' ELSE '_FAILED' END
 		        FROM operations x WHERE x.grant_id = g.id AND x.type IN ('SUSPEND', 'RESUME') AND x.status IN ('PENDING', 'IN_PROGRESS', 'FAILED')
 		        ORDER BY x.id DESC LIMIT 1),
-		       g.retained_at, g.retention_justification, g.import_id IS NOT NULL, g.tool_verified_at
+		       g.retained_at, g.retention_justification, g.import_id IS NOT NULL, g.tool_verified_at,
+		       g.account, g.account_ref
 		FROM grants g JOIN employees e ON e.id = g.employee_id
 		LEFT JOIN operations o ON o.grant_id = g.id AND o.type = 'GRANT'
 		JOIN tools t ON t.id = g.tool_id JOIN access_levels l ON l.id = g.access_level_id
@@ -276,10 +280,13 @@ func (s *Service) grants(ctx context.Context, where string, args ...any) ([]Gran
 		var g Grant
 		var ticket bool
 		var retainedAt *time.Time
-		var justification *string
+		var justification, account, ref *string
 		err := row.Scan(&g.ID, &g.Employee.ID, &g.Employee.FullName, &g.ToolID, &g.Tool, &g.AccessLevelID, &g.Level, &g.Method,
 			&g.Status, &g.Evidence, &g.EffectiveFrom, &g.EffectiveTo, &g.ExpiresOn, &g.ClosedReason, &g.Version, &g.CreatedAt, &ticket,
-			&g.Suspension, &retainedAt, &justification, &g.Imported, &g.ToolVerifiedAt)
+			&g.Suspension, &retainedAt, &justification, &g.Imported, &g.ToolVerifiedAt, &account, &ref)
+		if account != nil && ref != nil { // an imported account has no reference and is not shown as one
+			g.Account = &ExternalAccount{Name: *account, Ref: *ref}
+		}
 		if retainedAt != nil {
 			g.RetainedOnTransfer = &Retention{At: *retainedAt, Justification: *justification}
 		}

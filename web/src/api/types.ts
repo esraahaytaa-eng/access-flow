@@ -103,11 +103,19 @@ export type CatalogLevel = {
   recommended: boolean;
 };
 
+/** A tool's account identity when it is not the employee's email: a GitHub username. */
+export type AccountKind = "GITHUB_LOGIN";
+
+/** A tool-specific account a request named: GitHub's spelling of the login and its immutable user id. */
+export type ExternalAccount = { name: string; ref: string };
+
 /** Catalog tool. status/version only for Super Admin, InfoSec and Auditor. */
 export type CatalogTool = {
   id: string;
   name: string;
   fulfillmentMethod: FulfillmentMethod;
+  /** Absent: the account is the employee's email. */
+  accountKind?: AccountKind;
   owner: Person;
   adminGroup: AdminGroupRef;
   status?: CatalogStatus;
@@ -124,6 +132,7 @@ export type Tool = {
   fulfillmentMethod: FulfillmentMethod;
   ownerId: string;
   adminGroupId: string;
+  accountKind?: AccountKind;
   status: CatalogStatus;
   version: number;
 };
@@ -211,6 +220,8 @@ export type RequestItem = {
   level: string;
   justification: string;
   duration: Duration;
+  /** The tool-specific account the access is for; null when the tool uses the email. */
+  account: ExternalAccount | null;
   status: ItemStatus;
   version: number;
   createdAt: string;
@@ -273,6 +284,8 @@ export type Grant = {
   accessLevelId: string;
   level: string;
   method: FulfillmentMethod;
+  /** The tool-specific account (a GitHub login); null when the tool uses the email. */
+  account: ExternalAccount | null;
   status: GrantStatus;
   displayStatus: DisplayStatus;
   evidence: Evidence | null;
@@ -515,7 +528,9 @@ export type AuditEvent = {
   subject: Person | null;
   reason: string | null;
   details: Record<string, unknown> | null;
+  access: AuditAccess[]; // the tools and levels the event is about, named as they were then
 };
+export type AuditAccess = { toolId: string; tool: string; level: string | null; account: string | null };
 export type AuditEventsResponse = { events: AuditEvent[]; total: number; page: number; pageSize: number };
 export type AuditFilters = { actors: Person[]; tools: { id: string; name: string }[] };
 
@@ -575,6 +590,9 @@ export type SuperAdminNomination = {
 export type NominationsResponse = { nominations: SuperAdminNomination[] };
 
 /** GET /admin/health */
+/** The optional GitHub sandbox adapter in this instance (Super Admin). */
+export type GitHubIntegration = { enabled: boolean; toolId: string | null };
+
 export type AdminHealth = { activeSuperAdmins: number; infosecMembers: number; recoveryRequired: boolean; warning: boolean };
 
 export interface DemoResponse {

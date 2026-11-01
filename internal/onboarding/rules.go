@@ -76,6 +76,7 @@ type Employee struct {
 type Tool struct {
 	ID                                           uuid.UUID
 	Name, Method, OwnerEmail, AdminGroup, Status string
+	AccountKind                                  string // set: accounts are not emails (GITHUB_LOGIN)
 	Levels                                       map[string]Level
 }
 
@@ -633,6 +634,12 @@ func (v *validator) resolveAccess(r AccessRow) (tool, level *uuid.UUID, method s
 		if name != "" {
 			p.Expected = name
 		}
+		return nil, nil, "", false
+	}
+	if ex != nil && ex.AccountKind != "" {
+		// Such access is requested with the account and its GitHub id (A1 note 2026-11-01);
+		// a workbook row has neither, and the tool read cannot check it.
+		v.problem(SheetAccess, r.Row, "Tool", r.Tool, "account_kind_tool")
 		return nil, nil, "", false
 	}
 	if ex != nil {

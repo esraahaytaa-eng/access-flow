@@ -55,6 +55,13 @@ describe("request detail", () => {
     expect(screen.queryByRole("button", { name: "Talebi geri çek" })).toBeNull();
   });
 
+  it("shows the GitHub account an item is for", async () => {
+    fakeServer({ "GET /requests/r1": request([item({ tool: "GitHub sandbox", account: { name: "octocat", ref: "583231" } })]), "GET /employees": { employees: [] } });
+    renderPage(<RequestDetailPage />, { path: "/requests/r1", pattern: "/requests/:id" });
+    expect(await screen.findByText("@octocat · GitHub kimliği 583231")).toBeTruthy();
+    expect(screen.getByText("GitHub hesabı")).toBeTruthy();
+  });
+
   it("explains a request that is not found or not visible", async () => {
     fakeServer({ "GET /employees": { employees: [] } });
     renderPage(<RequestDetailPage />, { path: "/requests/nope", pattern: "/requests/:id" });
@@ -70,6 +77,20 @@ describe("my access", () => {
     await userEvent.type(screen.getByLabelText(/Neden vazgeçiyorsunuz/), "Proje bitti");
     await userEvent.click(screen.getByRole("button", { name: "Erişimden vazgeç" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ version: 7, reason: "Proje bitti" }));
+  });
+
+  it("shows the GitHub account of a grant", async () => {
+    fakeServer({ "GET /access": { grants: [grant({ tool: "GitHub sandbox", account: { name: "octocat", ref: "583231" } })] } });
+    renderPage(<MyAccessPage />);
+    expect(await screen.findByText("@octocat")).toBeTruthy();
+  });
+
+  it("tells the person to accept a pending GitHub invitation", async () => {
+    fakeServer({ "GET /access": { grants: [grant({ tool: "GitHub demo-project", status: "PROVISIONING", displayStatus: "PROVISIONING", evidence: null, account: { name: "octocat", ref: "583231" } })] } });
+    renderPage(<MyAccessPage />);
+    await userEvent.click(await screen.findByRole("tab", { name: /İşlemde/ }));
+    await userEvent.click(screen.getByText("GitHub demo-project"));
+    expect(await screen.findByText(/@octocat hesabına gönderilen daveti GitHub’da kabul edin/)).toBeTruthy();
   });
 
   it("labels self-reported access and offers no actions on a grant in progress", async () => {

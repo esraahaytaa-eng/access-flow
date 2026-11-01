@@ -2,24 +2,24 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { api } from "../api/client";
-import { useAdminGroups, useEmployees, useTools } from "../api/queries";
-import type { CatalogTool, Employee, FulfillmentMethod, StepType, Tool } from "../api/types";
+import { useAdminGroups, useEmployees, useGitHubIntegration, useTools } from "../api/queries";
+import type { AccountKind, CatalogTool, Employee, FulfillmentMethod, StepType, Tool } from "../api/types";
 import { methodDesc, methodLabel } from "../i18n/labels";
 import { Badge, Button, Callout, Card, ConfirmDialog, EmptyState, Field, Input, PageHeader, Select, Switch, TableSkeleton, useAction } from "../ui/components";
-import { ApprovalChain } from "../ui/domain";
+import { ApprovalChain, toolService } from "../ui/domain";
 import { managerOptions } from "./Employees";
 
 type Level = { key: string; id: string | null; name: string; owner: boolean; infosec: boolean; retire: boolean; retired: boolean; version: number | null; orig?: { name: string; owner: boolean; infosec: boolean } };
-type Form = { name: string; method: FulfillmentMethod | ""; ownerId: string; adminGroupId: string; levels: Level[] };
+type Form = { name: string; method: FulfillmentMethod | ""; accountKind: AccountKind | ""; ownerId: string; adminGroupId: string; levels: Level[] };
 
 let seq = 0;
 const blankLevel = (): Level => ({ key: `new-${++seq}`, id: null, name: "", owner: false, infosec: false, retire: false, retired: false, version: null });
 const stepsOf = (l: Pick<Level, "owner" | "infosec">): StepType[] => ["MANAGER", ...(l.owner ? ["TOOL_OWNER" as const] : []), ...(l.infosec ? ["INFOSEC" as const] : [])];
 
 function formOf(tool?: CatalogTool): Form {
-  if (!tool) return { name: "", method: "", ownerId: "", adminGroupId: "", levels: [blankLevel()] };
+  if (!tool) return { name: "", method: "", accountKind: "", ownerId: "", adminGroupId: "", levels: [blankLevel()] };
   return {
-    name: tool.name, method: tool.fulfillmentMethod, ownerId: tool.owner.id, adminGroupId: tool.adminGroup.id,
+    name: tool.name, method: tool.fulfillmentMethod, accountKind: tool.accountKind ?? "", ownerId: tool.owner.id, adminGroupId: tool.adminGroup.id,
     levels: tool.levels.map((l) => {
       const owner = l.steps.includes("TOOL_OWNER"), infosec = l.steps.includes("INFOSEC");
       return { key: l.id, id: l.id, name: l.name, owner, infosec, retire: false, retired: l.status === "RETIRED", version: l.version ?? null, orig: { name: l.name, owner, infosec } };
@@ -72,7 +72,8 @@ function ToolForm({ tool }: { tool?: CatalogTool }) {
     let toolId = tool?.id;
     const r = await run(async () => {
       if (isNew) {
-        toolId = (await api.post<Tool>("/tools", { name: form.name.trim(), fulfillmentMethod: form.method, ownerId: form.ownerId, adminGroupId: form.adminGroupId })).id;
+        const accountKind = form.method === "API" && form.accountKind ? { accountKind: form.accountKind } : {};
+        toolId = (await api.post<Tool>("/tools", { name: form.name.trim(), fulfillmentMethod: form.method, ...accountKind, ownerId: form.ownerId, adminGroupId: form.adminGroupId })).id;
       } else if (form.name.trim() !== tool!.name || form.ownerId !== tool!.owner.id || form.adminGroupId !== tool!.adminGroup.id) {
         await api.put(`/tools/${toolId}`, { name: form.name.trim(), ownerId: form.ownerId, adminGroupId: form.adminGroupId, version: tool!.version });
       }
@@ -111,6 +112,21 @@ function ToolForm({ tool }: { tool?: CatalogTool }) {
                 ))}
               </div>
               {errors.method && <div className="error-text">{errors.method}</div>}
+              {tool?.fulfillmentMethod === "API" && <ToolServiceNote tool={tool} />}
+              {form.method === "API" && (
+                <div className="field">
+                  <span className="label">Hesap kimliği</span>
+                  <div className="grid-2" role="radiogroup" aria-label="Hesap kimliği">
+                    {([["", "E-posta", "Araçtaki hesap, çalışanın AccessFlow e-postasıdır."],
+                      ["GITHUB_LOGIN", "GitHub kullanıcı adı", "Talep eden GitHub kullanıcı adını girer; AccessFlow hesabı ve GitHub kimliğini doğrulayıp kaydeder."]] as const).map(([k, label, desc]) => (
+                      <button key={k} type="button" role="radio" aria-checked={form.accountKind === k} disabled={!isNew} className={`choice ${form.accountKind === k ? "on" : ""}`} onClick={() => set("accountKind", k)}>
+                        <span className="radio" /><span><span className="strong" style={{ display: "block" }}>{label}</span><span className="muted small">{desc}</span></span>
+                      </button>
+                    ))}
+                  </div>
+                  {!isNew && <div className="hint">Hesap kimliği araç oluşturulduktan sonra değiştirilemez.</div>}
+                </div>
+              )}
             </div>
           </Card>
           <Card title="Sahiplik">
@@ -166,4 +182,13 @@ function ToolForm({ tool }: { tool?: CatalogTool }) {
         onConfirm={async () => { await api.post(`/tools/${tool!.id}/retire`, { version: tool!.version }); qc.invalidateQueries({ queryKey: ["tools"] }); navigate("/tools-admin"); }} />
     </>
   );
+}
+
+/** Which service runs an API tool's operations in this instance, as the backend reports it. */
+function ToolServiceNote({ tool }: { tool: CatalogTool }) {
+  const service = toolService(tool, useGitHubIntegration().data); // null while loading or unreadable: claim nothing
+  if (!service) return null;
+  return service === "GITHUB"
+    ? <Callout tone="success" title="Gerçek GitHub API entegrasyonu aktif">Erişim davetleri, yetki doğrulama ve erişim kaldırma işlemleri doğrudan GitHub API üzerinden gerçekleştirilir.</Callout>
+    : <Callout title="Mock Tool Service kullanılıyor">Bu aracın API işlemleri yerel Mock Tool Service üzerinden simüle edilir.</Callout>;
 }

@@ -73,7 +73,7 @@ func (s *Service) ImportMock(ctx context.Context, actor auth.Principal) (ImportR
 		return ImportReport{}, platform.ErrForbidden
 	}
 	rows, err := s.pool.Query(ctx, `SELECT t.id, t.name, l.id FROM tools t JOIN access_levels l ON l.tool_id = t.id
-		WHERE t.fulfillment_method = 'API' AND t.status = 'ACTIVE' ORDER BY t.name, t.id`)
+		WHERE t.fulfillment_method = 'API' AND t.status = 'ACTIVE' AND t.account_kind IS NULL ORDER BY t.name, t.id`) // GitHub tools are not in the mock
 	if err != nil {
 		return ImportReport{}, err
 	}

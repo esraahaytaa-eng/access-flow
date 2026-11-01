@@ -49,6 +49,16 @@ type Event struct {
 	Subject  *Person        `json:"subject"`
 	Reason   *string        `json:"reason"`
 	Details  map[string]any `json:"details"`
+	Access   []EventAccess  `json:"access"` // the access the event is about; empty when none
+}
+
+// EventAccess is a tool, its level and the external account, named as they were called when
+// the event happened.
+type EventAccess struct {
+	ToolID  uuid.UUID `json:"toolId"`
+	Tool    string    `json:"tool"`
+	Level   *string   `json:"level"`   // nil: the event is about the whole tool
+	Account *string   `json:"account"` // nil: no external account recorded
 }
 
 type EventFilter struct {
@@ -105,7 +115,32 @@ func (s *Service) eventWhere(ctx context.Context, actor auth.Principal, f EventF
 }
 
 const eventSelect = `SELECT e.id, e.occurred_at, e.actor_id, a.full_name, e.action, e.entity_type, e.entity_id,
-		e.subject_employee_id, s.full_name, e.reason, e.details`
+		e.subject_employee_id, s.full_name, e.reason, e.details, ` + eventAccess
+
+// eventAccess is the access an event is about, from its entity: tool, level and account never
+// change on a grant or request item, so they are as they were then. A name is the one before
+// the first later rename (the "from" of TOOL_UPDATED / ACCESS_LEVEL_UPDATED), else today's.
+// Evaluated only for the rows returned, by primary key and the (entity_id, action) index.
+const eventAccess = `(SELECT COALESCE(jsonb_agg(jsonb_build_object('toolId', t.id,
+		'tool', COALESCE((SELECT r.details->'name'->>'from' FROM audit_events r WHERE r.entity_id = t.id
+			AND r.action = 'TOOL_UPDATED' AND r.details->'name' IS NOT NULL AND (r.occurred_at, r.id) > (e.occurred_at, e.id)
+			ORDER BY r.occurred_at, r.id LIMIT 1), t.name),
+		'level', CASE WHEN l.id IS NOT NULL THEN COALESCE((SELECT r.details->'name'->>'from' FROM audit_events r WHERE r.entity_id = l.id
+			AND r.action = 'ACCESS_LEVEL_UPDATED' AND r.details->'name' IS NOT NULL AND (r.occurred_at, r.id) > (e.occurred_at, e.id)
+			ORDER BY r.occurred_at, r.id LIMIT 1), l.name) END,
+		'account', x.account) ORDER BY t.name, l.name), '[]')
+	FROM (SELECT g.tool_id, g.access_level_id, g.account FROM grants g WHERE e.entity_type = 'grant' AND g.id = e.entity_id
+		UNION ALL SELECT g.tool_id, g.access_level_id, g.account FROM operations o JOIN grants g ON g.id = o.grant_id
+			WHERE e.entity_type = 'operation' AND o.id = e.entity_id
+		UNION ALL SELECT g.tool_id, g.access_level_id, g.account FROM review_items ri JOIN grants g ON g.id = ri.grant_id
+			WHERE e.entity_type = 'review_item' AND ri.id = e.entity_id
+		UNION ALL SELECT i.tool_id, i.access_level_id, i.account FROM request_items i WHERE e.entity_type = 'request_item' AND i.id = e.entity_id
+		UNION ALL SELECT i.tool_id, i.access_level_id, i.account FROM request_items i WHERE e.entity_type = 'request' AND i.request_id = e.entity_id
+		UNION ALL SELECT i.tool_id, i.access_level_id, i.account FROM approval_steps st JOIN request_items i ON i.id = st.item_id
+			WHERE e.entity_type = 'approval_step' AND st.id = e.entity_id
+		UNION ALL SELECT l.tool_id, l.id, NULL FROM access_levels l WHERE e.entity_type = 'access_level' AND l.id = e.entity_id
+		UNION ALL SELECT e.entity_id, NULL, NULL WHERE e.entity_type = 'tool'
+	) x (tool_id, access_level_id, account) JOIN tools t ON t.id = x.tool_id LEFT JOIN access_levels l ON l.id = x.access_level_id)`
 
 const eventFrom = ` FROM audit_events e LEFT JOIN employees a ON a.id = e.actor_id LEFT JOIN employees s ON s.id = e.subject_employee_id
 		WHERE `
@@ -178,7 +213,7 @@ func scanEvent(row pgx.Row, extra ...any) (Event, error) {
 	var e Event
 	var actorID, subjectID *uuid.UUID
 	var actorName, subjectName *string
-	err := row.Scan(append([]any{&e.ID, &e.At, &actorID, &actorName, &e.Action, &e.Entity, &e.EntityID, &subjectID, &subjectName, &e.Reason, &e.Details}, extra...)...)
+	err := row.Scan(append([]any{&e.ID, &e.At, &actorID, &actorName, &e.Action, &e.Entity, &e.EntityID, &subjectID, &subjectName, &e.Reason, &e.Details, &e.Access}, extra...)...)
 	e.Actor, e.Subject = person(actorID, actorName), person(subjectID, subjectName)
 	return e, err
 }

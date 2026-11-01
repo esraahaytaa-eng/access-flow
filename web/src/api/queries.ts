@@ -2,7 +2,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
-  AdminGroupsResponse, AdminHealth, ApprovalsResponse, BasicEmployee, CatalogResponse, CompanyCatalog, DemoResponse, Employee, EmployeesResponse, Exceptions,
+  AdminGroupsResponse, AdminHealth, ApprovalsResponse, GitHubIntegration, BasicEmployee, CatalogResponse, CompanyCatalog, DemoResponse, Employee, EmployeesResponse, Exceptions,
   FulfillmentTasksResponse, GrantsResponse, NominationsResponse, NotificationsResponse, RequestsResponse, ReviewPage, ReviewView, StarterPackagesResponse,
   TaskTab, TeamResponse,
 } from "./types";
@@ -34,6 +34,7 @@ export const useStarterPackages = () => useQuery({ queryKey: ["starter-packages"
 
 export const useNominations = (enabled = true) => useQuery({ queryKey: ["nominations"], enabled, queryFn: () => api.get<NominationsResponse>("/super-admin-nominations").then((r) => r.nominations) });
 export const useAdminHealth = (enabled = true) => useQuery({ queryKey: ["admin-health"], enabled, queryFn: () => api.get<AdminHealth>("/admin/health") });
+export const useGitHubIntegration = () => useQuery({ queryKey: ["integrations", "github"], queryFn: () => api.get<GitHubIntegration>("/integrations/github") });
 
 export type ReviewParams = { view?: ReviewView; q?: string; page?: number };
 export const useReviews = (params: ReviewParams = {}, enabled = true, staleTime = 0) => useQuery({ queryKey: ["reviews", params], enabled, staleTime,

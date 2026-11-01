@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 	_ "time/tzdata" // the distroless image has no zoneinfo
+
+	"github.com/google/uuid"
 )
 
 // Config is read from environment variables (A3: no configuration framework).
@@ -26,6 +30,11 @@ type Config struct {
 	MockToolsURL         string // MOCK_TOOLS_URL: base URL of the Mock Tool Service (A6)
 	MockEmailKeyFile     string // MOCK_EMAIL_KEY_FILE: key encrypting activation links in the Mock Email Outbox (M18)
 	LoginRateLimit       int    // LOGIN_RATE_LIMIT: sign-in and activation attempts per client address per minute; 0 = the default (M18)
+	// Optional GitHub sandbox adapter (A1 note 2026-11-01): all three or none. Each
+	// employee's GitHub username is entered on the request, not configured here.
+	GitHubToken      string // GITHUB_TOKEN: fine-grained token limited to the sandbox repository; never logged
+	GitHubRepository string // GITHUB_REPOSITORY: owner/name of the sandbox repository
+	GitHubToolID     string // GITHUB_TOOL_ID: the AccessFlow tool whose operations go to GitHub
 }
 
 // LoadConfig reads the configuration through getenv (os.Getenv in production).
@@ -41,6 +50,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		CompanyTimezone:      getenv("COMPANY_TIMEZONE"),
 		MockToolsURL:         getenv("MOCK_TOOLS_URL"),
 		MockEmailKeyFile:     getenv("MOCK_EMAIL_KEY_FILE"),
+		GitHubToken:          getenv("GITHUB_TOKEN"),
+		GitHubRepository:     getenv("GITHUB_REPOSITORY"),
+		GitHubToolID:         getenv("GITHUB_TOOL_ID"),
 	}
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = ":8080"
@@ -90,6 +102,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		}
 		cfg.Demo = demo
 	}
+	if err := checkGitHub(cfg); err != nil {
+		return Config{}, err
+	}
 	if cfg.Demo {
 		if err := checkLocal(cfg, getenv("ACCESSFLOW_ENV")); err != nil {
 			return Config{}, fmt.Errorf("demo mode refused: %w", err)
@@ -117,6 +132,35 @@ func checkLocal(cfg Config, env string) error {
 		if err != nil || parsed.Hostname() != "postgres" || parsed.RawQuery != "" {
 			return errors.New("the databases must be the Compose postgres service")
 		}
+	}
+	return nil
+}
+
+// The AccessFlow repository itself is never a sandbox: the adapter refuses to start on it.
+const accessFlowRepository = "esraahaytaa-eng/access-flow"
+
+var githubRepository = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
+
+// checkGitHub accepts the GitHub settings only complete and pointing at a sandbox.
+func checkGitHub(cfg Config) error {
+	set := 0
+	for _, v := range []string{cfg.GitHubToken, cfg.GitHubRepository, cfg.GitHubToolID} {
+		if v != "" {
+			set++
+		}
+	}
+	switch {
+	case set == 0:
+		return nil
+	case set < 3:
+		return errors.New("GITHUB_TOKEN, GITHUB_REPOSITORY and GITHUB_TOOL_ID are set together or not at all")
+	case !githubRepository.MatchString(cfg.GitHubRepository):
+		return errors.New("GITHUB_REPOSITORY must be owner/name")
+	case strings.EqualFold(cfg.GitHubRepository, accessFlowRepository):
+		return errors.New("GITHUB_REPOSITORY must be a sandbox, not the AccessFlow repository")
+	}
+	if _, err := uuid.Parse(cfg.GitHubToolID); err != nil {
+		return fmt.Errorf("GITHUB_TOOL_ID must be a tool ID: %w", err)
 	}
 	return nil
 }

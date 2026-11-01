@@ -292,10 +292,10 @@ func load(ctx context.Context, tx pgx.Tx, lock bool) (Snapshot, error) {
 			s.Employees[e.Email] = e
 			return err
 		}),
-		each(`SELECT t.id, t.name, t.fulfillment_method, o.email, g.name, t.status FROM tools t
+		each(`SELECT t.id, t.name, t.fulfillment_method, o.email, g.name, t.status, coalesce(t.account_kind, '') FROM tools t
 			JOIN employees o ON o.id = t.owner_id JOIN admin_groups g ON g.id = t.admin_group_id`+strings.Replace(share, "SHARE", "SHARE OF t", 1), func(r pgx.Rows) error {
 			t := Tool{Levels: map[string]Level{}}
-			err := r.Scan(&t.ID, &t.Name, &t.Method, &t.OwnerEmail, &t.AdminGroup, &t.Status)
+			err := r.Scan(&t.ID, &t.Name, &t.Method, &t.OwnerEmail, &t.AdminGroup, &t.Status, &t.AccountKind)
 			s.Tools[lower(t.Name)], toolsByID[t.ID] = t, lower(t.Name)
 			return err
 		}),

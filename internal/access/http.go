@@ -18,6 +18,9 @@ type Service struct {
 	pool  *pgxpool.Pool
 	tools *HTTPToolClient // read by the baseline import (D10)
 	loc   *time.Location  // the company timezone: Team's expiry window
+	// GitHub is the optional sandbox adapter, nil when it is off; GitHubTool is its tool.
+	GitHub     *GitHubToolClient
+	GitHubTool uuid.UUID
 }
 
 func NewService(pool *pgxpool.Pool, tools *HTTPToolClient, loc *time.Location) *Service {
@@ -46,6 +49,7 @@ func (s *Service) Register(r chi.Router) {
 	r.Get("/imports", s.handleImports)
 	r.Post("/orphans/{id}/revoke", s.orphanRoute(s.RevokeOrphan))
 	r.Post("/orphans/{id}/dismiss", s.orphanRoute(s.DismissOrphan))
+	r.Get("/integrations/github", s.handleGitHubStatus)
 }
 
 func actor(r *http.Request) auth.Principal {

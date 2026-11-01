@@ -13,10 +13,10 @@ import { ApprovalChain, isOpenGrant, MethodTag } from "../ui/domain";
 import { addDays, formatDate, todayIn } from "../ui/format";
 
 type Days = 7 | 30 | 90 | "custom";
-type Line = { key: number; toolId: string; levelId: string; durationType: "" | Duration["type"]; days: Days | null; date: string };
+type Line = { key: number; toolId: string; levelId: string; durationType: "" | Duration["type"]; days: Days | null; date: string; account: string };
 
 let lineSeq = 0;
-const newLine = (toolId = "", levelId = ""): Line => ({ key: ++lineSeq, toolId, levelId, durationType: "", days: null, date: "" });
+const newLine = (toolId = "", levelId = ""): Line => ({ key: ++lineSeq, toolId, levelId, durationType: "", days: null, date: "", account: "" });
 
 export function NewRequestPage() {
   const navigate = useNavigate();
@@ -35,7 +35,8 @@ export function NewRequestPage() {
   const [beneficiaryId, setBeneficiaryId] = useState(params.get("for") ?? me.id);
   const [lines, setLines] = useState<Line[]>(() => [newLine(params.get("tool") ?? "", params.get("level") ?? "")]);
   const [why, setWhy] = useState("");
-  const [errors, setErrors] = useState<{ lines: Record<number, string[]>; why?: string }>({ lines: {} });
+  // accounts: errors shown next to a line's GitHub username field.
+  const [errors, setErrors] = useState<{ lines: Record<number, string[]>; accounts: Record<number, string>; why?: string }>({ lines: {}, accounts: {} });
   const [submissionId] = useState(newSubmissionId);
   const [run, busy] = useAction();
 
@@ -73,11 +74,12 @@ export function NewRequestPage() {
 
   const patch = (key: number, p: Partial<Line>) => {
     setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...p } : l)));
-    setErrors((e) => ({ ...e, lines: { ...e.lines, [key]: [] } }));
+    setErrors((e) => ({ ...e, lines: { ...e.lines, [key]: [] }, accounts: { ...e.accounts, [key]: "" } }));
   };
 
   const validate = () => {
     const out: Record<number, string[]> = {};
+    const accounts: Record<number, string> = {};
     lines.forEach((ln, i) => {
       const m: string[] = [];
       const tool = toolOf(ln);
@@ -88,14 +90,15 @@ export function NewRequestPage() {
       const held = heldOf(ln);
       if (tool && held && held.status !== "ACTIVE") m.push(`${tool.name} için süren bir erişim işlemi var.`);
       if (held && held.status === "ACTIVE" && lines.length > 1) m.push("Süre uzatma ve seviye değişikliği tek başına gönderilir.");
+      if (tool?.accountKind && kindOf(ln) === "NEW_ACCESS" && !ln.account.trim()) accounts[ln.key] = "GitHub kullanıcı adını girin.";
       if (!ln.durationType) m.push("Süre seçin.");
       else if (ln.durationType === "TEMPORARY" && !ln.days) m.push("Bitiş tarihi seçin.");
       else if (ln.days === "custom" && (!ln.date || ln.date <= todayIn(timezone))) m.push("İleri bir bitiş tarihi seçin.");
       if (m.length) out[ln.key] = m;
     });
     const whyError = why.trim().length < 15 ? "Gerekçe en az 15 karakter olmalı. Neden ihtiyaç duyulduğunu kısaca açıklayın." : undefined;
-    setErrors({ lines: out, why: whyError });
-    return Object.keys(out).length === 0 && !whyError;
+    setErrors({ lines: out, accounts, why: whyError });
+    return Object.keys(out).length === 0 && Object.keys(accounts).length === 0 && !whyError;
   };
 
   const submit = async () => {
@@ -105,7 +108,7 @@ export function NewRequestPage() {
     const r = await run(
       () => change
         ? api.post<Request>(`/grants/${change.id}/change`, { submissionId, accessLevelId: lines[0].levelId, justification, duration: duration(lines[0]) })
-        : api.post<Request>("/requests", { submissionId, beneficiaryId: isOther ? beneficiaryId : null, items: lines.map((ln) => ({ accessLevelId: ln.levelId, justification, duration: duration(ln) })) }),
+        : api.post<Request>("/requests", { submissionId, beneficiaryId: isOther ? beneficiaryId : null, items: lines.map((ln) => ({ accessLevelId: ln.levelId, justification, duration: duration(ln), ...(toolOf(ln)?.accountKind && { account: ln.account.trim() }) })) }),
       { success: "Talebiniz gönderildi", successDesc: bySubmission ? "Yönetici adımı gönderiminizle karşılandı." : "Onaylayıcılara bildirim gönderildi." },
     );
     if (r.ok) {
@@ -118,6 +121,7 @@ export function NewRequestPage() {
       const m = /^items\[(\d+)\]\.(\w+)$/.exec(r.err.field);
       const line = m ? lines[+m[1]] : r.err.field === "justification" ? undefined : lines[0];
       if (r.err.field.endsWith("justification")) setErrors((e) => ({ ...e, why: errorMessage(r.err) }));
+      else if (line && m?.[2] === "account") setErrors((e) => ({ ...e, accounts: { ...e.accounts, [line.key]: errorMessage(r.err) } }));
       else if (line) setErrors((e) => ({ ...e, lines: { ...e.lines, [line.key]: [errorMessage(r.err)] } }));
     }
   };
@@ -168,11 +172,17 @@ export function NewRequestPage() {
                       </div>
                     </div>
                   )}
+                  {tool?.accountKind === "GITHUB_LOGIN" && kind === "NEW_ACCESS" && (
+                    <Field label="GitHub kullanıcı adı" required error={errors.accounts[ln.key] || undefined} hint="Erişim bu GitHub hesabına verilir. Onaylayıcılar hesabı görür; talep gönderildikten sonra değiştirilemez.">
+                      <Input value={ln.account} invalid={!!errors.accounts[ln.key]} autoComplete="off" spellCheck={false} placeholder="örn. octocat" onChange={(e) => patch(ln.key, { account: e.target.value })} />
+                    </Field>
+                  )}
                   {held && kind !== "NEW_ACCESS" && (
                     <Callout title={kind === "EXTENSION" ? "Süre uzatma talebi" : "Seviye değişikliği talebi"}>
                       {kind === "EXTENSION"
                         ? `Bu seviyeye zaten sahip${isOther ? "" : "siniz"}. Talep onaylanırsa yalnızca süre güncellenir; yeni bir erişim oluşturulmaz.`
                         : `Mevcut seviye: ${held.level}. Yeni seviye etkinleşince eski seviye kaldırılır. Yeni seviyenin onay adımları uygulanır.`}
+                      {held.account && ` GitHub hesabı: @${held.account.name} (değişmez).`}
                     </Callout>
                   )}
                   <div className="field">
