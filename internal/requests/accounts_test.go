@@ -173,3 +173,29 @@ func TestToolReadSkipsGitHubTools(t *testing.T) {
 		t.Fatalf("grants imported for the GitHub tool = %d", n)
 	}
 }
+
+// A retried submission returns the stored request without asking GitHub again, so a retry
+// still succeeds while GitHub is unreachable (A9).
+func TestExternalAccountRetryNeedsNoLookup(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	_, read, lookups := w.sandbox()
+	sub := body(nil, withAccount(item(read), "octocat"))
+	first := w.mustSubmit(w.dev.c, sub)
+	direct := directBody(w.mgr.ID, read, in(15))
+	direct["account"] = "octocat"
+	testutil.RequireStatus(t, directGrant(w.admin, direct), http.StatusCreated, "")
+
+	before := *lookups
+	sub["items"].([]map[string]any)[0]["account"] = "down" // GitHub would now fail the lookup
+	direct["account"] = "down"
+	r := submit(w.dev.c, sub)
+	testutil.RequireStatus(t, r, http.StatusOK, "")
+	if r.Body["id"] != first["id"] {
+		t.Fatalf("retry returned request %v; want %v", r.Body["id"], first["id"])
+	}
+	testutil.RequireStatus(t, directGrant(w.admin, direct), http.StatusOK, "")
+	if *lookups != before {
+		t.Fatalf("retries looked the account up %d times; want 0", *lookups-before)
+	}
+}

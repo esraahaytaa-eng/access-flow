@@ -39,6 +39,13 @@ func (s *Service) DirectGrant(ctx context.Context, actor auth.Principal, in Dire
 	if err != nil {
 		return Request{}, false, err
 	}
+	// As Submit: a retry returns the stored request before any GitHub lookup.
+	if prev, err := existing(ctx, s.pool, actor, in.SubmissionID, "DIRECT_GRANT"); err != nil || prev != nil {
+		if prev != nil {
+			return *prev, false, nil
+		}
+		return Request{}, false, err
+	}
 	acc, err := s.resolveAccount(ctx, in.AccessLevelID, in.Account)
 	if err != nil {
 		return Request{}, false, err

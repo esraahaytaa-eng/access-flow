@@ -336,6 +336,14 @@ func (s *Service) Submit(ctx context.Context, actor auth.Principal, in Submissio
 		}
 		justifications[i] = j
 	}
+	// A retry returns the stored request before any GitHub lookup (A9); the check in the
+	// transaction below still settles concurrent first submissions.
+	if prev, err := existing(ctx, s.pool, actor, in.SubmissionID, "NEW_ACCESS"); err != nil || prev != nil {
+		if prev != nil {
+			return *prev, false, nil
+		}
+		return Request{}, false, err
+	}
 	accounts := make([]*access.ExternalAccount, len(in.Items))
 	for i, it := range in.Items {
 		if i > 0 && slices.ContainsFunc(in.Items[:i], func(o ItemInput) bool { return o.AccessLevelID == it.AccessLevelID }) {
