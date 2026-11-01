@@ -46,6 +46,23 @@ On the first start the database migrates itself and a demo company is created th
 
 The other demo employees have no password; a Super Admin can send them an activation link through the Mock Email Outbox. Running without demo mode, configuration and recovery commands: [`docs/deployment.md`](docs/deployment.md).
 
+## Demo Video & Sample Files
+
+| File | Path | What it is |
+|---|---|---|
+| ▶ [Demo video (MP4, 4:49, 16 MB)](docs/demo/accessflow-demo.mp4) | `docs/demo/accessflow-demo.mp4` | Silent screen recording of the real UI: onboarding, approvals, the GitHub sandbox flow, Excel import, transfer, offboarding, an exception and the audit export |
+| 📊 [Sample onboarding workbook (XLSX)](docs/samples/accessflow-sample.xlsx) | `docs/samples/accessflow-sample.xlsx` | 20 fictional employees and 6 existing-access rows in the app's import format |
+
+**Demo video.** Open the link above to watch it on GitHub (use *View raw* or *Download* if your browser does not play it inline), or open `docs/demo/accessflow-demo.mp4` from a clone. The recording was made on a fresh `docker compose` stack with the demo seed, plus the optional [GitHub sandbox adapter](#optional-github-sandbox-adapter) for the one real GitHub step. Short captions name the role on screen; there is no narration and no music.
+
+**Sample workbook.** It shows what a bulk onboarding file looks like and lets you try the import without preparing data. It has the sheets the import reads, *Employees*, *Tools* and *Existing Access*, built from the template the app generates. The 20 people span Engineering, Sales, Finance, Information Security, IT Operations, Human Resources and Compliance, and they report to managers from the demo seed. The 6 existing-access rows cover Jira, AWS Console, Salesforce, Figma and Payroll Portal.
+
+1. Start the stack with the demo seed (`docker compose up --build`) and sign in as Super Admin (`admin@accessflow.local`).
+2. Open *Yönetim ayarları* → *İçe aktarma*, choose the file and click *Önizle*. The preview lists what would be created and any problem per row, and nothing is saved yet.
+3. Click *Excel'i içe aktar*. The import is all-or-nothing and every record is audited. Importing the same file again creates nothing new.
+
+The workbook relies on the demo seed's departments, job titles, tools and managers. For your own data, download a template that matches your catalog with *Excel şablonunu indir* on the same page.
+
 ## How It Works
 
 HR creates (or imports) an employee → the department's starter package is suggested → the employee asks for a tool and level, with a reason and a duration → Manager, Tool Owner and InfoSec approve in order, as the level requires → the access is fulfilled by API, Manual or Vendor → the evidence is recorded → the tool owner reviews it every quarter → it is removed on expiry, transfer, termination, a review or a revoke, through the same pipeline.
