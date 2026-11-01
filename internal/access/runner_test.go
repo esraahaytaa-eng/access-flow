@@ -422,6 +422,7 @@ func TestClaimSeesARetirementCommittedWhileItWaited(t *testing.T) {
 func TestClaimOfARetiredGrantYieldsToTheEmployeeLock(t *testing.T) {
 	r := newRig(t)
 	g := r.grant("API")
+	other := r.grant("API") // later, so g is claimed first
 	r.exec("UPDATE access_levels SET status = 'RETIRED' WHERE id = $1", g.level)
 	ctx := context.Background()
 	tx, err := r.db.App.Begin(ctx)
@@ -442,12 +443,18 @@ func TestClaimOfARetiredGrantYieldsToTheEmployeeLock(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the claim waited for the employee while holding the operation")
 	}
+	// The skipped operation waits a moment, so other people's operations are not held up.
+	if found, err := r.runner.RunOnce(ctx); !found || err != nil {
+		t.Fatalf("next RunOnce = %v, %v; want the other employee's operation", found, err)
+	}
+	r.requireState(other, "ACTIVE", "SUCCEEDED", 1)
 	if _, err := tx.Exec(ctx, "SELECT 1 FROM operations WHERE grant_id = $1 FOR UPDATE", g.id); err != nil {
 		t.Fatalf("revoke's operation lock: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
+	r.due(g.op)
 	r.runOnce(true) // now the claim cancels it
 	r.requireState(g, "CANCELLED", "CANCELLED", 0)
 }

@@ -160,6 +160,9 @@ func run(args []string) error {
 		Addr:              cfg.HTTPAddr,
 		Handler:           newRouter(pool, svc, loc, tools, gh, ghTool, webui.Dist(), demoAccounts),
 		ReadHeaderTimeout: 10 * time.Second,
+		// A slow client cannot hold a connection open; no WriteTimeout, the CSV exports stream.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 	slog.Info("listening", "addr", cfg.HTTPAddr)
 	return platform.Serve(ctx, srv)
@@ -194,6 +197,7 @@ func newRouter(pool *pgxpool.Pool, svc *auth.Service, loc *time.Location, tools 
 
 	peopleSvc := people.NewService(pool, svc)
 	catalogSvc := catalog.NewService(pool)
+	catalogSvc.OwnerChanged = requests.ToolOwnerChanged
 	requestsSvc := requests.NewService(pool, loc)
 	accessSvc := access.NewService(pool, tools, loc)
 	if gh != nil {

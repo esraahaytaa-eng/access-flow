@@ -11,6 +11,7 @@ export const errorMessages: Record<string, string> = {
   workbook_invalid: "Excel dosyasında hatalar var; hiçbir şey içe aktarılmadı.",
   file_too_large: "Dosya çok büyük (en fazla 2 MB).",
   access_exists: "Bu araç için zaten açık bir erişiminiz var.",
+  orphan_account_exists: "Bu e-posta adresi araçta sahipsiz bir hesap olarak kayıtlı. Bilgi Güvenliği bu bulguyu çözmeden erişim istenemez.",
   admin_group_not_found: "Yönetim grubu bulunamadı.",
   account_check_rate_limited: "GitHub istek sınırına ulaşıldı. Birkaç dakika sonra yeniden deneyin.",
   account_check_unavailable: "GitHub hesabı şu anda doğrulanamıyor. Biraz sonra yeniden deneyin.",

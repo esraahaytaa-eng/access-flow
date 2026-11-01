@@ -244,7 +244,8 @@ func TestRetiredIsCheckedBeforeStricterSteps(t *testing.T) {
 }
 
 // Regression (ENG-003): while someone else holds the employee, a retired grant cannot be
-// cancelled yet; the runner must report it idle so it pauses instead of reclaiming it at once.
+// cancelled yet; the runner must report it idle and move it back, so it pauses instead of
+// reclaiming it at once.
 func TestRunnerPausesWhileARetiredGrantsEmployeeIsBusy(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -265,6 +266,8 @@ func TestRunnerPausesWhileARetiredGrantsEmployeeIsBusy(t *testing.T) {
 		t.Fatalf("RunOnce = %v, %v; want idle while the employee is busy", found, err)
 	}
 	tx.Rollback(ctx)
+	// The skipped operation was moved back a few seconds (D12: tests make it due, not wait).
+	w.exec("UPDATE operations SET next_attempt_at = now() WHERE grant_id = (SELECT id FROM grants WHERE request_item_id = $1)", items(req)[0]["id"])
 	tl.drain(t)
 	f := items(w.get(w.dev.c, "/api/v1/requests/"+req["id"].(string)).Body)[0]["fulfillment"].(map[string]any)
 	if f["status"] != "CANCELLED" {

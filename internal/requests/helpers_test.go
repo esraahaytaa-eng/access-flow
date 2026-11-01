@@ -77,7 +77,9 @@ func newWorld(t *testing.T) *world {
 			people.NewService(db.App, authSvc).Register(r)
 			accessSvc.Register(r)
 			notify.Register(r, db.App)
-			catalog.NewService(db.App).Register(r)
+			cat := catalog.NewService(db.App)
+			cat.OwnerChanged = ToolOwnerChanged
+			cat.Register(r)
 			reviews.NewService(db.App).Register(r)
 			explorer.NewService(db.App, istanbul).Register(r)
 		})

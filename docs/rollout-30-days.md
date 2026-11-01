@@ -30,7 +30,7 @@
   - Until real e-mail delivery is added, a Super Admin opens each link in the Mock Email Outbox and passes it to the employee through a trusted channel. Every reveal is audited.
   - That works for a pilot; for 400 people, real e-mail delivery should come first.
 - **Tool connectors** (future):
-  - The API method talks only to the local Mock Tool Service today.
+  - The API method talks to the local Mock Tool Service; an optional, sandbox-only GitHub adapter manages Read on one private repository (off by default, [README](../README.md#optional-github-sandbox-adapter)).
   - Every production tool is registered as **Manual** or **Vendor** until a real adapter exists (see [API tools](#api-tools-today-and-in-production)).
 
 ## The first administrator (bootstrap)
@@ -74,7 +74,7 @@ This already exists; no new bootstrap feature is needed.
 
 **Today:** AccessFlow → operation runner (a background loop in the app) → Mock Tool Service.
 
-**A possible production integration** (future, not built): AccessFlow → operation runner → **GitHub adapter** → GitHub REST API.
+**A possible production integration** (future; today only a sandbox adapter exists, managing Read on one private repository with the GitHub username entered on the request): AccessFlow → operation runner → **GitHub adapter** → GitHub REST API.
 
 What the adapter would do:
 - After the final approval, add the employee to the authorized GitHub organization or team, then read the membership back to verify it.
@@ -220,7 +220,7 @@ AccessFlow has no emergency feature; this is a proposed procedure.
   - Workbook-reported access is believed until a tool read (API tools) or the review checks it.
 - Imported access shows "approver unknown" until it is certified.
 - A company-wide rollout needs real e-mail delivery for activation links (future); until then a Super Admin passes each link on by hand.
-- There are no real tool adapters yet; every production tool starts as Manual or Vendor.
+- There are no production tool adapters yet (only the sandbox GitHub adapter); every production tool starts as Manual or Vendor.
 - A manually started campaign delays the next quarterly one until it closes.
 - **Assumed:**
   - HR's list is complete and current;

@@ -4109,7 +4109,7 @@
             }
           },
           "409": {
-            "description": "`submission_id_reused` (the ID belongs to another submitter or another kind); `open_request_exists` (an item for that tool is already pending for the beneficiary) and `access_exists` (the beneficiary already holds an open grant for the tool), both with `field` `items[i].accessLevelId`.",
+            "description": "`submission_id_reused` (the ID belongs to another submitter or another kind); `open_request_exists` (an item for that tool is already pending for the beneficiary) `access_exists` (the beneficiary already holds an open grant for the tool) and `orphan_account_exists` (an open orphan account of the tool has the beneficiary's e-mail; InfoSec resolves it first), all with `field` `items[i].accessLevelId`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4896,7 +4896,7 @@
             }
           },
           "409": {
-            "description": "`submission_id_reused`, `open_request_exists`, `access_exists` (field `accessLevelId`).",
+            "description": "`submission_id_reused`, `open_request_exists`, `access_exists`, `orphan_account_exists` (field `accessLevelId`).",
             "content": {
               "application/json": {
                 "schema": {

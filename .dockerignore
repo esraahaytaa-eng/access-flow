@@ -7,3 +7,5 @@ internal/webui/dist/*
 *.md
 docs
 .cache
+.env
+.env.*

@@ -393,3 +393,27 @@ func TestToolReadRetriedAfterSerializationFailureCountsOnce(t *testing.T) {
 		t.Fatal("events written more than once")
 	}
 }
+
+// An orphan account (D10) is never taken over by a request: an employee created later with
+// that email cannot ask for the tool until InfoSec resolves the orphan, or the new grant and
+// the orphan would share one account in the tool and one removal would end both.
+func TestRequestRefusedWhileAnOrphanHoldsTheAccount(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	tl := w.startTools()
+	tl.legacy(t, w.jira, w.jiraViewer, "bob@example.com", "ACTIVE")
+	testutil.RequireStatus(t, w.admin.c.Do(http.MethodPost, "/api/v1/imports/mock", map[string]any{}), http.StatusCreated, "")
+	bob := w.person(testutil.EmployeeSpec{Email: "bob@example.com", ManagerID: w.mgr.ID})
+
+	r := submit(bob.c, body(nil, item(w.jiraViewer)))
+	testutil.RequireStatus(t, r, http.StatusConflict, "orphan_account_exists")
+	if r.Body["field"] != "items[0].accessLevelId" {
+		t.Fatalf("field = %v", r.Body["field"])
+	}
+
+	o := w.orphans()[0]
+	testutil.RequireStatus(t, w.is1.c.Do(http.MethodPost, "/api/v1/orphans/"+o["id"].(string)+"/revoke",
+		map[string]any{"reason": "nobody owns it", "version": o["version"]}), http.StatusOK, "")
+	tl.drain(t) // removed from the tool: the account is free
+	testutil.RequireStatus(t, submit(bob.c, body(nil, item(w.jiraViewer))), http.StatusCreated, "")
+}

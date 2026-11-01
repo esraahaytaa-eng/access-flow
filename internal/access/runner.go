@@ -102,8 +102,10 @@ func (r *Runner) claim(ctx context.Context) (*claimed, bool, error) {
 		if next.typ == "GRANT" && neverSent {
 			cancelled, err := cancelIfRetired(ctx, tx, now, nil, next.grant, next.employee)
 			if errors.Is(err, errEmployeeBusy) {
-				found = false // left PENDING; pause instead of reclaiming it at once
-				return nil
+				// Left PENDING and moved back a little, so the next claim takes other operations.
+				found = false
+				_, err = tx.Exec(ctx, "UPDATE operations SET next_attempt_at = $2 WHERE id = $1", id, now.Add(5*time.Second))
+				return err
 			}
 			if err != nil || cancelled {
 				return err
