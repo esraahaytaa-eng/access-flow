@@ -98,7 +98,7 @@ docker compose -p accessflow-github --env-file .env.github -f compose.yaml -f co
 # Remove it all: docker compose -p accessflow-github down -v, then revoke the token on GitHub.
 ```
 
-The adapter refuses to start on the AccessFlow repository itself, on a public repository, when the token cannot read the repository, and when the tool is missing, not an API tool or not one of GitHub usernames. The automated tests use a fake GitHub server; no test calls GitHub. It is a sandbox integration, not production-ready: see [known limitations](docs/known-limitations.md#github-sandbox-adapter-optional).
+The adapter refuses to start on the AccessFlow repository itself, on a public repository, when the token cannot read the repository, and when the tool is missing, not an API tool or not one of GitHub usernames. The automated tests use a fake GitHub server; no test calls GitHub. One live run on 2026-11-01 against `accessflow-sandbox/demo-project` with one test account verified invitation, acceptance (`ACTIVE / VERIFIED`) and a direct revoke (`REVOKED / VERIFIED`). It is a sandbox integration, not production-ready: see [known limitations](docs/known-limitations.md#github-sandbox-adapter-optional).
 
 ## Architecture
 
