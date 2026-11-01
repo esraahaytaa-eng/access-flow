@@ -81,27 +81,24 @@ flowchart LR
 
 One API tool can manage **Read access to one private sandbox repository** through the GitHub REST API (`internal/access/github.go`, A1 note 2026-11-01). Without its settings nothing changes: every tool uses the Mock Tool Service, and `docker compose up` needs no GitHub account.
 
+- **Which account.** The tool is created with the account identity *GitHub kullanıcı adı*. The request form (and the Super Admin's direct grant) then asks for the person's GitHub username; the server checks it with GitHub and stores the login with GitHub's numeric user id. Approvers see the account, the audit trail records it, and it cannot be changed afterwards. If the account is later renamed or deleted, the adapter changes nothing and leaves the operation in Exceptions for a person.
 - **What it does.** An approved request (or direct grant) makes GitHub invite the person with Read; GitHub e-mails the invitation. The grant stays *preparing* until GitHub shows the invitation accepted and the permission reads `read`, and only then is it active and verified. Expiry, review removals, transfers and offboarding remove the collaborator, or cancel an invitation not yet accepted, and verify that no access remains. Suspension removes the access, and reactivation invites again.
 - **Never touches access it did not grant.** AccessFlow records what it created (`github_access`). It refuses to grant to an account that already has access or an invitation, and leaves to a person (Exceptions) any removal it has no record of, a permission changed by hand and access remaining through a team or the organisation.
 - **You need:** a sandbox GitHub organisation with base permissions *No permission*, a private repository in it, a test GitHub account outside the organisation, and a fine-grained token whose resource owner is that organisation, limited to that one repository, with **Administration: Read and write** (Metadata: Read is added automatically) and an expiry of 30 days or less.
-- **Isolation.** The settings live in `.env.github` (git-ignored) and reach only a separate Compose project, `accessflow-github`, with its own port and volumes; the default project never reads them. Do not `export` them in your shell.
+- **Isolation.** The settings live in `.env.github` (git-ignored) and reach only a separate Compose project, `accessflow-github`, with its own port and volumes; the default project never reads them. Do not `export` them in your shell. [`.env.example`](.env.example) is the tracked template: placeholders and comments only, no secret.
 
 ```sh
-# .env.github (never commit it; placeholders shown)
-ACCESSFLOW_PORT=8090
-GITHUB_TOKEN=<fine-grained token>
-GITHUB_REPOSITORY=<sandbox-org>/demo-repository
-GITHUB_TOOL_ID=<the API tool's ID, after step 1>
-GITHUB_USERS=<employee email>=<github login>
-
-# 1. Start the separate project, create a new API tool (not a demo one) with one level "Read", and note its ID:
+# 0. Copy the template and fill in your token and repository (the file stays on your machine):
+cp .env.example .env.github
+# 1. Start the separate project; as Super Admin create a new API tool (not a demo one) with the
+#    account identity "GitHub kullanıcı adı" and one level "Read", and note its ID:
 docker compose -p accessflow-github --env-file .env.github up --build -d
 # 2. Set GITHUB_TOOL_ID in .env.github and restart that project with the adapter:
 docker compose -p accessflow-github --env-file .env.github -f compose.yaml -f compose.github.yaml up -d
 # Remove it all: docker compose -p accessflow-github down -v, then revoke the token on GitHub.
 ```
 
-The adapter refuses to start on the AccessFlow repository itself, on a public repository, when the token cannot read the repository, and when the tool is missing or not an API tool. The automated tests use a fake GitHub server; no test calls GitHub.
+The adapter refuses to start on the AccessFlow repository itself, on a public repository, when the token cannot read the repository, and when the tool is missing, not an API tool or not one of GitHub usernames. The automated tests use a fake GitHub server; no test calls GitHub. It is a sandbox integration, not production-ready: see [known limitations](docs/known-limitations.md#github-sandbox-adapter-optional).
 
 ## Architecture
 

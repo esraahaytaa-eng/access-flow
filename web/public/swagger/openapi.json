@@ -2909,7 +2909,7 @@
         ],
         "operationId": "createTool",
         "summary": "Create a tool",
-        "description": "Super Admin only. The fulfillment method is fixed for the tool's lifetime; the owner must be an ACTIVE employee. Audited as `TOOL_CREATED`.",
+        "description": "Super Admin only. The fulfillment method is fixed for the tool's lifetime; the owner must be an ACTIVE employee. The account identity (`accountKind`) is fixed too. Audited as `TOOL_CREATED`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2937,6 +2937,13 @@
                   "adminGroupId": {
                     "type": "string",
                     "format": "uuid"
+                  },
+                  "accountKind": {
+                    "type": "string",
+                    "enum": [
+                      "GITHUB_LOGIN"
+                    ],
+                    "description": "Optional; omit for the employee's email. `GITHUB_LOGIN` (a GitHub username) only for an API tool (`account_kind_requires_api`); any other value is `invalid_account_kind`. Fixed for the tool's lifetime."
                   }
                 },
                 "required": [
@@ -9111,6 +9118,7 @@
           "level",
           "justification",
           "duration",
+          "account",
           "status",
           "version",
           "createdAt",
@@ -9153,6 +9161,17 @@
           },
           "duration": {
             "$ref": "#/components/schemas/Duration"
+          },
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAccount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tool-specific account the access is for; null when the tool uses the employee's email."
           },
           "status": {
             "type": "string",
@@ -9288,6 +9307,11 @@
           },
           "duration": {
             "$ref": "#/components/schemas/DurationInput"
+          },
+          "account": {
+            "type": "string",
+            "maxLength": 39,
+            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached."
           }
         }
       },
@@ -9355,6 +9379,11 @@
             ],
             "format": "date",
             "description": "Required in practice (missing, null or blank is `400 expires_required`); YYYY-MM-DD after today in the company timezone; the latest allowed date is today + 89 days (access ends at 00:00 the next day, at most 90 days from now)."
+          },
+          "account": {
+            "type": "string",
+            "maxLength": 39,
+            "description": "The GitHub username; required exactly for a tool with `accountKind: GITHUB_LOGIN` (`account_required`), refused otherwise (`account_not_allowed`). Checked with GitHub before anything is stored: `account_invalid`, `account_not_found`, `account_not_allowed` (an organisation or bot); `503 account_check_unavailable` without the adapter or when GitHub cannot be reached."
           }
         }
       },
@@ -10293,6 +10322,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "accountKind": {
+            "type": "string",
+            "enum": [
+              "GITHUB_LOGIN"
+            ],
+            "description": "Present when the tool's accounts are not the employee's email: `GITHUB_LOGIN` is a GitHub username (optional GitHub sandbox adapter). Fixed when the tool is created."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -10390,6 +10426,13 @@
               "MANUAL",
               "VENDOR"
             ]
+          },
+          "accountKind": {
+            "type": "string",
+            "enum": [
+              "GITHUB_LOGIN"
+            ],
+            "description": "Present when the tool's accounts are not the employee's email: `GITHUB_LOGIN` is a GitHub username (optional GitHub sandbox adapter). Fixed when the tool is created."
           },
           "owner": {
             "$ref": "#/components/schemas/ToolPerson"
@@ -10578,6 +10621,17 @@
               "VENDOR"
             ]
           },
+          "account": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalAccount"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The tool-specific account the access is for; null when the tool uses the employee's email."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -10688,6 +10742,7 @@
           "accessLevelId",
           "level",
           "method",
+          "account",
           "status",
           "displayStatus",
           "evidence",
@@ -12644,6 +12699,24 @@
           "expiringSoon": {
             "type": "integer",
             "description": "Open grants expiring within 14 days in the company time zone (or already past)."
+          }
+        }
+      },
+      "ExternalAccount": {
+        "type": "object",
+        "required": [
+          "name",
+          "ref"
+        ],
+        "description": "A tool-specific account (DECISIONS.md A1 amendment 2026-11-01): the GitHub login as GitHub spells it and GitHub's immutable numeric user id. Fixed once submitted.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "octocat"
+          },
+          "ref": {
+            "type": "string",
+            "example": "583231"
           }
         }
       }
